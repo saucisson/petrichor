@@ -27,7 +27,7 @@ dev = [
     "pytest>=8.4",
     "pytest-cov>=7.0",
     "ruff>=0.12",
-    "pyyaml<6.0.3",
+    "pyyaml==6.0.1",
 ]
 
 [build-system]
