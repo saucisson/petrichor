@@ -50,14 +50,12 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install Node and pin 24
+      - name: Install Node 24
         uses: actions/setup-node@v4
         with:
           node-version: "24"
-          cache: npm
-          cache-dependency-path: apps/web/package-lock.json
 
-      - name: Install locked dependencies
+      - name: Install dependencies
         run: npm ci
 
       - name: eslint strict
@@ -79,6 +77,8 @@ jobs:
 
       - name: gitleaks secret scan
         uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: pip-audit of the locked graph
         run: |
