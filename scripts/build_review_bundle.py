@@ -1,3 +1,14 @@
+from __future__ import annotations
+
+import argparse
+import subprocess
+import sys
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
 """Assemble the deterministic review bundle for the reviewer agent (ADR-0016).
 
 The bundle is the reviewer's ENTIRE context: role contract, architecture
@@ -13,12 +24,6 @@ Usage::
     python scripts/build_review_bundle.py --diff-file diff.patch
 """
 
-import argparse
-import subprocess
-import sys
-from collections.abc import Sequence
-from pathlib import Path
-
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 ROLE_DOCUMENT_PATH = REPOSITORY_ROOT / "docs/agents/reviewer.md"
 ARCHITECTURE_DOCUMENT_PATH = REPOSITORY_ROOT / "docs/architecture.md"
@@ -33,7 +38,7 @@ EXIT_CODE_FAILURE = 1
 def run_git_diff(*, base_ref: str) -> str:
     """Return the diff between the merge base of base_ref and HEAD."""
     completed_process = subprocess.run(
-        ["git", "diff", "--no-color", f"{base_ref}...HEAD"],
+        ["/usr/bin/git", "diff", "--no-color", f"{base_ref}...HEAD"],
         cwd=REPOSITORY_ROOT,
         capture_output=True,
         text=True,

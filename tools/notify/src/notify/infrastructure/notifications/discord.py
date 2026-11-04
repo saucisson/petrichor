@@ -5,8 +5,9 @@ primitive ``WebhookUrl``. The adapter owns the transport concerns (timeouts,
 error classes) and reports only machine-checkable outcomes.
 """
 
+from typing import TYPE_CHECKING
+
 import httpx
-from pydantic import SecretStr
 import structlog
 
 from notify.models.notification import (
@@ -16,7 +17,9 @@ from notify.models.notification import (
     DiscordMessage,
 )
 from notify.models.types import WebhookUrl
-from notify.services.ports import MessageDispatcher
+
+if TYPE_CHECKING:
+    from pydantic import SecretStr
 
 logger = structlog.get_logger(__name__)
 
@@ -27,6 +30,7 @@ class DiscordWebhookDispatcher:
     """Delivers messages through a Discord incoming webhook."""
 
     def __init__(self, *, webhook_url: SecretStr, http_client: httpx.Client) -> None:
+        """Initialise with the webhook URL and HTTP client."""
         self._webhook_url = WebhookUrl(webhook_url.get_secret_value())
         self._http_client = http_client
 

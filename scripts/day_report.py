@@ -1,3 +1,15 @@
+from __future__ import annotations
+
+import argparse
+import subprocess
+import sys
+from datetime import date
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
 """Generate the end-of-day Markdown report for the daily branch.
 
 Stdlib only: this script must run in the bareest possible environment,
@@ -8,13 +20,6 @@ Usage::
     python scripts/day_report.py --since-tag daily-2026-11-01
 """
 
-import argparse
-import subprocess
-import sys
-from collections.abc import Sequence
-from datetime import date
-from pathlib import Path
-
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 MERGE_COMMIT_FORMAT = "%h %s"
 EXIT_CODE_SUCCESS = 0
@@ -24,7 +29,7 @@ EXIT_CODE_FAILURE = 1
 def run_git(*, arguments: Sequence[str]) -> str:
     """Run one git command in the repository and return its stdout."""
     completed_process = subprocess.run(
-        ["git", *arguments],
+        ["/usr/bin/git", *arguments],
         cwd=REPOSITORY_ROOT,
         capture_output=True,
         text=True,
@@ -36,7 +41,7 @@ def run_git(*, arguments: Sequence[str]) -> str:
 def tag_exists(*, tag_name: str) -> bool:
     """Whether the given tag is present in the repository."""
     completed_process = subprocess.run(
-        ["git", "rev-parse", "--quiet", "--verify", f"refs/tags/{tag_name}"],
+        ["/usr/bin/git", "rev-parse", "--quiet", "--verify", f"refs/tags/{tag_name}"],
         cwd=REPOSITORY_ROOT,
         capture_output=True,
         text=True,
@@ -51,8 +56,7 @@ def merges_since(*, tag_name: str) -> list[str]:
     git_output = run_git(
         arguments=["log", "--merges", f"--pretty={MERGE_COMMIT_FORMAT}", revision_range]
     )
-    merge_lines = [line for line in git_output.splitlines() if line.strip()]
-    return merge_lines
+    return [line for line in git_output.splitlines() if line.strip()]
 
 
 def commits_since(*, tag_name: str) -> int:

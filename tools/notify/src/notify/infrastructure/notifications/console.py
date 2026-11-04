@@ -8,7 +8,6 @@ is routed through the same pipeline as every other log.
 import structlog
 
 from notify.models.notification import DeliveryChannel, DeliverySuccess, DiscordMessage
-from notify.services.ports import MessageDispatcher
 
 logger = structlog.get_logger(__name__)
 

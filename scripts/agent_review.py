@@ -1,3 +1,19 @@
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from dataclasses import dataclass
+from enum import StrEnum
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+import httpx
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
 """The reviewer agent: one API call, one structured verdict (ADR-0016).
 
 The reviewer receives ONLY the review bundle (built by
@@ -14,17 +30,6 @@ Usage::
         --comment-file .review/review-comment.md
 """
 
-import argparse
-import json
-import os
-import sys
-from collections.abc import Sequence
-from dataclasses import dataclass
-from enum import StrEnum
-from pathlib import Path
-
-import httpx
-
 API_ENDPOINT_URL = "https://api.mistral.ai/v1/chat/completions"
 DEFAULT_REVIEWER_MODEL = "mistral-large-latest"
 REQUEST_TIMEOUT_SECONDS = 120.0
@@ -38,7 +43,9 @@ EXIT_CODE_REVIEWED_CLEAN = 0
 EXIT_CODE_BLOCKING_FINDINGS = 1
 EXIT_CODE_PROTOCOL_FAILURE = 2
 
-UNKNOWN_SEVERITY_NOTE = "unknown severity reported by the reviewer - treated as BLOCKING (fail-closed)"
+UNKNOWN_SEVERITY_NOTE = (
+    "unknown severity reported by the reviewer - treated as BLOCKING (fail-closed)"
+)
 
 
 class ReviewProtocolError(RuntimeError):
@@ -210,15 +217,14 @@ def parse_report(*, answer_text: str) -> list[ReviewFinding]:
     findings_container: object = report_container.get("findings")
     if not isinstance(findings_container, list):
         raise ReviewProtocolError("the report has no findings list")
-    findings = [
+    return [
         parse_finding(finding_container=entry) for entry in findings_container
     ]
-    return findings
 
 
 def count_by_severity(*, findings: Sequence[ReviewFinding]) -> dict[FindingSeverity, int]:
     """Recompute the counts locally - the model's own counts are never trusted."""
-    counts = {severity: 0 for severity in FindingSeverity}
+    counts = dict.fromkeys(FindingSeverity, 0)
     for finding in findings:
         counts[finding.severity] += 1
     return counts

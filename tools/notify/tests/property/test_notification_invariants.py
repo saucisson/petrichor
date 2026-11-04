@@ -1,11 +1,8 @@
-"""Property tests for notification invariants (ADR-0013).
-
-Hypothesis verifies invariants that hold for *every* input, not just the
-cases a human thought of - a counterexample-seeking reviewer in test form.
-"""
+from __future__ import annotations
 
 import pytest
-from hypothesis import given, settings as hypothesis_settings
+from hypothesis import given
+from hypothesis import settings as hypothesis_settings
 from hypothesis import strategies as st
 
 from notify.models.notification import (
@@ -16,7 +13,11 @@ from notify.models.notification import (
 from notify.models.types import MessageText
 from notify.services.notifications import build_discord_message
 
-pytestmark = pytest.mark.property
+"""Property tests for notification invariants (ADR-0013).
+
+Hypothesis verifies invariants that hold for *every* input, not just the
+cases a human thought of - a counterexample-seeking reviewer in test form.
+"""
 
 MAXIMUM_EMBED_COLOR = 0xFFFFFF
 
@@ -45,3 +46,5 @@ def test_embed_invariants_hold_for_any_message(
     assert len(embed.description) > 0
     assert 0 <= embed.color <= MAXIMUM_EMBED_COLOR
     assert len(discord_message.content) > 0
+
+pytestmark = pytest.mark.property
