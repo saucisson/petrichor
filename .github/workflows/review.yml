@@ -1,0 +1,79 @@
+name: reviewer
+
+# The reviewer agent as a CI job (ADR-0016): the review runs on every
+# pull request push, and its exit code becomes a REQUIRED status check,
+# so "zero BLOCKING findings" is machine-checkable before any merge.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: reviewer-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  reviewer:
+    name: reviewer agent
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.15"
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Export the pull request description
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p .review
+          gh pr view "${{ github.event.pull_request.number }}" --json body --jq .body > .review/pull-request-description.md
+
+      - name: Build the review bundle
+        run: |
+          git diff --no-color "origin/${{ github.base_ref }}...HEAD" > .review/pull-request.diff
+          uv run python scripts/build_review_bundle.py \
+            --diff-file .review/pull-request.diff \
+            --description-file .review/pull-request-description.md \
+            --output .review/bundle.md
+
+      - name: Run the reviewer agent
+        env:
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          REVIEWER_MODEL: ${{ vars.REVIEWER_MODEL }}
+        run: |
+          uv run python scripts/agent_review.py \
+            --bundle-file .review/bundle.md \
+            --report-file .review/review-report.json \
+            --comment-file .review/review-comment.md
+
+      - name: Publish the review comment
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -f .review/review-comment.md ]; then
+            gh pr comment "${{ github.event.pull_request.number }}" --body-file .review/review-comment.md
+          else
+            echo "No review comment was produced (protocol failure?)."
+          fi
+
+      - name: Archive the review report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: review-report
+          path: .review/review-report.json
+          if-no-files-found: warn

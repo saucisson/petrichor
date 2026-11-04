@@ -1,0 +1,46 @@
+name: release
+
+# ADR-0015: release-please derives semver releases from Conventional
+# Commits on `main` only - the human merging `daily` into `main` is the
+# release decision.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    outputs:
+      released: ${{ steps.release.outputs.release_created }}
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  publish:
+    needs: release-please
+    if: needs.release-please.outputs.released == 'true'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # trusted publishing
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv and pin Python 3.15
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.15"
+
+      - name: Build distributions
+        run: uv build
+
+      - name: Publish to PyPI (trusted publisher)
+        run: uv publish

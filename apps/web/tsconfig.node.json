@@ -1,0 +1,16 @@
+{
+  // Type-checks vite.config.ts with node globals, isolated from the
+  // browser code (ADR-0018).
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["node"],
+    "strict": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "skipLibCheck": true
+  },
+  "include": ["vite.config.ts"]
+}

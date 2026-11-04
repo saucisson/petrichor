@@ -1,0 +1,27 @@
+# Renovate configuration (ADR-0015): scheduled, grouped dependency maintenance.
+# Agents never bump dependencies themselves - this bot owns that job.
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":semanticCommits", "schedule:weekly"],
+  "rangeStrategy": "bump",
+  "platformAutomerge": true,
+  "packageRules": [
+    {
+      "description": "Group all non-major updates into weekly batches.",
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "non-major dependencies",
+      "automerge": false
+    },
+    {
+      "description": "Patch-only updates may automerge when CI is green (ADR-0010 criteria).",
+      "matchUpdateTypes": ["patch"],
+      "automerge": true
+    },
+    {
+      "description": "Major bumps always require the human owner (escalation list, ADR-0011).",
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "labels": ["needs-human"]
+    }
+  ]
+}

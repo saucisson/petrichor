@@ -1,0 +1,68 @@
+# GitLab mirror of the GitHub CI (ADR-0008, ADR-0009).
+# Same gates, same order: lint, format, types, layers, tests, security.
+
+stages:
+  - check
+  - review
+  - security
+
+default:
+  image: ghcr.io/astral-sh/uv:python3.15-bookworm-slim
+  before_script:
+    - uv sync --locked
+
+quality-gate:
+  stage: check
+  script:
+    - uv run ruff check .
+    - uv run ruff format --check .
+    - uv run mypy tools/notify/src tools/notify/tests scripts
+    - uv run lint-imports
+    - uv run pytest
+
+# Web quality gate (ADR-0018): same discipline, node side. The empty
+# before_script overrides the uv default - this job has no Python.
+web-quality-gate:
+  stage: check
+  image: node:24-bookworm-slim
+  before_script: []
+  script:
+    - cd apps/web
+    - npm ci
+    - npm run lint
+    - npm run typecheck
+    - npm run test
+
+# The reviewer agent as a CI job (ADR-0016): on merge requests only.
+# The job fails when the report contains BLOCKING findings, so the
+# "pipelines must succeed" merge check enforces the review verdict.
+reviewer:
+  stage: review
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  variables:
+    GIT_DEPTH: "0"
+  script:
+    - mkdir -p .review
+    - printf '%s' "$CI_MERGE_REQUEST_DESCRIPTION" > .review/pull-request-description.md
+    - git diff --no-color "$CI_MERGE_REQUEST_DIFF_BASE_SHA" HEAD > .review/pull-request.diff
+    - uv run python scripts/build_review_bundle.py --diff-file .review/pull-request.diff --description-file .review/pull-request-description.md --output .review/bundle.md
+    - uv run python scripts/agent_review.py --bundle-file .review/bundle.md --report-file .review/review-report.json --comment-file .review/review-comment.md
+  artifacts:
+    when: always
+    paths:
+      - .review/review-report.json
+      - .review/review-comment.md
+
+secret-scan:
+  stage: security
+  variables:
+    GIT_DEPTH: "0"
+  script:
+    - uvx gitleaks git --no-banner --redact .
+
+dependency-audit:
+  stage: security
+  script:
+    - uv export --locked --format requirements-txt --output-file requirements.txt
+    - uvx pip-audit --requirement requirements.txt --strict

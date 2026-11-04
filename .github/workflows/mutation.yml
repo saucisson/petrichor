@@ -1,0 +1,42 @@
+name: mutation-testing
+
+# ADR-0013: mutation testing runs on `daily` at end of day, before the
+# human review - coverage proves execution, mutants prove assertions.
+# Surviving mutants become issues for the next working day.
+
+on:
+  schedule:
+    - cron: "0 18 * * 1-5"  # EOD, working days
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mutate:
+    name: mutmut on daily
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: daily
+
+      - name: Install uv and pin Python 3.15
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.15"
+          enable-cache: true
+
+      - name: Sync the locked environment
+        run: uv sync --locked
+
+      - name: Run mutmut
+        run: uv run mutmut run
+
+      - name: Archive mutation results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutmut-report
+          path: .mutmut-cache
+          if-no-files-found: ignore

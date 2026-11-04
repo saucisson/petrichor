@@ -1,0 +1,36 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+}
+
+body {
+  margin: 0;
+}
+
+.app {
+  max-width: 40rem;
+  margin: 4rem auto;
+  padding: 0 1rem;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.4rem 0.9rem;
+  border-radius: 9999px;
+  font-weight: 600;
+}
+
+.badge--morning {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.badge--work {
+  background: #dbeafe;
+  color: #1e40af;
+}
+
+.badge--freeze {
+  background: #e5e7eb;
+  color: #374151;
+}

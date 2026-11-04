@@ -1,0 +1,42 @@
+# Local gates (ADR-0008, ADR-0009): a secret or a style violation stops
+# at commit time, before CI ever sees it.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.12.0
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.24.0
+    hooks:
+      - id: gitleaks
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.19.0
+    hooks:
+      - id: mypy
+        args: ["tools/notify/src", "tools/notify/tests", "scripts"]
+        additional_dependencies:
+          - pydantic>=2.11
+          - pydantic-settings>=2.9
+          - structlog>=25.1
+          - httpx>=0.28
+          - hypothesis>=6.130
+
+  - repo: local
+    hooks:
+      - id: lint-imports
+        name: import-linter onion contract
+        entry: uv run lint-imports
+        language: system
+        pass_filenames: false
+
+      # Web lint at commit time (ADR-0018); only when web files changed.
+      - id: web-lint
+        name: web eslint
+        entry: npm --prefix apps/web run lint
+        language: system
+        pass_filenames: false
+        files: ^(apps/web/.*|.*\.tsx?)$

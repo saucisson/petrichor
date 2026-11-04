@@ -1,0 +1,22 @@
+# Local, full-stack preview (ADR-0017, ADR-0018): the notify tool and the
+# web app, one command. Production deployment is the owner's business -
+# this compose file is the shared development runtime.
+
+services:
+  notify:
+    build:
+      context: .
+      dockerfile: tools/notify/Dockerfile
+    image: petrichor-notify:latest
+    init: true
+    env_file:
+      - .env
+    command: ["notify", "smoke"]
+
+  web:
+    build:
+      context: apps/web
+    image: petrichor-web:latest
+    init: true
+    ports:
+      - "3000:80"

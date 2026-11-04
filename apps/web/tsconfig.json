@@ -1,0 +1,28 @@
+{
+  // ADR-0018: strict-plus TypeScript - the compiler is a reviewer that
+  // never gets tired. Any flag disabled here requires an ADR.
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "types": ["vite/client", "vitest/globals"],
+
+    // Strict-plus: strict plus the options that catch the bug classes
+    // the Python side catches with mypy (ADR-0006, ADR-0018).
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "useDefineForClassFields": true,
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": ["src", "tests"]
+}

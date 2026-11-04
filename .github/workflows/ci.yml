@@ -1,0 +1,86 @@
+name: continuous-integration
+
+on:
+  push:
+    branches: [main, daily]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: quality gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Install uv and pin Python 3.15
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.15"
+          enable-cache: true
+
+      - name: Sync the locked environment
+        run: uv sync --locked
+
+      - name: Ruff lint
+        run: uv run ruff check .
+
+      - name: Ruff format check
+        run: uv run ruff format --check .
+
+      - name: mypy strict
+        run: uv run mypy tools/notify/src tools/notify/tests scripts
+
+      - name: import-linter onion contract
+        run: uv run lint-imports
+
+      - name: pytest with coverage floor
+        run: uv run pytest
+
+  web:
+    name: web quality gate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Node and pin 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: eslint strict
+        run: npm run lint
+
+      - name: tsc strict-plus
+        run: npm run typecheck
+
+      - name: vitest with coverage floor
+        run: npm run test
+
+  security:
+    name: security gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: gitleaks secret scan
+        uses: gitleaks/gitleaks-action@v2
+
+      - name: pip-audit of the locked graph
+        run: |
+          uv export --locked --format requirements-txt --output-file requirements.txt
+          uvx pip-audit --requirement requirements.txt --strict
