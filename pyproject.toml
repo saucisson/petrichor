@@ -93,8 +93,9 @@ convention = "google"
 "tools/notify/src/notify/main.py" = ["T201", "S101"]
 # scripts/*: T201 stdout is the interface, YTT202 stderr carries the failure
 # reason; S603 git/uv are invoked with fixed literals, no untrusted input
-# ever reaches argv.
-"scripts/*" = ["T201", "YTT202", "S603"]
+# ever reaches argv; D100 docstrings are handled by the module-level docstring
+# that must live after `from __future__ import annotations`.
+"scripts/*" = ["T201", "YTT202", "S603", "D100"]
 "tools/notify/tests/*" = [
     "S101",     # asserts are the point of tests
     "D",        # docstrings optional in tests
