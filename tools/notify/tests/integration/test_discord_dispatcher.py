@@ -1,13 +1,7 @@
-"""Integration tests for the notification adapters.
-
-Marked ``integration``: they exercise adapter wiring (httpx transport,
-Discord payload contract) rather than pure logic, and may be deselected
-with ``-m 'not integration'``.
-"""
+from __future__ import annotations
 
 import json
-from collections.abc import Any
-from typing import Any as TypingAny
+from typing import TYPE_CHECKING
 
 import httpx
 import pytest
@@ -24,7 +18,15 @@ from notify.models.notification import (
 from notify.models.types import MessageText
 from notify.services.notifications import build_discord_message
 
-pytestmark = pytest.mark.integration
+if TYPE_CHECKING:
+    from typing import Any
+
+"""Integration tests for the notification adapters.
+
+Marked ``integration``: they exercise adapter wiring (httpx transport,
+Discord payload contract) rather than pure logic, and may be deselected
+with ``-m 'not integration'``.
+"""
 
 WEBHOOK_URL = "https://discord.com/api/webhooks/123/fake-token"
 MESSAGE_TEXT = MessageText("Integration check: the webhook contract holds.")
@@ -58,7 +60,7 @@ class TestDiscordWebhookDispatcher:
         assert outcome.delivery_channel is DeliveryChannel.DISCORD
         assert str(received_requests[0].url) == WEBHOOK_URL
         assert received_requests[0].method == "POST"
-        payload: dict[str, TypingAny] = json.loads(received_requests[0].content)
+        payload: dict[str, Any] = json.loads(received_requests[0].content)
         assert payload["embeds"][0]["description"] == MESSAGE_TEXT
 
     def test_server_error_reports_failure(self) -> None:
@@ -108,3 +110,5 @@ class TestConsoleDispatcher:
         ]
         assert len(console_events) == 1
         assert console_events[0]["embed_description"] == MESSAGE_TEXT
+
+pytestmark = pytest.mark.integration

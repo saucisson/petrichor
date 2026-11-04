@@ -1,27 +1,21 @@
-"""Composition root: CLI entry point of the ``notify`` package.
-
-This is the ONLY module where logging is configured (ADR-0005) and where
-adapters are constructed (ADR-0002). ``print`` is allowed here and nowhere
-else: a CLI speaks to its user on stdout, everything else speaks in logs.
-"""
+from __future__ import annotations
 
 import argparse
 import logging
 import sys
-from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 import httpx
 import structlog
 from structlog.dev import ConsoleRenderer
 from structlog.processors import (
+    JSONRenderer,
+    TimeStamper,
     add_log_level,
     add_logger_name,
     merge_contextvars,
-    JSONRenderer,
-    TimeStamper,
 )
 from structlog.stdlib import ProcessorFormatter
-from structlog.typing import Processor
 
 from notify.infrastructure.notifications.console import ConsoleDispatcher
 from notify.infrastructure.notifications.discord import DiscordWebhookDispatcher
@@ -34,7 +28,17 @@ from notify.models.notification import (
 from notify.models.settings import ApplicationSettings, LogFormat
 from notify.models.types import IssueIdentifier, MessageText
 from notify.services.notifications import dispatch_notification, is_urgent
-from notify.services.ports import MessageDispatcher
+
+if TYPE_CHECKING:
+    from structlog.typing import Processor
+    from notify.services.ports import MessageDispatcher
+
+"""Composition root: CLI entry point of the ``notify`` package.
+
+This is the ONLY module where logging is configured (ADR-0005) and where
+adapters are constructed (ADR-0002). ``print`` is allowed here and nowhere
+else: a CLI speaks to its user on stdout, everything else speaks in logs.
+"""
 
 logger = structlog.get_logger(__name__)
 
@@ -141,7 +145,6 @@ def select_dispatcher(
         return ConsoleDispatcher()
     logger.debug("discord_dispatcher_selected")
     # Narrowing assertion for mypy: the None case returned above.
-    # noqa: S101
     assert settings.discord_webhook_url is not None
     return DiscordWebhookDispatcher(
         webhook_url=settings.discord_webhook_url,

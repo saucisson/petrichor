@@ -5,12 +5,11 @@ Secrets arrive as ``SecretStr`` so no log call can leak them by accident
 must start in the barest possible environment (console fallback).
 """
 
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from enum import StrEnum
-
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 
