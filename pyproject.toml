@@ -91,10 +91,10 @@ convention = "google"
 # S101: the narrowing assertion in select_dispatcher is the mypy-canonical
 # pattern for Optional narrowing after an early return.
 "tools/notify/src/notify/main.py" = ["T201", "S101"]
-# scripts/*: T201 stdout is the interface, T202 stderr carries the failure
+# scripts/*: T201 stdout is the interface, YTT202 stderr carries the failure
 # reason; S603 git/uv are invoked with fixed literals, no untrusted input
 # ever reaches argv.
-"scripts/*" = ["T201", "T202", "S603"]
+"scripts/*" = ["T201", "YTT202", "S603"]
 "tools/notify/tests/*" = [
     "S101",     # asserts are the point of tests
     "D",        # docstrings optional in tests
