@@ -54,8 +54,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "24"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
 
-      - name: Install dependencies
+      - name: Install locked dependencies
         run: npm ci
 
       - name: eslint strict
