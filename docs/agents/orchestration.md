@@ -31,9 +31,9 @@ Otherwise: label `blocked`, comment why, move on.
 
 ## 3. Sequential work
 
-One issue, one branch, one PR at a time. Small pull requests (< 500 lines).
-Rebase on `daily` before opening the PR. Full `make check` before the
-reviewer sees anything.
+One issue, one branch, one PR at a time. The developer agent **opens the
+PR itself** (small, < 500 lines, rebased on `daily`); only the merge is a
+platform action. Full `make check` before the reviewer sees anything.
 
 ## 4. Merge criteria (codified - no judgement calls)
 

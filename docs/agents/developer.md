@@ -28,7 +28,8 @@ work, never merge, and never edit constitutional files.
   It includes the web gate (`web-check`); the frontend rules are in
   `docs/architecture.md` ("Web frontend").
 
-- Rebase on `daily` before opening the pull request. Keep it under ~500
+- Rebase on `daily`, then **open the pull request yourself** - opening the
+  PR is your job; only the merge is a platform action. Keep it under ~500
   changed lines; split earlier rather than larger.
 
 ## Reporting

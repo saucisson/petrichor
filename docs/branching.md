@@ -21,8 +21,9 @@ Constitutional document (ADR-0010). Changing it requires a human decision.
    `.github/ISSUE_TEMPLATE/task.md`). No criteria → the issue is labeled
    `blocked` and skipped.
 3. **Work** - one issue at a time, branch `feat/<issue>` or `fix/<issue>`
-   from `daily`, small pull requests (target < 500 changed lines), rebase
-   on `daily` before opening.
+   from `daily`, small pull requests (target < 500 changed lines). The
+   developer agent **opens the PR itself**, rebased on `daily`; only the
+   merge is a platform action.
 4. **Merge into `daily`** - platform auto-merge only when **all three**
    hold:
    - CI is green on the PR head,
