@@ -92,9 +92,7 @@ class TestDiscordWebhookDispatcher:
 
 
 class TestConsoleDispatcher:
-    def test_dispatch_logs_the_embed(
-        self, capture_logs: list[dict[str, Any]]
-    ) -> None:
+    def test_dispatch_logs_the_embed(self, capture_logs: list[dict[str, Any]]) -> None:
         dispatcher = ConsoleDispatcher()
         message = build_discord_message(request=request_with_message(MESSAGE_TEXT))
 

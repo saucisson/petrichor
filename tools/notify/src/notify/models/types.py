@@ -15,5 +15,5 @@ MessageText = NewType("MessageText", str)
 WebhookUrl = NewType("WebhookUrl", str)
 """A full https URL of an incoming webhook."""
 
-type JsonValue = None | bool | int | float | str | list[JsonValue] | dict[str, JsonValue]
+type JsonValue = bool | int | float | str | list[JsonValue] | dict[str, JsonValue] | None
 """Any JSON-compatible value (PEP 695 recursive alias)."""
