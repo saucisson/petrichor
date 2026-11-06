@@ -53,9 +53,7 @@ class TestDispatchNotification:
     ) -> None:
         dispatcher = FakeDispatcher(SUCCESS)
 
-        outcome = dispatch_notification(
-            request=sample_notification_request, dispatcher=dispatcher
-        )
+        outcome = dispatch_notification(request=sample_notification_request, dispatcher=dispatcher)
 
         assert outcome.kind == "success"
         assert dispatcher.received_messages[0].embeds[0].description == (
@@ -73,9 +71,7 @@ class TestDispatchNotification:
     ) -> None:
         dispatcher = FakeDispatcher(FAILURE)
 
-        outcome = dispatch_notification(
-            request=sample_notification_request, dispatcher=dispatcher
-        )
+        outcome = dispatch_notification(request=sample_notification_request, dispatcher=dispatcher)
 
         assert outcome.kind == "failure"
         assert "notification_delivery_failed" in captured_event_names(capture_logs)
@@ -87,9 +83,7 @@ class TestBuildDiscordMessage:
     ) -> None:
         message = build_discord_message(request=sample_notification_request)
 
-        assert sample_notification_request.severity.display_label in (
-            message.embeds[0].title
-        )
+        assert sample_notification_request.severity.display_label in (message.embeds[0].title)
         assert message.embeds[0].description == sample_notification_request.message
 
     def test_issue_identifier_becomes_embed_field(
@@ -115,8 +109,7 @@ class TestBuildDiscordMessage:
 class TestColorForSeverity:
     def test_each_severity_has_a_distinct_known_color(self) -> None:
         colors = {
-            severity: color_for_severity(severity=severity)
-            for severity in NotificationSeverity
+            severity: color_for_severity(severity=severity) for severity in NotificationSeverity
         }
 
         assert len(set(colors.values())) == len(NotificationSeverity)
@@ -125,8 +118,9 @@ class TestColorForSeverity:
 
 class TestOutcomePredicates:
     def test_is_delivery_failure_narrows_the_union(self) -> None:
-        assert is_delivery_failure(FAILURE)
-        assert not is_delivery_failure(SUCCESS)
+        outcomes: list[NotificationOutcome] = [SUCCESS, FAILURE]
+        failures = [outcome for outcome in outcomes if is_delivery_failure(outcome)]
+        assert failures == [FAILURE]
 
     def test_is_urgent_only_for_urgent_severity(
         self, sample_notification_request: NotificationRequest

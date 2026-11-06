@@ -16,8 +16,11 @@ Usage::
 import argparse
 import subprocess
 import sys
-from collections.abc import Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 ROLE_DOCUMENT_PATH = REPOSITORY_ROOT / "docs/agents/reviewer.md"
@@ -33,7 +36,7 @@ EXIT_CODE_FAILURE = 1
 def run_git_diff(*, base_ref: str) -> str:
     """Return the diff between the merge base of base_ref and HEAD."""
     completed_process = subprocess.run(
-        ["git", "diff", "--no-color", f"{base_ref}...HEAD"],
+        ["/usr/bin/git", "diff", "--no-color", f"{base_ref}...HEAD"],
         cwd=REPOSITORY_ROOT,
         capture_output=True,
         text=True,
@@ -69,12 +72,8 @@ def render_bundle(
     """Assemble the bundle sections in a fixed, deterministic order."""
     sections: list[str] = []
     sections.append("## ROLE CONTRACT\n\n" + read_text_file(path=ROLE_DOCUMENT_PATH))
-    sections.append(
-        "## ARCHITECTURE RULES\n\n" + read_text_file(path=ARCHITECTURE_DOCUMENT_PATH)
-    )
-    sections.append(
-        "## REVIEW CHECKLIST\n\n" + read_text_file(path=CHECKLIST_DOCUMENT_PATH)
-    )
+    sections.append("## ARCHITECTURE RULES\n\n" + read_text_file(path=ARCHITECTURE_DOCUMENT_PATH))
+    sections.append("## REVIEW CHECKLIST\n\n" + read_text_file(path=CHECKLIST_DOCUMENT_PATH))
     for decision_title, decision_content in decisions:
         sections.append(f"## DECISION - {decision_title}\n\n{decision_content}")
     sections.append(f"## PULL REQUEST SPECIFICATION\n\n{description_text}")

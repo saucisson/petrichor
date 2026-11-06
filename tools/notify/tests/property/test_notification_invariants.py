@@ -5,7 +5,8 @@ cases a human thought of - a counterexample-seeking reviewer in test form.
 """
 
 import pytest
-from hypothesis import given, settings as hypothesis_settings
+from hypothesis import given
+from hypothesis import settings as hypothesis_settings
 from hypothesis import strategies as st
 
 from notify.models.notification import (

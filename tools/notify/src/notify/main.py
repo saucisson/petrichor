@@ -8,20 +8,14 @@ else: a CLI speaks to its user on stdout, everything else speaks in logs.
 import argparse
 import logging
 import sys
-from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 import httpx
 import structlog
+from structlog.contextvars import merge_contextvars
 from structlog.dev import ConsoleRenderer
-from structlog.processors import (
-    add_log_level,
-    add_logger_name,
-    merge_contextvars,
-    JSONRenderer,
-    TimeStamper,
-)
-from structlog.stdlib import ProcessorFormatter
-from structlog.typing import Processor
+from structlog.processors import JSONRenderer, TimeStamper, add_log_level
+from structlog.stdlib import ProcessorFormatter, add_logger_name
 
 from notify.infrastructure.notifications.console import ConsoleDispatcher
 from notify.infrastructure.notifications.discord import DiscordWebhookDispatcher
@@ -34,16 +28,20 @@ from notify.models.notification import (
 from notify.models.settings import ApplicationSettings, LogFormat
 from notify.models.types import IssueIdentifier, MessageText
 from notify.services.notifications import dispatch_notification, is_urgent
-from notify.services.ports import MessageDispatcher
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from structlog.typing import Processor
+
+    from notify.services.ports import MessageDispatcher
 
 logger = structlog.get_logger(__name__)
 
 EXIT_CODE_SUCCESS = 0
 EXIT_CODE_FAILURE = 1
 
-SMOKE_TEST_MESSAGE_TEXT = (
-    "notify smoke test: the notification pipeline is alive."
-)
+SMOKE_TEST_MESSAGE_TEXT = "notify smoke test: the notification pipeline is alive."
 
 
 def configure_logging(*, settings: ApplicationSettings) -> None:
@@ -74,8 +72,8 @@ def configure_logging(*, settings: ApplicationSettings) -> None:
     )
     root_handler.setFormatter(formatter)
     structlog.configure(
-        processors=shared_processors
-        + [
+        processors=[
+            *shared_processors,
             structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
         ],
         logger_factory=structlog.stdlib.LoggerFactory(),
@@ -133,7 +131,7 @@ def select_dispatcher(
     them to the console silently would be a lie, so we raise instead.
     """
     if settings.discord_webhook_url is None:
-        if is_urgent(request):
+        if is_urgent(request=request):
             raise NotificationConfigurationError(
                 "An urgent notification requires DISCORD_WEBHOOK_URL to be configured."
             )
@@ -141,7 +139,6 @@ def select_dispatcher(
         return ConsoleDispatcher()
     logger.debug("discord_dispatcher_selected")
     # Narrowing assertion for mypy: the None case returned above.
-    # noqa: S101
     assert settings.discord_webhook_url is not None
     return DiscordWebhookDispatcher(
         webhook_url=settings.discord_webhook_url,
@@ -149,9 +146,7 @@ def select_dispatcher(
     )
 
 
-def send_command(
-    *, settings: ApplicationSettings, arguments: argparse.Namespace
-) -> int:
+def send_command(*, settings: ApplicationSettings, arguments: argparse.Namespace) -> int:
     """Handle the ``send`` subcommand."""
     issue_identifier = (
         IssueIdentifier(arguments.issue_identifier)

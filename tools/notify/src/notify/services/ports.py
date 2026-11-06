@@ -4,9 +4,10 @@ Infrastructure adapters implement these Protocols; services depend only
 on the seam, never on an adapter (ADR-0002).
 """
 
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
-from notify.models.notification import DiscordMessage, NotificationOutcome
+if TYPE_CHECKING:
+    from notify.models.notification import DiscordMessage, NotificationOutcome
 
 
 class MessageDispatcher(Protocol):

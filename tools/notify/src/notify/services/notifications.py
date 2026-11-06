@@ -4,8 +4,7 @@ Every ``DEBUG`` event here is an executable comment (ADR-0005) - the tests
 pin them, so the narration cannot rot the way prose comments do.
 """
 
-from collections.abc import Mapping
-from typing import TypeIs, assert_never
+from typing import TYPE_CHECKING, TypeIs, assert_never
 
 import structlog
 
@@ -18,7 +17,11 @@ from notify.models.notification import (
     NotificationRequest,
     NotificationSeverity,
 )
-from notify.services.ports import MessageDispatcher
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    from notify.services.ports import MessageDispatcher
 
 logger = structlog.get_logger(__name__)
 
@@ -51,9 +54,7 @@ def build_discord_message(*, request: NotificationRequest) -> DiscordMessage:
         embed_fields = (
             DiscordEmbedField(name=EMBED_ISSUE_FIELD_NAME, value=request.issue_identifier),
         )
-    severity_title = (
-        f"{request.severity.display_emoji} {request.severity.display_label}"
-    )
+    severity_title = f"{request.severity.display_emoji} {request.severity.display_label}"
     embed = DiscordEmbed(
         title=severity_title,
         description=request.message,
