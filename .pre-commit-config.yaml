@@ -24,7 +24,6 @@ repos:
           - structlog>=25.1
           - httpx>=0.28
           - hypothesis>=6.130
-          - pyyaml
 
   - repo: local
     hooks:

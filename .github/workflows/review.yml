@@ -3,10 +3,16 @@ name: reviewer
 # The reviewer agent as a CI job (ADR-0016): the review runs on every
 # pull request push, and its exit code becomes a REQUIRED status check,
 # so "zero BLOCKING findings" is machine-checkable before any merge.
+#
+# The job also re-runs when the `human-approved` label is posed or
+# removed (ADR-0020), so the waiver always reflects the current label
+# state. The gh CLI is never used - it is not preinstalled on
+# GitHub-hosted runners - so every GitHub interaction goes through the
+# REST API directly.
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
 
 permissions:
   contents: read
@@ -19,6 +25,10 @@ concurrency:
 jobs:
   reviewer:
     name: reviewer agent
+    # Label events re-run the review only when the touched label is the
+    # human-approved waiver (ADR-0020); no other label can change the
+    # verdict.
+    if: github.event.action != 'labeled' && github.event.action != 'unlabeled' || github.event.label.name == 'human-approved'
     runs-on: ubuntu-latest
     steps:
       - name: Check out the full history
@@ -36,10 +46,29 @@ jobs:
 
       - name: Export the pull request description
         env:
-          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           mkdir -p .review
-          gh pr view "${{ github.event.pull_request.number }}" --json body --jq .body > .review/pull-request-description.md
+          # The PR description via the GitHub REST API, not the gh CLI.
+          curl --silent \
+            --header "Authorization: token ${{ github.token }}" \
+            --header "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository }}/pulls/${PR_NUMBER}" \
+            | jq --raw-output '.body // ""' > .review/pull-request-description.md
+
+      - name: Export the pull request labels
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # Labels of the PR via the GitHub REST API. A manually posed
+          # `human-approved` label waives every BLOCKING finding
+          # (ADR-0020); the labels are read by the runner script only,
+          # they never enter the reviewer's prompt.
+          curl --silent \
+            --header "Authorization: token ${{ github.token }}" \
+            --header "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository }}/issues/${PR_NUMBER}/labels" \
+            | jq '[.[].name]' > .review/pull-request-labels.json
 
       - name: Build the review bundle
         run: |
@@ -57,15 +86,25 @@ jobs:
           uv run python scripts/agent_review.py \
             --bundle-file .review/bundle.md \
             --report-file .review/review-report.json \
-            --comment-file .review/review-comment.md
+            --comment-file .review/review-comment.md \
+            --labels-file .review/pull-request-labels.json
 
       - name: Publish the review comment
         if: always()
         env:
-          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           if [ -f .review/review-comment.md ]; then
-            gh pr comment "${{ github.event.pull_request.number }}" --body-file .review/review-comment.md
+            # Post the comment via the GitHub REST API, not the gh CLI.
+            # jq -Rs escapes the whole file into one JSON string.
+            COMMENT_BODY_JSON=$(jq --raw-input --slurp . .review/review-comment.md)
+            curl --silent --fail \
+              --request POST \
+              --header "Authorization: token $GITHUB_TOKEN" \
+              --header "Accept: application/vnd.github.v3+json" \
+              "https://api.github.com/repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" \
+              --data "{\"body\": ${COMMENT_BODY_JSON}"
           else
             echo "No review comment was produced (protocol failure?)."
           fi

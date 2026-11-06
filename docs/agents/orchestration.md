@@ -41,7 +41,8 @@ Auto-merge into `daily` fires only when **all three** hold:
 
 1. CI is green on the PR head,
 2. the `reviewer` status check is green: the report contains **zero
-   BLOCKING findings** (ADR-0016),
+   BLOCKING findings** (ADR-0016), or every BLOCKING finding is waived
+   by the manually posed `human-approved` label (ADR-0020),
 3. the change is not on the escalation list (`docs/agents/escalation.md`).
 
 Merging is a **platform action** (auto-merge). No agent, developer or

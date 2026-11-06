@@ -1,14 +1,10 @@
 """Shared pytest fixtures for the whole test suite."""
 
-from __future__ import annotations
-
-from typing import TYPE_CHECKING, Any
+from collections.abc import Iterator
+from typing import Any
 
 import pytest
 import structlog.testing
-
-if TYPE_CHECKING:
-    from collections.abc import Iterator
 
 from notify.models.notification import NotificationRequest, NotificationSeverity
 from notify.models.types import IssueIdentifier, MessageText
