@@ -22,7 +22,9 @@ separation with context isolation and, where possible, model diversity.
 
 ## Decision
 
-- **Developer agent** implements (contract: `docs/agents/developer.md`).
+- **Developer agent** implements and **opens the pull request** for its
+  issue (contract: `docs/agents/developer.md`); only the merge is a
+  platform action (ADR-0010).
 - **Reviewer agent** reviews with **isolated context** (spec + diff +
   rules only, never the author's reasoning), a **counterexample-seeking
   method**, and a structured report (BLOCKING / TO-FIX / SUGGESTION with
