@@ -173,6 +173,10 @@ def extract_answer_text(*, response: httpx.Response) -> str:
         raise ReviewProtocolError("the first choice has no message")
     content: object = message.get("content")
     if not isinstance(content, str) or not content.strip():
+        print(
+            f"Error: the answer message is empty; raw API response body: {response.text[:2000]}",
+            file=sys.stderr,
+        )
         raise ReviewProtocolError("the answer message is empty")
     return content
 
