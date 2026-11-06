@@ -26,7 +26,9 @@ class ApplicationSettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="",
-        case_sensitive=True,
+        # Case-insensitive so the documented UPPERCASE env vars
+        # (DISCORD_WEBHOOK_URL, LOG_LEVEL, LOG_FORMAT in .env.example) are read.
+        case_sensitive=False,
         frozen=True,
     )
 

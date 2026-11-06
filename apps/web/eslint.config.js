@@ -29,7 +29,11 @@ export default tseslint.config(
       ecmaVersion: 2023,
       globals: globals.browser,
       parserOptions: {
-        projectService: true,
+        projectService: {
+          // vite.config.ts is covered by tsconfig.node.json, but the project
+          // service does not always attach it - allow it as a default project.
+          allowDefaultProject: ["vite.config.ts"],
+        },
         tsconfigRootDir: import.meta.dirname,
       },
     },
@@ -97,9 +101,13 @@ export default tseslint.config(
   },
 
   {
-    // vite.config.ts runs in node, not the browser.
+    // vite.config.ts runs in node, not the browser, and is tooling config,
+    // not application code: Vite's defineConfig uses a default export.
     files: ["vite.config.ts"],
     languageOptions: { globals: globals.node },
+    rules: {
+      "import-x/no-default-export": "off",
+    },
   },
 
   {

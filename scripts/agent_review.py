@@ -26,12 +26,15 @@ import argparse
 import json
 import os
 import sys
-from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import httpx
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 API_ENDPOINT_URL = "https://api.mistral.ai/v1/chat/completions"
 DEFAULT_REVIEWER_MODEL = "mistral-large-latest"
@@ -43,15 +46,15 @@ MISTRAL_API_KEY_VARIABLE = "MISTRAL_API_KEY"
 REVIEWER_MODEL_VARIABLE = "REVIEWER_MODEL"
 
 HUMAN_APPROVED_LABEL = "human-approved"
-HUMAN_APPROVED_WAIVER_NOTE = (
-    "waived by the human-approved label (human approval, ADR-0020)"
-)
+HUMAN_APPROVED_WAIVER_NOTE = "waived by the human-approved label (human approval, ADR-0020)"
 
 EXIT_CODE_REVIEWED_CLEAN = 0
 EXIT_CODE_BLOCKING_FINDINGS = 1
 EXIT_CODE_PROTOCOL_FAILURE = 2
 
-UNKNOWN_SEVERITY_NOTE = "unknown severity reported by the reviewer - treated as BLOCKING (fail-closed)"
+UNKNOWN_SEVERITY_NOTE = (
+    "unknown severity reported by the reviewer - treated as BLOCKING (fail-closed)"
+)
 
 
 class ReviewProtocolError(RuntimeError):
@@ -224,15 +227,12 @@ def parse_report(*, answer_text: str) -> list[ReviewFinding]:
     findings_container: object = report_container.get("findings")
     if not isinstance(findings_container, list):
         raise ReviewProtocolError("the report has no findings list")
-    findings = [
-        parse_finding(finding_container=entry) for entry in findings_container
-    ]
-    return findings
+    return [parse_finding(finding_container=entry) for entry in findings_container]
 
 
 def count_by_severity(*, findings: Sequence[ReviewFinding]) -> dict[FindingSeverity, int]:
     """Recompute the counts locally - the model's own counts are never trusted."""
-    counts = {severity: 0 for severity in FindingSeverity}
+    counts = dict.fromkeys(FindingSeverity, 0)
     for finding in findings:
         counts[finding.severity] += 1
     return counts
@@ -248,10 +248,8 @@ def load_labels(*, labels_file: str | None) -> list[str]:
     if labels_file is None:
         return []
     try:
-        labels_container: object = json.loads(
-            Path(labels_file).read_text(encoding="utf-8")
-        )
-    except (OSError, json.JSONDecodeError):
+        labels_container: object = json.loads(Path(labels_file).read_text(encoding="utf-8"))
+    except OSError, json.JSONDecodeError:
         return []
     if not isinstance(labels_container, list):
         return []
@@ -387,9 +385,7 @@ def main(*, command_line_arguments: Sequence[str]) -> int:
         )
         return EXIT_CODE_PROTOCOL_FAILURE
     labels = load_labels(labels_file=arguments.labels_file)
-    findings = apply_human_approval(
-        findings=reported_findings, labels=labels
-    )
+    findings = apply_human_approval(findings=reported_findings, labels=labels)
     counts = count_by_severity(findings=findings)
     report_payload = {
         "findings": [
@@ -408,9 +404,7 @@ def main(*, command_line_arguments: Sequence[str]) -> int:
         "waived_count": counts[FindingSeverity.WAIVED],
         "human_approved": HUMAN_APPROVED_LABEL in labels,
     }
-    Path(arguments.report_file).write_text(
-        json.dumps(report_payload, indent=2), encoding="utf-8"
-    )
+    Path(arguments.report_file).write_text(json.dumps(report_payload, indent=2), encoding="utf-8")
     if arguments.comment_file is not None:
         Path(arguments.comment_file).write_text(
             render_markdown_comment(findings=findings, counts=counts),
