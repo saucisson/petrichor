@@ -48,3 +48,4 @@ Each ADR is one file, `adr-NNNN-short-name.md`, containing:
 | [0017](adr-0017-tools-directory.md) | A `tools/` directory for long-lived utilities |
 | [0018](adr-0018-react-typescript-frontend.md) | React + TypeScript frontend under the same discipline |
 | [0019](adr-0019-agent-runtime-permissions.md) | Agent runtime permissions: the `.vibe/` profile |
+| [0020](adr-0020-human-approved-waiver.md) | Human-approved label waives every blocking finding (auditable override) |

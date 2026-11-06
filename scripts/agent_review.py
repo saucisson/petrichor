@@ -1,19 +1,3 @@
-from __future__ import annotations
-
-import argparse
-import json
-import os
-import sys
-from dataclasses import dataclass
-from enum import StrEnum
-from pathlib import Path
-from typing import TYPE_CHECKING
-
-import httpx
-
-if TYPE_CHECKING:
-    from collections.abc import Sequence
-
 """The reviewer agent: one API call, one structured verdict (ADR-0016).
 
 The reviewer receives ONLY the review bundle (built by
@@ -22,13 +6,32 @@ isolation is enforced by construction. It answers with a JSON report;
 this script recomputes every count locally, fails closed on anything it
 cannot verify, and exits with a status the CI can gate merges on.
 
+A manually posed ``human-approved`` label on the pull request (ADR-0020)
+waives EVERY blocking case: each BLOCKING finding is recorded as WAIVED
+with its original evidence, and the exit code returns to 0. The waiver
+is applied here, deterministically, AFTER the review - the model never
+learns that the label exists, so its judgment cannot soften. Protocol
+failures are never waivable: they produce no report at all.
+
 Usage::
 
     python scripts/agent_review.py \
         --bundle-file .review/bundle.md \
         --report-file .review/review-report.json \
-        --comment-file .review/review-comment.md
+        --comment-file .review/review-comment.md \
+        --labels-file .review/pull-request-labels.json
 """
+
+import argparse
+import json
+import os
+import sys
+from collections.abc import Sequence
+from dataclasses import dataclass
+from enum import StrEnum
+from pathlib import Path
+
+import httpx
 
 API_ENDPOINT_URL = "https://api.mistral.ai/v1/chat/completions"
 DEFAULT_REVIEWER_MODEL = "mistral-large-latest"
@@ -39,13 +42,16 @@ MAXIMUM_COMPLETION_TOKENS = 6000
 MISTRAL_API_KEY_VARIABLE = "MISTRAL_API_KEY"
 REVIEWER_MODEL_VARIABLE = "REVIEWER_MODEL"
 
+HUMAN_APPROVED_LABEL = "human-approved"
+HUMAN_APPROVED_WAIVER_NOTE = (
+    "waived by the human-approved label (human approval, ADR-0020)"
+)
+
 EXIT_CODE_REVIEWED_CLEAN = 0
 EXIT_CODE_BLOCKING_FINDINGS = 1
 EXIT_CODE_PROTOCOL_FAILURE = 2
 
-UNKNOWN_SEVERITY_NOTE = (
-    "unknown severity reported by the reviewer - treated as BLOCKING (fail-closed)"
-)
+UNKNOWN_SEVERITY_NOTE = "unknown severity reported by the reviewer - treated as BLOCKING (fail-closed)"
 
 
 class ReviewProtocolError(RuntimeError):
@@ -53,11 +59,12 @@ class ReviewProtocolError(RuntimeError):
 
 
 class FindingSeverity(StrEnum):
-    """The severity ladder of the review report (ADR-0011)."""
+    """The severity ladder of the review report (ADR-0011, ADR-0020)."""
 
     BLOCKING = "BLOCKING"
     TO_FIX = "TO-FIX"
     SUGGESTION = "SUGGESTION"
+    WAIVED = "WAIVED"
 
 
 @dataclass(frozen=True)
@@ -217,17 +224,72 @@ def parse_report(*, answer_text: str) -> list[ReviewFinding]:
     findings_container: object = report_container.get("findings")
     if not isinstance(findings_container, list):
         raise ReviewProtocolError("the report has no findings list")
-    return [
+    findings = [
         parse_finding(finding_container=entry) for entry in findings_container
     ]
+    return findings
 
 
 def count_by_severity(*, findings: Sequence[ReviewFinding]) -> dict[FindingSeverity, int]:
     """Recompute the counts locally - the model's own counts are never trusted."""
-    counts = dict.fromkeys(FindingSeverity, 0)
+    counts = {severity: 0 for severity in FindingSeverity}
     for finding in findings:
         counts[finding.severity] += 1
     return counts
+
+
+def load_labels(*, labels_file: str | None) -> list[str]:
+    """Read the pull request labels; unreadable labels mean no waiver.
+
+    Fail-closed on the waiver side (ADR-0020): when the labels file is
+    missing or unreadable, the reviewer behaves as if no label was
+    posed, so every finding stays at its reported severity.
+    """
+    if labels_file is None:
+        return []
+    try:
+        labels_container: object = json.loads(
+            Path(labels_file).read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(labels_container, list):
+        return []
+    return [entry for entry in labels_container if isinstance(entry, str)]
+
+
+def apply_human_approval(
+    *,
+    findings: Sequence[ReviewFinding],
+    labels: Sequence[str],
+) -> list[ReviewFinding]:
+    """Waive EVERY blocking case when the human-approved label is posed.
+
+    The label is posed manually by the human owner (ADR-0020). It waives
+    every BLOCKING finding - any rule, any evidence, including the
+    fail-closed unknown severities. The findings stay visible, recorded
+    as WAIVED with the original evidence plus the waiver note, so the
+    human override stays auditable. TO-FIX and SUGGESTION findings are
+    never touched (they do not block), and protocol failures are never
+    waivable: they produce no report to waive.
+    """
+    if HUMAN_APPROVED_LABEL not in labels:
+        return list(findings)
+    waived_findings: list[ReviewFinding] = []
+    for finding in findings:
+        if finding.severity is not FindingSeverity.BLOCKING:
+            waived_findings.append(finding)
+            continue
+        waived_findings.append(
+            ReviewFinding(
+                severity=FindingSeverity.WAIVED,
+                file=finding.file,
+                line=finding.line,
+                rule=finding.rule,
+                evidence=f"{finding.evidence} - {HUMAN_APPROVED_WAIVER_NOTE}",
+            )
+        )
+    return waived_findings
 
 
 def render_markdown_comment(
@@ -243,8 +305,17 @@ def render_markdown_comment(
         f"- **BLOCKING**: {counts[FindingSeverity.BLOCKING]}"
         f" - **TO-FIX**: {counts[FindingSeverity.TO_FIX]}"
         f" - **SUGGESTION**: {counts[FindingSeverity.SUGGESTION]}"
+        f" - **WAIVED**: {counts[FindingSeverity.WAIVED]}"
     )
     comment_sections.append("")
+    if counts[FindingSeverity.WAIVED] > 0:
+        comment_sections.append(
+            f"> Label `{HUMAN_APPROVED_LABEL}` posed by a human: every"
+            " BLOCKING finding above the waiver threshold is recorded as"
+            " WAIVED (ADR-0020). Removing the label re-blocks the pull"
+            " request on the next review."
+        )
+        comment_sections.append("")
     if findings:
         comment_sections.append("| Severity | Location | Rule | Evidence |")
         comment_sections.append("| --- | --- | --- | --- |")
@@ -287,6 +358,14 @@ def parse_arguments(*, command_line_arguments: Sequence[str]) -> argparse.Namesp
         default=None,
         help="Optional path where the Markdown comment is written.",
     )
+    argument_parser.add_argument(
+        "--labels-file",
+        default=None,
+        help=(
+            "Optional path to a JSON array of pull request labels; a "
+            "human-approved label waives every blocking case (ADR-0020)."
+        ),
+    )
     return argument_parser.parse_args(command_line_arguments)
 
 
@@ -300,13 +379,17 @@ def main(*, command_line_arguments: Sequence[str]) -> int:
         bundle_text=bundle_text,
     )
     try:
-        findings = parse_report(answer_text=answer_text)
+        reported_findings = parse_report(answer_text=answer_text)
     except ReviewProtocolError as protocol_error:
         print(
             f"Error: the reviewer answer violated the contract: {protocol_error}",
             file=sys.stderr,
         )
         return EXIT_CODE_PROTOCOL_FAILURE
+    labels = load_labels(labels_file=arguments.labels_file)
+    findings = apply_human_approval(
+        findings=reported_findings, labels=labels
+    )
     counts = count_by_severity(findings=findings)
     report_payload = {
         "findings": [
@@ -322,6 +405,8 @@ def main(*, command_line_arguments: Sequence[str]) -> int:
         "blocking_count": counts[FindingSeverity.BLOCKING],
         "to_fix_count": counts[FindingSeverity.TO_FIX],
         "suggestion_count": counts[FindingSeverity.SUGGESTION],
+        "waived_count": counts[FindingSeverity.WAIVED],
+        "human_approved": HUMAN_APPROVED_LABEL in labels,
     }
     Path(arguments.report_file).write_text(
         json.dumps(report_payload, indent=2), encoding="utf-8"
@@ -334,7 +419,8 @@ def main(*, command_line_arguments: Sequence[str]) -> int:
     print(
         f"Review complete: {counts[FindingSeverity.BLOCKING]} BLOCKING,"
         f" {counts[FindingSeverity.TO_FIX]} TO-FIX,"
-        f" {counts[FindingSeverity.SUGGESTION]} SUGGESTION."
+        f" {counts[FindingSeverity.SUGGESTION]} SUGGESTION,"
+        f" {counts[FindingSeverity.WAIVED]} WAIVED."
     )
     if counts[FindingSeverity.BLOCKING] > 0:
         return EXIT_CODE_BLOCKING_FINDINGS

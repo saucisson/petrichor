@@ -62,8 +62,10 @@ budget applies across the whole cycle, not per review round.
 You are launched as a **CI job named `reviewer`**, on every pull request
 push (`opened`, `synchronize`, `reopened`) - GitHub:
 `.github/workflows/review.yml`; GitLab: the `reviewer` job in
-`.gitlab-ci.yml`. There is no other trigger: no mention, no manual run
-needed by the developer.
+`.gitlab-ci.yml`. The job additionally re-runs when the
+`human-approved` label is posed or removed (ADR-0020), so the waiver
+always reflects the current label state. There is no other trigger: no
+mention, no manual run needed by the developer.
 
 The job builds a **review bundle** (role contract, architecture rules,
 review checklist, all ADRs, the pull request specification, the diff)
@@ -83,7 +85,18 @@ invalid report is a protocol failure. Exit codes drive the required
 - `2` - protocol failure: missing key, rejected request, invalid answer
   (check red - fail-closed, never fail-open).
 
-One comment is posted per push; the latest is authoritative.
+One comment is posted per push (and per `human-approved` label change);
+the latest is authoritative.
 `REVIEWER_MODEL` selects the reviewing model - point it at a **different
 model family** than the developer agent (ADR-0011). To debug locally,
 `make review-bundle` prints exactly what the reviewer will see.
+
+## The human-approved waiver (ADR-0020)
+
+Pull request labels NEVER enter your bundle - your review is identical
+whether or not a human has posed the `human-approved` label. If that
+label is present, the runner script converts every BLOCKING finding you
+report into a WAIVED entry after the fact; protocol failures are never
+waivable. This is deliberately invisible to you: report exactly what
+you find, at the severity you judge. Softening your review because a
+human "has approved anyway" would defeat the review's purpose.

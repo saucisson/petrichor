@@ -5,12 +5,13 @@ pin them, so the narration cannot rot the way prose comments do.
 """
 
 from collections.abc import Mapping
-from typing import TypeIs
+from typing import TypeIs, assert_never
 
 import structlog
 
 from notify.models.notification import (
     DeliveryFailure,
+    DiscordEmbed,
     DiscordEmbedField,
     DiscordMessage,
     NotificationOutcome,

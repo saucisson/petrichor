@@ -45,9 +45,14 @@ reviewer:
   script:
     - mkdir -p .review
     - printf '%s' "$CI_MERGE_REQUEST_DESCRIPTION" > .review/pull-request-description.md
+    # Labels of the merge request (ADR-0020): a manually posed
+    # human-approved label waives every BLOCKING finding. GitLab
+    # exposes them as a comma-separated predefined variable; the
+    # runner script reads them, they never enter the reviewer's prompt.
+    - uv run python -c 'import json, os; labels = os.environ.get("CI_MERGE_REQUEST_LABELS", ""); print(json.dumps([label.strip() for label in labels.split(",") if label.strip()]))' > .review/pull-request-labels.json
     - git diff --no-color "$CI_MERGE_REQUEST_DIFF_BASE_SHA" HEAD > .review/pull-request.diff
     - uv run python scripts/build_review_bundle.py --diff-file .review/pull-request.diff --description-file .review/pull-request-description.md --output .review/bundle.md
-    - uv run python scripts/agent_review.py --bundle-file .review/bundle.md --report-file .review/review-report.json --comment-file .review/review-comment.md
+    - uv run python scripts/agent_review.py --bundle-file .review/bundle.md --report-file .review/review-report.json --comment-file .review/review-comment.md --labels-file .review/pull-request-labels.json
   artifacts:
     when: always
     paths:

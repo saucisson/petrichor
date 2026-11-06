@@ -27,7 +27,8 @@ Constitutional document (ADR-0010). Changing it requires a human decision.
    hold:
    - CI is green on the PR head,
    - the `reviewer` status check is green: the report contains **zero
-     BLOCKING findings** (ADR-0016),
+     BLOCKING findings** (ADR-0016), or every BLOCKING finding is
+     waived by the manually posed `human-approved` label (ADR-0020),
    - the change is not on the escalation list (`docs/agents/escalation.md`).
 5. **End of day** - freeze merges, `make day-report`, `make smoke-test`,
    then the human tests and merges `daily` into `main`.
