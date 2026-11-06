@@ -1,7 +1,12 @@
-from __future__ import annotations
+"""Integration tests for the notification adapters.
+
+Marked ``integration``: they exercise adapter wiring (httpx transport,
+Discord payload contract) rather than pure logic, and may be deselected
+with ``-m 'not integration'``.
+"""
 
 import json
-from typing import TYPE_CHECKING
+from typing import Any
 
 import httpx
 import pytest
@@ -18,15 +23,7 @@ from notify.models.notification import (
 from notify.models.types import MessageText
 from notify.services.notifications import build_discord_message
 
-if TYPE_CHECKING:
-    from typing import Any
-
-"""Integration tests for the notification adapters.
-
-Marked ``integration``: they exercise adapter wiring (httpx transport,
-Discord payload contract) rather than pure logic, and may be deselected
-with ``-m 'not integration'``.
-"""
+pytestmark = pytest.mark.integration
 
 WEBHOOK_URL = "https://discord.com/api/webhooks/123/fake-token"
 MESSAGE_TEXT = MessageText("Integration check: the webhook contract holds.")
@@ -110,5 +107,3 @@ class TestConsoleDispatcher:
         ]
         assert len(console_events) == 1
         assert console_events[0]["embed_description"] == MESSAGE_TEXT
-
-pytestmark = pytest.mark.integration

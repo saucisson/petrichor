@@ -50,7 +50,8 @@ uv run notify send --severity question --message "Need a decision on X." --issue
 | Branch model      | `docs/branching.md` (ADR-0010)                            |
 | Human contact      | the `notify` command in `tools/notify/` - ADR-0012, 0017 |
 | Reviewer launch    | CI job, bundle, required status check - ADR-0016          |
-| Decisions          | `docs/decisions/` - 19 ADRs with rejected alternatives    |
+| Human override     | the `human-approved` PR label waives any review block - ADR-0020 |
+| Decisions          | `docs/decisions/` - 20 ADRs with rejected alternatives    |
 
 ## The repository layout
 
@@ -89,6 +90,9 @@ docs/                    constitutional documents and ADRs
    `REVIEWER_MODEL` repository variable - the reviewer CI job needs
    them (ADR-0016). Mark the `reviewer` status check as required next
    to the `check` and `web` jobs.
+10. Optional: create a `human-approved` label on the repository. Pose
+    it manually on a pull request to waive every BLOCKING review
+    finding (ADR-0020) - the reviewer re-runs when the label changes.
 
 ## License
 

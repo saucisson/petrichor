@@ -21,12 +21,16 @@ notify = "notify.main:main"
 dev = [
     "hypothesis>=6.130",
     "import-linter>=2.3",
+    # Environment pin: mutmut 3.x pulls libcst -> pyyaml-ft, whose build
+    # SIGSEGVs on this platform; 2.0.0 installs cleanly.
     "mutmut==2.0.0",
     "mypy>=1.19",
-    "pre-commit>=4.2,<4.7",
+    "pre-commit>=4.2",
     "pytest>=8.4",
     "pytest-cov>=7.0",
     "ruff>=0.12",
+    # Environment pin: pyyaml 6.0.3 SIGSEGVs when built from sdist on
+    # this platform (transitive dep of pre-commit); 6.0.1 has a working build.
     "pyyaml==6.0.1",
 ]
 
@@ -93,9 +97,8 @@ convention = "google"
 "tools/notify/src/notify/main.py" = ["T201", "S101"]
 # scripts/*: T201 stdout is the interface, YTT202 stderr carries the failure
 # reason; S603 git/uv are invoked with fixed literals, no untrusted input
-# ever reaches argv; D100 docstrings are handled by the module-level docstring
-# that must live after `from __future__ import annotations`.
-"scripts/*" = ["T201", "YTT202", "S603", "D100"]
+# ever reaches argv.
+"scripts/*" = ["T201", "YTT202", "S603"]
 "tools/notify/tests/*" = [
     "S101",     # asserts are the point of tests
     "D",        # docstrings optional in tests
