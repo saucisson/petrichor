@@ -25,7 +25,10 @@ autonomy needs a bounded container.
 
 `main` (human merges only, after human tests) / `daily` (the day's
 container, tagged each morning as a restore point) / `feat|fix/<issue>`
-(one issue per branch). Auto-merge into `daily` fires only on the three
+(one issue per branch). The **developer agent opens the pull request for
+its issue branch itself** (following `.github/PULL_REQUEST_TEMPLATE.md`)
+- opening the PR is part of the agent's work; only the **merge** is a
+platform action. Auto-merge into `daily` fires only on the three
 codified criteria: CI green, zero BLOCKING reviewer findings, not on the
 escalation list. Incident protocol: **revert first, debug second**, with a
 3-attempt budget per issue. Details in `docs/branching.md`.
