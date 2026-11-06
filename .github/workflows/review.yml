@@ -13,6 +13,10 @@ name: reviewer
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled]
+  # Manual trigger: the reviewer consumes LLM API tokens on every push, so
+  # automatic runs are gated behind the REVIEWER_ENABLED repo variable.
+  # Run it by hand from the Actions tab when a review is actually needed.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -27,8 +31,9 @@ jobs:
     name: reviewer agent
     # Label events re-run the review only when the touched label is the
     # human-approved waiver (ADR-0020); no other label can change the
-    # verdict.
-    if: github.event.action != 'labeled' && github.event.action != 'unlabeled' || github.event.label.name == 'human-approved'
+    # verdict. Automatic PR runs are disabled unless REVIEWER_ENABLED=true;
+    # workflow_dispatch always runs.
+    if: (github.event_name == 'workflow_dispatch' || vars.REVIEWER_ENABLED == 'true') && (github.event.action != 'labeled' && github.event.action != 'unlabeled' || github.event.label.name == 'human-approved')
     runs-on: ubuntu-latest
     steps:
       - name: Check out the full history
