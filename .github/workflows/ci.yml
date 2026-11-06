@@ -89,5 +89,5 @@ jobs:
 
       - name: pip-audit of the locked graph
         run: |
-          uv export --locked --format requirements-txt --output-file requirements.txt
+          uv export --locked --format requirements-txt --no-emit-project --output-file requirements.txt
           uvx pip-audit --requirement requirements.txt --strict
