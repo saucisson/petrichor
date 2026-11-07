@@ -1,20 +1,22 @@
-"""Tests for scripts/create_issues.py (P01 backlog population, spec §19.2)."""
+"""Tests for create_issues.py (P01 backlog population, spec §19.2)."""
 
-import sys
+import re
 from pathlib import Path
 
 import pytest
+from hypothesis import given, strategies
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
-sys.path.insert(0, str(REPOSITORY_ROOT))
-
-from scripts.create_issues import (  # noqa: E402
+import create_issues
+from create_issues import (
     build_issue_body,
     compute_pending,
     expand_dependencies,
     issue_title,
     parse_backlog,
 )
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+IDENTIFIER_PATTERN = re.compile(r"P\d+")
 
 
 def backlog_text() -> str:
@@ -41,6 +43,16 @@ def test_expand_dependencies_rejects_garbage() -> None:
         expand_dependencies("whatever")
 
 
+@pytest.mark.property
+@given(strategies.text())
+def test_expand_dependencies_output_is_always_well_formed(text: str) -> None:
+    try:
+        result = expand_dependencies(text)
+    except ValueError:
+        return
+    assert all(IDENTIFIER_PATTERN.fullmatch(item) for item in result)
+
+
 def test_parse_real_backlog() -> None:
     plan = parse_backlog(backlog_text())
     assert len(plan.issues) == 50
@@ -63,7 +75,12 @@ def test_parse_real_backlog() -> None:
 def test_compute_pending_is_idempotent_when_everything_exists() -> None:
     plan = parse_backlog(backlog_text())
     existing_titles = {issue_title(issue) for issue in plan.issues}
-    pending = compute_pending(plan, set(plan.labels), set(plan.milestones), existing_titles)
+    pending = compute_pending(
+        plan=plan,
+        existing_labels=set(plan.labels),
+        existing_milestones=set(plan.milestones),
+        existing_titles=existing_titles,
+    )
     assert pending.labels == ()
     assert pending.milestones == ()
     assert pending.issues == ()
@@ -72,7 +89,12 @@ def test_compute_pending_is_idempotent_when_everything_exists() -> None:
 def test_compute_pending_reports_only_what_is_missing() -> None:
     plan = parse_backlog(backlog_text())
     existing_titles = {issue_title(issue) for issue in plan.issues[:-1]}
-    pending = compute_pending(plan, set(), set(), existing_titles)
+    pending = compute_pending(
+        plan=plan,
+        existing_labels=set(),
+        existing_milestones=set(),
+        existing_titles=existing_titles,
+    )
     assert [issue.identifier for issue in pending.issues] == ["P50"]
     assert len(pending.labels) == len(plan.labels)
 
@@ -80,7 +102,7 @@ def test_compute_pending_reports_only_what_is_missing() -> None:
 def test_build_issue_body_resolves_blocked_by_to_issue_numbers() -> None:
     plan = parse_backlog(backlog_text())
     issue = next(item for item in plan.issues if item.identifier == "P03")
-    body = build_issue_body(issue, {"P01": 1, "P02": 2})
+    body = build_issue_body(issue=issue, number_by_identifier={"P01": 1, "P02": 2})
     assert "blocked-by: #1, #2" in body
     assert "Critères d'acceptation" in body
 
@@ -88,5 +110,9 @@ def test_build_issue_body_resolves_blocked_by_to_issue_numbers() -> None:
 def test_build_issue_body_without_dependencies() -> None:
     plan = parse_backlog(backlog_text())
     issue = next(item for item in plan.issues if item.identifier == "P01")
-    body = build_issue_body(issue, {})
+    body = build_issue_body(issue=issue, number_by_identifier={})
     assert "**Dépendances.** aucune." in body
+
+
+def test_module_exposes_expected_entry_point() -> None:
+    assert callable(create_issues.main)
