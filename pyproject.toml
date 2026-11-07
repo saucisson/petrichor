@@ -107,6 +107,9 @@ convention = "google"
 # ever reaches argv; S607 git/uv are resolved through PATH, like every
 # documented git invocation (trusted machine, not a seccomp boundary).
 "scripts/*" = ["T201", "S603", "S607"]
+# Tests of repo-maintenance scripts live next to them (ADR-0014: tools/ stays
+# self-contained), so they get the same test exemptions as tool tests.
+"scripts/test_*.py" = ["S101", "D", "PLR2004"]
 "tools/notify/tests/*" = [
     "S101",     # asserts are the point of tests
     "D",        # docstrings optional in tests
@@ -160,7 +163,7 @@ layers = [
 # pytest and coverage (ADR-0007): 90% minimum, no silent skips.
 # ---------------------------------------------------------------------------
 [tool.pytest.ini_options]
-testpaths = ["tools/notify/tests"]
+testpaths = ["tools/notify/tests", "scripts"]
 addopts = "--strict-markers --cov=notify --cov-branch --cov-report=term-missing --cov-fail-under=90"
 markers = [
     "integration: exercises adapter boundaries through injected fakes (http, filesystem).",

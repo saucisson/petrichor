@@ -22,7 +22,6 @@ if TYPE_CHECKING:
 
 BACKLOG_PATH = Path("docs/backlog.md")
 EXPECTED_ISSUE_COUNT = 50
-ISSUE_LIST_LIMIT = 500
 MODE_DRY_RUN = "dry-run"
 MODE_APPLY = "apply"
 EN_DASH = "\u2013"
@@ -200,6 +199,7 @@ def issue_title(issue: IssueSpec) -> str:
 
 
 def compute_pending(
+    *,
     plan: BacklogPlan,
     existing_labels: set[str],
     existing_milestones: set[str],
@@ -213,13 +213,19 @@ def compute_pending(
     )
 
 
-def build_issue_body(issue: IssueSpec, number_by_identifier: dict[str, int]) -> str:
+def build_issue_body(*, issue: IssueSpec, number_by_identifier: dict[str, int]) -> str:
     """Return the issue body with a blocked-by footer resolved to real issue numbers."""
     resolved = [
         f"#{number_by_identifier[dependency]}"
         for dependency in issue.dependencies
         if dependency in number_by_identifier
     ]
+    unresolved = [d for d in issue.dependencies if d not in number_by_identifier]
+    if unresolved:
+        print(
+            f"warning: {issue.identifier} has unresolved dependencies: {', '.join(unresolved)}",
+            file=sys.stderr,
+        )
     footer = f"blocked-by: {', '.join(resolved)}" if resolved else "aucune."
     return f"{issue.body}\n\n---\n**Dépendances.** {footer}"
 
@@ -240,18 +246,11 @@ def fetch_existing(repo: str) -> tuple[set[str], set[str], dict[str, int]]:
     )
     title_to_number: dict[str, int] = {}
     issue_rows = gh(
-        "issue",
-        "list",
-        "--repo",
-        repo,
-        "--state",
-        "all",
-        "--limit",
-        str(ISSUE_LIST_LIMIT),
-        "--json",
-        "number,title",
+        "api",
+        f"repos/{repo}/issues?state=all",
+        "--paginate",
         "--jq",
-        ".[] | [.title, (.number | tostring)] | @tsv",
+        ".[] | select(.pull_request == null) | [.title, (.number | tostring)] | @tsv",
     )
     for row in issue_rows.splitlines():
         title, number = row.split("\t")
@@ -259,7 +258,7 @@ def fetch_existing(repo: str) -> tuple[set[str], set[str], dict[str, int]]:
     return labels, milestones, title_to_number
 
 
-def create_labels(repo: str, labels: tuple[str, ...]) -> None:
+def create_labels(*, repo: str, labels: tuple[str, ...]) -> None:
     """Create the missing labels with their color and description."""
     for label in labels:
         color, description = LABEL_STYLE[label]
@@ -267,7 +266,7 @@ def create_labels(repo: str, labels: tuple[str, ...]) -> None:
         print(f"label created: {label}")
 
 
-def create_milestones(repo: str, milestones: tuple[str, ...]) -> dict[str, int]:
+def create_milestones(*, repo: str, milestones: tuple[str, ...]) -> dict[str, int]:
     """Create the missing milestones and return the title -> number map."""
     number_by_milestone: dict[str, int] = {}
     for milestone in milestones:
@@ -287,7 +286,11 @@ def create_milestones(repo: str, milestones: tuple[str, ...]) -> dict[str, int]:
 
 
 def create_issues(
-    repo: str, plan: BacklogPlan, pending: PendingPlan, title_to_number: dict[str, int]
+    *,
+    repo: str,
+    plan: BacklogPlan,
+    pending: PendingPlan,
+    title_to_number: dict[str, int],
 ) -> None:
     """Create the pending issues in backlog order, resolving blocked-by to issue numbers."""
     number_by_identifier = {
@@ -298,7 +301,8 @@ def create_issues(
     with tempfile.TemporaryDirectory(prefix="petrichor-issues-") as directory:
         for issue in pending.issues:
             body_file = Path(directory) / f"{issue.identifier}.md"
-            body_file.write_text(build_issue_body(issue, number_by_identifier), encoding="utf-8")
+            body = build_issue_body(issue=issue, number_by_identifier=number_by_identifier)
+            body_file.write_text(body, encoding="utf-8")
             arguments = [
                 "issue",
                 "create",
@@ -340,7 +344,12 @@ def main(command_line_arguments: Sequence[str]) -> int:
     repo = gh("repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner").strip()
     plan = parse_backlog(BACKLOG_PATH.read_text(encoding="utf-8"))
     existing_labels, existing_milestones, title_to_number = fetch_existing(repo)
-    pending = compute_pending(plan, existing_labels, existing_milestones, set(title_to_number))
+    pending = compute_pending(
+        plan=plan,
+        existing_labels=existing_labels,
+        existing_milestones=existing_milestones,
+        existing_titles=set(title_to_number),
+    )
     print(
         f"[{mode}] {repo}: {len(pending.labels)} labels, {len(pending.milestones)} milestones, "
         f"{len(pending.issues)} issues to create "
@@ -354,9 +363,9 @@ def main(command_line_arguments: Sequence[str]) -> int:
         print(f"  issue     {issue_title(issue)} [{issue.milestone}]")
     if mode == MODE_DRY_RUN:
         return 0
-    create_labels(repo, pending.labels)
-    create_milestones(repo, pending.milestones)
-    create_issues(repo, plan, pending, title_to_number)
+    create_labels(repo=repo, labels=pending.labels)
+    create_milestones(repo=repo, milestones=pending.milestones)
+    create_issues(repo=repo, plan=plan, pending=pending, title_to_number=title_to_number)
     print(f"done: {len(pending.issues)} issues created in this run")
     return 0
 
