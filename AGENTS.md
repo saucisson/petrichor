@@ -31,7 +31,7 @@ If you are unsure which role this session assigns you, stop and ask.
 - The morning directive (issue list) is set by the human and is **never
   edited by agents**.
 - End of day: freeze merges, `make day-report`, `make smoke-test`;
-  the human tests and merges `daily` into `main`.
+  the human tests, audits `WORKLOG.md`, and merges `daily` into `main`.
 
 ## Merge criteria (codified - not vibes)
 
@@ -91,6 +91,8 @@ and label `needs-human` first:
 ## Honesty rules
 
 - Report evidence you actually ran; say so when you did not.
+- Append your `WORKLOG.md` entry to every commit or pull request - the
+  audit trail is part of the work, never an afterthought.
 - Never weaken a test, a rule, a threshold, or a check to pass it.
 - Never guess an acceptance criterion: no criteria, no work - report
   the issue as blocked.

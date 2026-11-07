@@ -1,57 +1,87 @@
-# Vibe Code project profile (ADR-0015).
-#
-# Version-controlled ON PURPOSE: this file defines what the coding agent
-# may do on this repository without asking, so every change to it is a
-# reviewed, human decision (docs/agents/escalation.md).
-# It is loaded only after the folder is explicitly trusted (Trust
-# folder dialog at session start; see the Vibe Code documentation).
-#
-# The balanced contract, in one line each:
-#   - inside the repository, the agent works (smart-approve classifies
-#     each shell call; the project's own commands are allowlisted);
-#   - outside the repository, nothing: calls are REFUSED, not asked;
-#   - on WSL, keep the repository in the Linux filesystem (~), never
-#     on /mnt/c, and mount Windows drives read-only or not at all -
-#     the VM boundary is a stronger guarantee than any prompt.
-
-# Few approval prompts, but the classifier still holds back risky
-# calls. smart-approve is a classifier, NOT a sandbox; the hard
-# boundary is outside_workdir below plus the WSL mount settings.
 default_agent = "smart-approve"
-
-# Free inside the working directory; every call reaching outside
-# (including /mnt/c, ~, or any other path) is refused, not asked -
-# the agent gets an error and keeps working.
 outside_workdir = "deny"
-
-[tools.bash]
-# Anything not in the allowlist goes through the agent's classifier:
-# it runs what it judges safe and asks you before the rest.
-permission = "ask"
-
-# An allowlist REPLACES Vibe's default read-only list, so the
-# classics are re-included here. Entries are command prefixes.
-allowlist = [
-    # Read-only classics (Vibe defaults, re-included).
-    "ls", "pwd", "cat", "head", "tail", "grep", "rg", "find", "wc",
-    "diff", "sort", "which", "file",
-    # Git: the day cycle is branch-first; protections on daily/main
-    # are the merge boundary, not the push (ADR-0009).
-    "git status", "git diff", "git log", "git show", "git branch",
-    "git add", "git commit", "git checkout", "git switch", "git rebase",
-    "git tag", "git stash", "git push", "git fetch",
-    # Python toolchain (ADR-0001): uv covers every gate via make.
-    "uv sync", "uv run", "uv build", "uv export", "uv lock", "uv tree",
-    "uvx", "python", "python3", "pytest", "ruff", "mypy",
-    # The task runner: every quality gate.
-    "make",
-    # Docker: building and inspecting the tools' images (ADR-0001).
-    "docker build", "docker ps", "docker logs", "docker images",
-    "docker tag", "docker inspect",
-    # Local gates that run outside make.
-    "gitleaks", "pre-commit run",
+applied_migrations = [
+    "bash_read_only_defaults_v1",
 ]
 
-# Never, at any classification: the escalation list applies to the
-# runtime too (sudo = privileges, rm -rf / = irreversible damage).
-denylist = ["sudo", "rm -rf /"]
+[tools.bash]
+permission = "ask"
+allowlist = [
+    "basename",
+    "cat",
+    "comm",
+    "cut",
+    "date",
+    "diff",
+    "dirname",
+    "docker build",
+    "docker images",
+    "docker inspect",
+    "docker logs",
+    "docker ps",
+    "docker tag",
+    "du",
+    "file",
+    "find",
+    "fmt",
+    "fold",
+    "git add",
+    "git branch",
+    "git checkout",
+    "git commit",
+    "git diff",
+    "git fetch",
+    "git log",
+    "git push",
+    "git rebase",
+    "git show",
+    "git stash",
+    "git status",
+    "git switch",
+    "git tag",
+    "gitleaks",
+    "grep",
+    "head",
+    "join",
+    "less",
+    "ls",
+    "make",
+    "md5sum",
+    "more",
+    "mypy",
+    "nl",
+    "od",
+    "paste",
+    "pre-commit run",
+    "pwd",
+    "pytest",
+    "python",
+    "python3",
+    "readlink",
+    "rg",
+    "ruff",
+    "sha1sum",
+    "sha256sum",
+    "shasum",
+    "sort",
+    "stat",
+    "sum",
+    "tac",
+    "tail",
+    "tr",
+    "uname",
+    "uniq",
+    "uv build",
+    "uv export",
+    "uv lock",
+    "uv run",
+    "uv sync",
+    "uv tree",
+    "uvx",
+    "wc",
+    "which",
+]
+denylist = [
+    "sudo",
+    "rm -rf /",
+]

@@ -23,7 +23,8 @@ Constitutional document (ADR-0009). Changing it requires a human decision.
 3. **Work** - one issue at a time, branch `feat/<issue>` or `fix/<issue>`
    from `daily`, small pull requests (target < 500 changed lines), rebase
    on `daily` before opening.
-4. **Review and merge into `daily`** - the developer agent runs
+4. **Review and merge into `daily`** - once CI is green on the pushed
+   head, the developer agent runs
    `make review PR=N` (local reviewer session, ADR-0010), then merges
    via `make merge-pr PR=N` (ADR-0009). The driver merges only when
    **all three** hold:
@@ -32,7 +33,8 @@ Constitutional document (ADR-0009). Changing it requires a human decision.
      (ADR-0010),
    - the change is not on the escalation list (`docs/agents/escalation.md`).
 5. **End of day** - freeze merges, `make day-report`, `make smoke-test`,
-   then the human tests and merges `daily` into `main`.
+   then the human tests, audits `WORKLOG.md`, and merges `daily` into
+   `main`.
 6. **Mutation testing** runs on `daily` at EOD (`make mutate`, workflow
    `mutation.yml`) - surviving mutants become issues (ADR-0012).
 
@@ -44,7 +46,8 @@ Constitutional document (ADR-0009). Changing it requires a human decision.
   `ci.yml`. There is no `reviewer` status check: the review runs
   locally (ADR-0010) and the merge driver enforces its verdict
   (ADR-0009).
-- Require linear history (the merge driver squash-merges).
+- Require linear history (the merge driver squash-merges, or
+  rebase-merges when squash is disabled).
 - Delete head branches on merge (the driver also deletes them).
 - `CODEOWNERS` reserves `docs/decisions/` and tool configuration for the
   human owner.

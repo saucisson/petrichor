@@ -48,9 +48,12 @@ the pull request: the human tests at the end of day, on `daily`.
   request and its CURRENT head (the review context: PR number and
   head SHA must both match, so a stale report is never a merge
   ticket), the pull request is open and cleanly mergeable, and every
-  CI check on its head has concluded "success". It then squash-merges
-  through the platform API (`sha` pinned to the reviewed head) and
-  deletes the branch. Linear history on `daily` is preserved.
+  CI check on its head has concluded "success". It then merges
+  through the platform API (`sha` pinned to the reviewed head) with
+  the linear method the repository allows - squash preferred, a
+  rebase merge as the fallback when squash is disabled; a merge
+  commit is never issued - and deletes the branch. Linear history on
+  `daily` is preserved.
 - Incident protocol: **revert first, debug second**, with a 3-attempt
   budget per issue. Details in `docs/branching.md`.
 - Branch protections on `daily` stay as the platform backstop; the

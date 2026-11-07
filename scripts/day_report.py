@@ -105,6 +105,11 @@ def render_report(
         "- Check open issues labeled `needs-human`: answer them before"
         " approving the merge of `daily` into `main`."
     )
+    report_sections.append(
+        "- Read `WORKLOG.md`: the day's agent-written audit trail - every"
+        " entry should match a merge above, and no merge above without an"
+        " entry."
+    )
     report_sections.append("")
     return "\n".join(report_sections)
 

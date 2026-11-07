@@ -73,6 +73,8 @@ applies its equivalents.
 ## 7. Security and autonomy
 
 - [ ] No new dependency without an approved escalation (ADR-0008, ADR-0010).
+- [ ] The `WORKLOG.md` entry is present, follows the file's format, and
+      matches the change - including what was **not** run.
 - [ ] No constitutional file touched: `AGENTS.md`, `docs/agents/`,
       `docs/decisions/`, `docs/architecture.md`, `docs/branching.md`,
       lint/type/coverage configuration.
