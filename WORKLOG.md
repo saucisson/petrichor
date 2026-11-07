@@ -44,6 +44,14 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-07 - template update: unattended night loop + one session context per PR (template @ 3463aea)
+
+- **Issue**: none (human-directed template sync: "J'ai mis à jour le template projet, mets à jour notre dépôt").
+- **Done**: applied saucisson/project-template @ 3463aea (2 commits: b4c32c0, 3463aea). New files: .vibe/prompts/night-auto.md, .vibe/prompts/night-issue.md, docs/decisions/adr-0017-unattended-loop.md, scripts/claim_issue.py, scripts/night_loop.py, scripts/open_pr.py. Updated: Makefile (targets pr/claim/night), docs/agents/developer.md (make pr as only PR creation path, session clear after merge, unattended rules), docs/agents/orchestration.md (§3 session clearing, §8 night loop), AGENTS.md (session-context + unattended bullets, Petrichor layer preserved).
+- **Evidence**: files verified byte-identical to template HEAD except AGENTS.md (intentional merge of Petrichor project layer). Not run: make check (not requested for a template sync; CI will gate the PR).
+- **Judgement calls**: AGENTS.md merged manually to keep the Petrichor pointer paragraph; all other template files taken as-is.
+- **Escalations**: none.
+
 ## 2026-11-07 - template update: worklog, review-as-last-gate, merge-method negotiation (PR #52)
 
 - **Issue**: none (human-directed template sync: "Prends en compte ces changements").
