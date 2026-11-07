@@ -25,6 +25,10 @@ EXPECTED_ISSUE_COUNT = 50
 MODE_DRY_RUN = "dry-run"
 MODE_APPLY = "apply"
 EN_DASH = "\u2013"
+EM_DASH = "\u2014"
+NO_DEPENDENCY_MARKERS = (EM_DASH, "-", "")
+BLOCKED_BY_LABEL = "blocked-by:"
+NO_DEPENDENCIES_TEXT = "aucune."
 USAGE = """usage: create_issues.sh [--dry-run|--apply]
   --dry-run (default)  print what would be created, create nothing
   --apply              create missing labels, milestones and issues
@@ -122,7 +126,7 @@ class _IssueAccumulator:
 def expand_dependencies(raw: str) -> list[str]:
     """Expand a dependency cell such as ``P01, P02`` or a ``P11...P17`` range."""
     raw = raw.strip()
-    if raw in ("—", "-", ""):
+    if raw in NO_DEPENDENCY_MARKERS:
         return []
     identifiers: list[str] = []
     for chunk in raw.split(","):
@@ -226,7 +230,7 @@ def build_issue_body(*, issue: IssueSpec, number_by_identifier: dict[str, int]) 
             f"warning: {issue.identifier} has unresolved dependencies: {', '.join(unresolved)}",
             file=sys.stderr,
         )
-    footer = f"blocked-by: {', '.join(resolved)}" if resolved else "aucune."
+    footer = f"{BLOCKED_BY_LABEL} {', '.join(resolved)}" if resolved else NO_DEPENDENCIES_TEXT
     return f"{issue.body}\n\n---\n**Dépendances.** {footer}"
 
 
