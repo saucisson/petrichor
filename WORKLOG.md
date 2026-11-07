@@ -44,6 +44,14 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-07 - template sync 3463aea, part 2/3: claim_issue driver + make claim (PR #55)
+
+- **Issue**: none (human-directed template sync).
+- **Done**: applied saucisson/project-template @ 3463aea, part 2/3: scripts/claim_issue.py (adds the night-claimed label before any work; refuses PRs and already-claimed issues), Makefile target `claim`. Review-driven hardening shared with part 1/3: request_or_fail wraps every HTTP call (transport error = exit 2, never a traceback), named constants for remote parsing, HTTP_TIMEOUT_SECONDS. Tests: scripts/test_claim_issue.py (13 tests).
+- **Evidence**: run: make check (ruff, mypy strict, import-linter, pytest, coverage floor). Not run: make mutate (EOD on daily), make smoke-test (no notify config in this environment).
+- **Judgement calls**: constitutional files (AGENTS.md, docs/agents/*, ADR-0017, .vibe/prompts/*) delivered in branch template/constitutional-3463aea for human merge per ADR-0010.
+- **Escalations**: none.
+
 ## 2026-11-07 - template sync 3463aea, part 1/3: open_pr driver + make pr (PR #54)
 
 - **Issue**: none (human-directed template sync: "J'ai mis à jour le template projet, mets à jour notre dépôt").
