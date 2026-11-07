@@ -31,6 +31,7 @@ PULL_REQUEST_TEMPLATE_PATH = ".github/PULL_REQUEST_TEMPLATE.md"
 DEFAULT_BASE_BRANCH = "daily"
 DETACHED_HEAD_NAME = "HEAD"
 UNPROCESSABLE_ENTITY_STATUS_CODE = 422
+HTTP_TIMEOUT_SECONDS = 30.0
 
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 
@@ -153,10 +154,17 @@ def open_pull_request(
     body: str,
 ) -> dict[str, object]:
     """Open the pull request; a 422 means the state, not the API, is wrong."""
-    response = http_client.post(
-        f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/pulls",
-        json={"title": title, "head": head_branch, "base": base_branch, "body": body},
-    )
+    try:
+        response = http_client.post(
+            f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/pulls",
+            json={"title": title, "head": head_branch, "base": base_branch, "body": body},
+        )
+    except httpx.TransportError as error:
+        print(
+            f"Error: could not reach the GitHub API: {error}",
+            file=sys.stderr,
+        )
+        raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE) from error
     if response.is_success:
         pull_request: object = response.json()
         if not isinstance(pull_request, dict):
@@ -218,7 +226,7 @@ def main(*, command_line_arguments: Sequence[str]) -> int:
             "Authorization": f"Bearer {github_token}",
             "Accept": "application/vnd.github.v3+json",
         },
-        timeout=30.0,
+        timeout=HTTP_TIMEOUT_SECONDS,
     ) as http_client:
         pull_request = open_pull_request(
             http_client=http_client,
