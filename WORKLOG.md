@@ -44,6 +44,14 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-07 - template sync 3463aea, part 1/3: open_pr driver + make pr (PR #54)
+
+- **Issue**: none (human-directed template sync: "J'ai mis à jour le template projet, mets à jour notre dépôt").
+- **Done**: applied saucisson/project-template @ 3463aea, part 1/3: scripts/open_pr.py (PR creation via GitHub API, the only creation path per ADR-0017), Makefile target `pr`, docs/agents/developer.md updated (make pr as only PR path, session clear after merge, unattended rules). Tests: scripts/test_open_pr.py (9 tests: success payload, 422 criteria-unmet, API error protocol-failure, body file read/missing, token absent/present, argument contract, repository slug).
+- **Evidence**: run: make check (ruff, mypy strict, import-linter, pytest, coverage floor). Not run: make mutate (EOD on daily), make smoke-test (no notify config in this environment).
+- **Judgement calls**: template sync split into 3 PRs (open_pr / claim_issue / night_loop) per review finding on the ~500-line budget; night_loop.py alone is 543 lines from the template and cannot be split without modifying it.
+- **Escalations**: none.
+
 ## 2026-11-07 - template update: worklog, review-as-last-gate, merge-method negotiation (PR #52)
 
 - **Issue**: none (human-directed template sync: "Prends en compte ces changements").
