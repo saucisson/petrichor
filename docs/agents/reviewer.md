@@ -87,7 +87,10 @@ an invalid answer is a protocol failure. Exit codes drive the merge:
 - `0` - zero BLOCKING findings (the merge driver may proceed),
 - `1` - at least one BLOCKING finding (the developer iterates),
 - `2` - protocol failure: session could not start or failed, invalid
-  answer (fail-closed, never fail-open - never mergeable).
+  answer (fail-closed, never fail-open - never mergeable),
+- `3` - preconditions unmet: the review never started (the head was
+  not pushed, or CI had not concluded on it); not a verdict, not an
+  attempt.
 
 One comment is posted per review run; the latest is authoritative.
 Pull request labels never enter your bundle: report exactly what you

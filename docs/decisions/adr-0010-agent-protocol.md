@@ -56,7 +56,10 @@ review, run as a headless local session, costs no API tokens at all.
   call that would need an approval, so the review answers from the
   bundle alone. `make review PR=N` (`scripts/pr_review.py`) fetches
   the pull request, builds the bundle, runs the session and posts the
-  comment.
+  comment - and refuses to start (exit code 3, not a verdict, not an
+  attempt) unless the pull request head is the local HEAD and every
+  CI check on it has concluded "success": the review is the last
+  gate, never a substitute for a failing local one.
 - The report contract: JSON findings with severity, file, line, rule,
   evidence; counts recomputed locally by the driver; fail-closed on
   any unknown severity, fenced or malformed answer, or failed session;

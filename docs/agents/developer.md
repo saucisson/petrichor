@@ -28,7 +28,14 @@ pull requests into `daily`, but only through the merge driver
   ```
 
   The rules it enforces are in `docs/architecture.md`; the language
-  of the code under review does not matter - the rules do.
+  of the code under review does not matter - the rules do. Run it on
+  the **final** state: a green gate on an earlier commit is not
+  evidence about the one you push.
+
+- Every new piece of logic ships tests, in a location the runner
+  collects (`tools/<tool>/tests` for a tool, `scripts/tests/` for a
+  script, ADR-0014): tests the gate never collects are theater, and
+  the reviewer blocks them.
 
 - Rebase on `daily` before opening the pull request. Keep it under ~500
   changed lines; split earlier rather than larger.
@@ -45,27 +52,49 @@ Your report contains:
   with the ADR or issue comment that decided it.
 - **Known limitations**: what remains unhandled and why.
 
+Your `WORKLOG.md` entry is part of the change: append it at the top of
+the file (entry format inside), in the branch, before opening the
+pull request. The reviewer checks it against the diff; the human reads
+the day's entries when auditing the `daily` → `main` merge. A direct
+commit on `daily` (revert protocol, docs-only fix) carries its entry
+in the same commit.
+
 ## After the pull request
 
 The review runs locally as an isolated Vibe Code session (ADR-0010):
 
-1. Open the pull request, then run:
+1. Open the pull request, push, then **wait**: one command at a time -
+   never a chained `git push && make review`; a review of a stale head
+   is a wasted session. Before invoking the review, verify the
+   preconditions yourself (`docs/agents/orchestration.md` §4): `make
+   check` green on this exact commit, tests present for every new
+   piece of logic, and the diff touching no escalation-list file -
+   if it does, the escalation (`docs/agents/escalation.md`) comes
+   **before** the review, never after. Then:
 
    ```console
    make review PR=N
    ```
 
    The driver fetches the PR, builds the review bundle, runs the reviewer
-   session, posts its comment, and returns its exit code.
+   session, posts its comment, and returns its exit code. It refuses
+   to start (exit 3) unless the pull request head is the local HEAD
+   and every CI check on that head has concluded "success" (ADR-0010):
+   the review is the last gate, never a substitute for a red or
+   unfinished local gate.
 
 2. **Exit 0** (zero BLOCKING findings): run `make merge-pr PR=N`. The
    driver re-checks the merge criteria (zero-BLOCKING report from this
-   PR, checks green, PR open and mergeable), squash-merges into `daily`
-   pinned to the reviewed commit, and deletes the branch (ADR-0009).
+   PR, checks green, PR open and mergeable), merges into `daily`
+   pinned to the reviewed commit with the linear method the repository
+   allows (squash, or a rebase merge when squash is disabled), and
+   deletes the branch (ADR-0009).
 3. **Exit 1** (findings): address every BLOCKING and TO-FIX finding,
-   push, and re-run `make review PR=N`.
+   push, wait for CI, and re-run `make review PR=N`.
 4. **Exit 2** (protocol failure): do not retry blindly - report it as a
    `needs-human` blocker with the error message.
+5. **Exit 3** (preconditions unmet): not a verdict and not an attempt -
+   wait for CI (or push the head first), then re-run `make review`.
 
 A BLOCKING finding has no override: address it, or escalate to the
 human (`needs-human`) if you believe it is a false positive - the

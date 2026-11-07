@@ -18,12 +18,16 @@ repos:
     hooks:
       - id: mypy
         args: ["tools/notify/src", "tools/notify/tests", "scripts"]
+        # args already enumerate the full scope (same command as CI);
+        # appending filenames makes mypy report duplicate modules.
+        pass_filenames: false
         additional_dependencies:
           - pydantic>=2.11
           - pydantic-settings>=2.9
           - structlog>=25.1
           - httpx>=0.28
           - hypothesis>=6.130
+          - pytest>=8.4
 
   - repo: local
     hooks:
