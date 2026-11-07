@@ -1,0 +1,187 @@
+[project]
+name = "notify"
+version = "0.1.0"
+description = "Opinionated Python project template for AI-agent-driven development."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Alban Linard" }]
+requires-python = ">=3.15"
+dependencies = [
+    "httpx>=0.28",
+    "pydantic>=2.11",
+    "pydantic-settings>=2.9",
+    "structlog>=25.1",
+]
+
+[project.scripts]
+notify = "notify.main:main"
+
+[dependency-groups]
+dev = [
+    "hypothesis>=6.130",
+    "import-linter>=2.3",
+    "mutmut>=3.3",
+    "mypy>=2.4",
+    "pre-commit>=4.2",
+    "pytest>=8.4",
+    "pytest-cov>=7.0",
+    "ruff>=0.17",
+]
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# ADR-0014: the notify tool lives in tools/ - an instance's product
+# code lives in its own directory, not in this template.
+packages = ["tools/notify/src/notify"]
+
+# ---------------------------------------------------------------------------
+# Ruff: linting, formatting and the mechanically-enforced style contract.
+# ADR-0004 (readability-first style) and ADR-0006 (precise typing) live here.
+# ---------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py315"
+line-length = 100
+src = ["tools/notify/src", "tools/notify/tests", "scripts"]
+
+[tool.ruff.lint]
+# T20 bans print() outside CLI entry points (see per-file-ignores below).
+select = [
+    "B",     # flake8-bugbear: likely bugs
+    "C4",    # flake8-comprehensions
+    "C90",   # mccabe: cyclomatic complexity <= 10
+    "D",     # pydocstyle: docstrings on public API
+    "E",     # pycodestyle errors
+    "F",     # pyflakes
+    "I",     # isort: import sorting
+    "N",     # pep8-naming
+    "PL",    # pylint subset (PLR2004: no magic values)
+    "PTH",   # use pathlib, not os.path
+    "RET",   # flake8-return
+    "RUF",   # ruff-specific rules
+    "S",     # flake8-bandit subset: security (ADR-0008)
+    "SIM",   # flake8-simplify
+    "T",     # flake8-print: no print() in library code
+    "TC",    # type-checking-only imports
+    "TID",   # banned relative imports
+    "UP",    # pyupgrade: modern syntax
+    "W",     # pycodestyle warnings
+    "ANN",   # annotations everywhere (ADR-0006)
+    "BLE",   # no blind except
+]
+ignore = [
+    "ANN401", # Any is allowed in typing-only overrides documented per ADR-0006.
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+# On Python 3.15 (PEP 649) annotations are deferred by default, so
+# annotation-only imports can live in TYPE_CHECKING blocks at zero
+# runtime cost - EXCEPT where the class introspects its own fields at
+# definition time: pydantic models and settings need their annotation
+# imports at runtime, hence the exemption below (ADR-0006).
+[tool.ruff.lint.flake8-type-checking]
+runtime-evaluated-base-classes = [
+    "pydantic.BaseModel",
+    "pydantic_settings.BaseSettings",
+]
+
+[tool.ruff.lint.pylint]
+max-args = 8
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+# CLI entry points legitimately write to stdout (ADR-0005: console output is
+# presentation, logging is narration - they are different channels).
+# S101: the narrowing assertion in select_dispatcher is the mypy-canonical
+# pattern for Optional narrowing after an early return.
+"tools/notify/src/notify/main.py" = ["T201", "S101"]
+# scripts/*: T201 stdout is the interface, stderr carries the failure
+# reason; S603 git/uv are invoked with fixed literals, no untrusted input
+# ever reaches argv; S607 git/uv are resolved through PATH, like every
+# documented git invocation (trusted machine, not a seccomp boundary).
+"scripts/*" = ["T201", "S603", "S607"]
+"tools/notify/tests/*" = [
+    "S101",     # asserts are the point of tests
+    "D",        # docstrings optional in tests
+    "PLR2004",  # magic values are fine in test scenarios
+]
+
+[tool.ruff.format]
+quote-style = "double"
+
+# ---------------------------------------------------------------------------
+# mypy: strict-plus typing (ADR-0006).
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.15"
+strict = true
+disallow_any_generics = true
+disallow_any_explicit = true
+warn_return_any = true
+warn_unreachable = true
+plugins = ["pydantic.mypy"]
+
+# Escape hatch for untyped third-party integrations: an override MUST carry a
+# comment pointing to the issue or ADR that justifies it (ADR-0006).
+# [[tool.mypy.overrides]]
+# module = "someuntypedlib.*"
+# disallow_any_explicit = false
+
+[tool.pydantic-mypy]
+# pydantic 2.14's mypy plugin only recognizes the two options below; the former
+# warn_required_dynamic_attributes and warn_untyped_fields no longer exist.
+init_forbid_extra = true
+init_typed = true
+
+# ---------------------------------------------------------------------------
+# import-linter: the onion dependency rule, verified mechanically (ADR-0002).
+# ---------------------------------------------------------------------------
+[tool.importlinter]
+root_packages = ["notify"]
+
+[[tool.importlinter.contracts]]
+name = "Onion layers - dependencies point inward only"
+type = "layers"
+layers = [
+    "notify.main",
+    "notify.infrastructure",
+    "notify.services",
+    "notify.models",
+]
+
+# ---------------------------------------------------------------------------
+# pytest and coverage (ADR-0007): 90% minimum, no silent skips.
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tools/notify/tests"]
+addopts = "--strict-markers --cov=notify --cov-branch --cov-report=term-missing --cov-fail-under=90"
+markers = [
+    "integration: exercises adapter boundaries through injected fakes (http, filesystem).",
+    "property: hypothesis-based invariant tests (ADR-0012).",
+]
+filterwarnings = ["error"]
+
+[tool.coverage.run]
+branch = true
+source = ["notify"]
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "@overload",
+]
+
+# ---------------------------------------------------------------------------
+# mutmut (ADR-0012): run on `daily` at end of day, before the human review.
+# ---------------------------------------------------------------------------
+[tool.mutmut]
+paths_to_mutate = ["tools/notify/src/notify/"]

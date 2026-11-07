@@ -1,0 +1,31 @@
+"""Shared pytest fixtures for the whole test suite."""
+
+from typing import TYPE_CHECKING
+
+import pytest
+import structlog.testing
+
+from notify.models.notification import NotificationRequest, NotificationSeverity
+from notify.models.types import IssueIdentifier, MessageText
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+    from structlog.typing import EventDict
+
+
+@pytest.fixture
+def sample_notification_request() -> NotificationRequest:
+    """A typical agent-to-human question, as used across the test suite."""
+    return NotificationRequest(
+        severity=NotificationSeverity.QUESTION,
+        message=MessageText("The reviewer agent requests a decision on the persistence adapter."),
+        issue_identifier=IssueIdentifier("PR-42"),
+    )
+
+
+@pytest.fixture
+def capture_logs() -> Iterator[list[EventDict]]:
+    """Capture structlog events, as a list of plain dictionaries."""
+    with structlog.testing.capture_logs() as captured_events:
+        yield captured_events
