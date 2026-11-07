@@ -5,10 +5,14 @@ fetches the pull request description from the GitHub API,
 materializes the diff against the pull request base, builds the review
 bundle, runs the reviewer session (``scripts/agent_review.py``) and
 posts the resulting comment on the pull request. The exit code is the
-reviewer's verdict: 0 clean, 1 blocking findings, 2 protocol failure.
+reviewer's verdict: 0 clean, 1 blocking findings, 2 protocol failure,
+3 preconditions unmet (the review never started: head not pushed or
+CI not concluded on it - not a verdict, not an attempt).
 
-The developer agent runs this after opening a pull request, then merges
-on a clean verdict (ADR-0009)::
+The developer agent runs this after opening a pull request and only
+once CI has concluded on the pushed head: the driver refuses to review
+a stale head or a red one - the review is the last gate, never a
+substitute for a failing local gate (ADR-0010)::
 
     make review PR=42
 """
@@ -38,6 +42,7 @@ REVIEW_DIRECTORY = REPOSITORY_ROOT / ".review"
 EXIT_CODE_SUCCESS = 0
 EXIT_CODE_FAILURE = 1
 EXIT_CODE_PROTOCOL_FAILURE = 2
+EXIT_CODE_PRECONDITIONS_UNMET = 3
 
 
 def load_environment_file() -> None:
@@ -124,6 +129,101 @@ def fetch_pull_request(
     return pull_request
 
 
+def extract_head_sha(*, pull_request: dict[str, object]) -> str:
+    """Return the pull request head SHA, or fail closed."""
+    head_container = pull_request.get("head")
+    head_sha = head_container.get("sha", "") if isinstance(head_container, dict) else ""
+    if not head_sha:
+        print("Error: the pull request has no head SHA.", file=sys.stderr)
+        raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
+    return head_sha
+
+
+def fetch_check_runs(
+    *,
+    http_client: httpx.Client,
+    repository_slug: str,
+    head_sha: str,
+) -> list[dict[str, object]]:
+    """List the CI check runs of the pull request head."""
+    response = http_client.get(
+        f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/commits/{head_sha}/check-runs"
+    )
+    if not response.is_success:
+        print(
+            f"Error: the GitHub API returned {response.status_code}"
+            f" for the check runs of {head_sha}.",
+            file=sys.stderr,
+        )
+        raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
+    payload: object = response.json()
+    check_runs = payload.get("check_runs", []) if isinstance(payload, dict) else []
+    if not isinstance(check_runs, list):
+        return []
+    return [entry for entry in check_runs if isinstance(entry, dict)]
+
+
+def enforce_review_preconditions(
+    *,
+    http_client: httpx.Client,
+    repository_slug: str,
+    pull_request: dict[str, object],
+) -> None:
+    """Refuse to start the review unless the preconditions hold (ADR-0010).
+
+    The review is the last gate: it never substitutes for a failing or
+    unfinished local gate. Every refusal exits with code 3
+    (preconditions unmet): not a review verdict, not an attempt - the
+    developer agent waits (or pushes), then re-runs `make review`.
+    """
+    head_sha = extract_head_sha(pull_request=pull_request)
+    local_head = run_git(arguments=["rev-parse", "HEAD"]).strip()
+    if head_sha != local_head:
+        print(
+            f"Review refused: the pull request head {head_sha} is not the"
+            f" local HEAD {local_head} - push, wait for CI, then re-run"
+            " `make review`.",
+            file=sys.stderr,
+        )
+        raise SystemExit(EXIT_CODE_PRECONDITIONS_UNMET)
+    pending_changes = run_git(arguments=["status", "--porcelain"]).strip()
+    if pending_changes:
+        print(
+            "Review refused: uncommitted changes are present - commit,"
+            " push, wait for CI, then re-run `make review`.",
+            file=sys.stderr,
+        )
+        raise SystemExit(EXIT_CODE_PRECONDITIONS_UNMET)
+    check_runs = fetch_check_runs(
+        http_client=http_client,
+        repository_slug=repository_slug,
+        head_sha=head_sha,
+    )
+    if not check_runs:
+        print(
+            "Review refused: no CI check runs on the head yet - wait for"
+            " CI, then re-run `make review`.",
+            file=sys.stderr,
+        )
+        raise SystemExit(EXIT_CODE_PRECONDITIONS_UNMET)
+    for check_run in check_runs:
+        name = str(check_run.get("name", "unnamed check"))
+        if check_run.get("status") != "completed":
+            print(
+                f"Review refused: CI check {name} is still running - wait"
+                " for CI, then re-run `make review`.",
+                file=sys.stderr,
+            )
+            raise SystemExit(EXIT_CODE_PRECONDITIONS_UNMET)
+        if check_run.get("conclusion") != "success":
+            print(
+                f"Review refused: CI check {name} did not succeed - fix CI"
+                " first, then re-run `make review`.",
+                file=sys.stderr,
+            )
+            raise SystemExit(EXIT_CODE_PRECONDITIONS_UNMET)
+
+
 def write_review_inputs(*, pull_request: dict[str, object], review_directory: Path) -> None:
     """Write the description file the review consumes."""
     review_directory.mkdir(parents=True, exist_ok=True)
@@ -185,8 +285,7 @@ def write_review_context(
     still match - a report for another PR, or for an older head, is
     stale and the merge is refused.
     """
-    head_container = pull_request.get("head")
-    head_sha = head_container.get("sha", "") if isinstance(head_container, dict) else ""
+    head_sha = extract_head_sha(pull_request=pull_request)
     review_directory.mkdir(parents=True, exist_ok=True)
     (review_directory / "review-context.json").write_text(
         json.dumps({"pr_number": pull_request_number, "head_sha": head_sha}),
@@ -251,6 +350,11 @@ def main(*, command_line_arguments: Sequence[str]) -> int:
             http_client=http_client,
             repository_slug=repository_slug,
             pull_request_number=arguments.pr_number,
+        )
+        enforce_review_preconditions(
+            http_client=http_client,
+            repository_slug=repository_slug,
+            pull_request=pull_request,
         )
         base_ref_container = pull_request.get("base")
         base_ref = (
