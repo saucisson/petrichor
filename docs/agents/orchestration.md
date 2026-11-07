@@ -31,9 +31,17 @@ Otherwise: label `blocked`, comment why, move on.
 
 ## 3. Sequential work
 
-One issue, one branch, one PR at a time. Small pull requests (< 500 lines).
-Rebase on `daily` before opening the PR. Full `make check` before the
-reviewer sees anything.
+One issue, one branch, one PR, one context at a time. Small pull
+requests (< 500 lines). Rebase on `daily` before opening the PR. Full
+`make check` before the reviewer sees anything.
+
+The developer session is cleared after every merged pull request
+(`/clear` in the Vibe Code CLI, a new session elsewhere): a context
+that carries the previous issue's residue rationalizes the next one.
+Nothing is lost - the day's memory lives in the repository
+(`WORKLOG.md`, the pull requests, the issues), and the fresh session
+re-anchors by re-reading the directive and `AGENTS.md` (§1), the
+goal-drift guard.
 
 ## 4. Review and merge criteria (codified - no judgement calls)
 
@@ -94,3 +102,43 @@ severity contract.
 A red `daily` at EOD triggers the incident protocol: revert first
 (`docs/branching.md`), and if the revert does not settle it, `urgent`
 escalation with merges stopped.
+
+## 8. The unattended loop (night)
+
+`make night` runs the day loop while nobody answers. The directive
+comes in two flavors, and `scripts/night_loop.py` runs **one fresh
+headless session per issue** in both (ADR-0017) - the process boundary
+replaces `/clear` (§3): no issue inherits the previous one's residue,
+and a session that dies at 3 a.m. costs one issue, not the night.
+
+- **Explicit directive**: `make night ISSUES=12,13,14`. The human
+  writes the issue list before leaving (the morning-directive rule:
+  agents never edit it), and the loop runs one session per issue, in
+  order.
+- **Auto-discovery**: `make night` with no ISSUES. The loop derives
+  each worklist from the repository itself - open issues, triage gate
+  (§2), minus the `night-claimed` label - and each session **picks
+  one issue and claims it first**: `make claim ISSUE=N`
+  (`scripts/claim_issue.py`) adds the `night-claimed` label before any
+  other action. The claim is the concurrency guard and the honesty
+  record: two sessions never work the same issue, and a failed
+  attempt stays claimed - the morning audit sees what was tried, and
+  the human, never an agent, decides the retry.
+
+- The loop applies the triage gate (§2) before each session: issues
+  labeled `blocked`, `needs-human`, or `night-claimed`, pull
+  requests, and issues without acceptance criteria are skipped and
+  reported.
+- Each session follows the full developer contract, opens its pull
+  request through `make pr`, and **stops after one issue** - the loop,
+  never the session, owns the next one and the next worklist.
+- In auto-discovery the loop re-derives the worklist before every
+  session and stops when no unclaimed issue remains, when the session
+  budget (`NIGHT_MAX_SESSIONS`) is spent, or when a session claims
+  nothing - the night never spins on one stuck issue.
+- Nobody answers approvals: allowlisted commands run (ADR-0015), and
+  a denied call is a stop-and-escalate signal, never an obstacle to
+  route around.
+- The morning audit is unchanged and is the whole point: `WORKLOG.md`,
+  the pull requests, every `needs-human` issue, and every
+  `night-claimed` issue tell the night's story (§7).
