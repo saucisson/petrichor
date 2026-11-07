@@ -25,6 +25,10 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 GITHUB_API_BASE_URL = "https://api.github.com"
+GITHUB_DOMAIN_MARKER = "github.com"
+REMOTE_SCP_SEPARATOR = ":"
+REMOTE_PATH_SEPARATOR = "/"
+GIT_REMOTE_SUFFIX = ".git"
 GITHUB_TOKEN_VARIABLE = "GITHUB_TOKEN"  # noqa: S105 - an env var NAME, never a secret
 ENVIRONMENT_FILE_NAME = ".env"
 PULL_REQUEST_TEMPLATE_PATH = ".github/PULL_REQUEST_TEMPLATE.md"
@@ -76,16 +80,20 @@ def resolve_repository_slug() -> str:
         check=False,
     )
     remote_url = completed_process.stdout.strip()
-    marker = "github.com"
-    separator_index = remote_url.find(marker)
+    separator_index = remote_url.find(GITHUB_DOMAIN_MARKER)
     if separator_index == -1:
         print(
             f"Error: the origin remote is not on GitHub: {remote_url}",
             file=sys.stderr,
         )
         raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
-    slug = remote_url[separator_index + len(marker) :]
-    slug = slug.removeprefix(":").removeprefix("/").removesuffix(".git").strip("/")
+    slug = remote_url[separator_index + len(GITHUB_DOMAIN_MARKER) :]
+    slug = (
+        slug.removeprefix(REMOTE_SCP_SEPARATOR)
+        .removeprefix(REMOTE_PATH_SEPARATOR)
+        .removesuffix(GIT_REMOTE_SUFFIX)
+        .strip(REMOTE_PATH_SEPARATOR)
+    )
     owner, separator, repository = slug.partition("/")
     if not owner or not separator or not repository.strip("/"):
         print(
