@@ -9,7 +9,7 @@ DAY_TAG := daily-$(shell date +%F)
 
 .DEFAULT_GOAL := help
 .PHONY: help install lint format typecheck imports test check security build \
-        day-start day-report smoke-test mutate notify review merge-pr pr \
+        day-start day-report smoke-test mutate notify review merge-pr pr claim \
         review-bundle clean
 
 help: ## List available targets with their description.
@@ -69,6 +69,9 @@ merge-pr: ## Merge pull request PR=N into daily after review and CI (ADR-0009).
 
 pr: ## Open the pull request from the current branch: TITLE=... [BODY_FILE=...] (ADR-0017).
 	$(PYTHON) scripts/open_pr.py --title "$(TITLE)" --body-file "$(BODY_FILE)"
+
+claim: ## Claim an issue before working it (auto-discovered night sessions): ISSUE=N (ADR-0017).
+	$(PYTHON) scripts/claim_issue.py --issue "$(ISSUE)"
 
 review-bundle: ## Print the reviewer bundle against origin/daily (ADR-0010).
 	$(PYTHON) scripts/build_review_bundle.py --base-ref origin/daily
