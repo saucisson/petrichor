@@ -64,6 +64,25 @@ def test_open_pull_request_api_error_is_protocol_failure() -> None:
     assert excinfo.value.code == open_pr.EXIT_CODE_PROTOCOL_FAILURE
 
 
+def test_open_pull_request_transport_error_is_protocol_failure() -> None:
+    """A network failure must not surface as exit 1 (criteria-unmet)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(SystemExit) as excinfo:
+        open_pr.open_pull_request(
+            http_client=client,
+            repository_slug="o/r",
+            title="feat: x",
+            head_branch="feat/x",
+            base_branch="daily",
+            body="body",
+        )
+    assert excinfo.value.code == open_pr.EXIT_CODE_PROTOCOL_FAILURE
+
+
 def test_read_pull_request_body_from_file(tmp_path: Path) -> None:
     """An explicit body file wins over the repository template."""
     body_file = tmp_path / "body.md"
