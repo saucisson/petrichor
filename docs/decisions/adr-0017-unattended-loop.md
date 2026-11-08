@@ -93,3 +93,38 @@ claims before working**. The claim (a `night-claimed` label, set by
   un-claiming its own failure is the retry spiral in disguise.
 - Negative: the machine stays on, the CLI stays signed in, and CI
   must run unattended - operational requirements, stated plainly.
+
+## Amendment 2026-11-07 - abandoned pull requests are work items too
+
+A failed night session often leaves a pull request open: CI red,
+findings unaddressed, or the turn budget spent right after the push.
+Until now the auto-discovered worklist only offered unclaimed
+issues, so those pull requests waited for the human even though the
+night had sessions to spare.
+
+The universe of candidates is widened: an auto-discovered session
+may pick **either an unclaimed open issue or an abandoned pull
+request**. A pull request is recoverable when it is open, targets
+`daily`, its head branch is `feat/N` or `fix/N`, its backing issue
+#N carries `night-claimed` (the mark of the earlier attempt), and
+the pull request itself is not claimed by another recovery session.
+The claim is uniform over both kinds: `make claim-pr PR=N`
+(`scripts/claim_issue.py --pr`) labels the pull request itself before
+any work, with the same guards (kind must match, no double claim).
+The session then resumes it: diagnose with `make wait-ci PR=N`, a
+local `make check`, and a full read of the diff and review comments;
+fix; push; review; merge - the recovery contract is the developer
+contract, with a `WORKLOG.md` entry naming the resumption.
+
+Consequences of the amendment:
+
+- the anti-spin guard now keys on items, not numbers: issues and
+  pull requests share one key space, and a session that merges a
+  pull request or claims any item shrinks the worklist - progress;
+  a session that changes nothing stops the loop, as before;
+- the explicit directive (`ISSUES=...`) is untouched: the human's
+  list is the human's list - recovery is an auto-discovery concern;
+- a human can hand a specific pull request to the night by labeling
+  its backing issue `night-claimed` by hand - the hand-off path is
+  the label, not a new protocol;
+- un-claiming stays a human act, for issues and pull requests alike.

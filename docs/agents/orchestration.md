@@ -76,6 +76,12 @@ The reviewer session never merges: it writes the report; the merge
 driver reads it. If any criterion is unmet, the PR waits: stalled PRs
 are the honest state, silent rule-bending is not.
 
+"Pending CI means the review waits" is served by an **active** wait,
+never by ending the session on a wait: `make wait-ci PR=N`
+(`scripts/wait_ci.py`, ADR-0018) blocks until CI concludes on the head
+- exit 0 green (the precondition above), exit 1 red or timed out. A
+session that stops "waiting for CI" is a session nobody resumes.
+
 ## 5. Priority rule
 
 Answered `needs-human` issues are picked up **before** any new work. A
@@ -118,27 +124,46 @@ and a session that dies at 3 a.m. costs one issue, not the night.
 - **Auto-discovery**: `make night` with no ISSUES. The loop derives
   each worklist from the repository itself - open issues, triage gate
   (§2), minus the `night-claimed` label - and each session **picks
-  one issue and claims it first**: `make claim ISSUE=N`
-  (`scripts/claim_issue.py`) adds the `night-claimed` label before any
-  other action. The claim is the concurrency guard and the honesty
-  record: two sessions never work the same issue, and a failed
-  attempt stays claimed - the morning audit sees what was tried, and
-  the human, never an agent, decides the retry.
+  one item and claims it first**: `make claim ISSUE=N` for an issue,
+  `make claim-pr PR=N` for a pull request (`scripts/claim_issue.py`
+  adds the `night-claimed` label before any other action). The claim
+  is the concurrency guard and the honesty record: two sessions never
+  work the same item, and a failed attempt stays claimed - the
+  morning audit sees what was tried, and the human, never an agent,
+  decides the retry.
+- **Recovery** (auto-discovery only): a session may pick, or be
+  handed, a pull request an earlier session left open. A pull request
+  is recoverable when it is open, targets `daily`, its head branch is
+  `feat/N` or `fix/N`, its backing issue #N carries `night-claimed`
+  (the mark of the earlier attempt), and the pull request itself is
+  not claimed by another recovery session. The session claims it
+  (`make claim-pr PR=N`) before touching it, diagnoses it with
+  `make wait-ci PR=N` plus a local `make check` and a full read of
+  the diff and review comments, fixes it, and walks the same
+  review-and-merge gate as a fresh issue - the recovery contract is
+  the developer contract, with an honest `WORKLOG.md` entry naming
+  the resumption. A human can also hand a pull request to the night
+  by labeling its backing issue `night-claimed` by hand.
 
 - The loop applies the triage gate (§2) before each session: issues
   labeled `blocked`, `needs-human`, or `night-claimed`, pull
   requests, and issues without acceptance criteria are skipped and
   reported.
 - Each session follows the full developer contract, opens its pull
-  request through `make pr`, and **stops after one issue** - the loop,
-  never the session, owns the next one and the next worklist.
+  request through `make pr` (fresh issue) or resumes the existing one
+  (recovery), and **stops after one item** - the loop, never the
+  session, owns the next one and the next worklist.
 - In auto-discovery the loop re-derives the worklist before every
-  session and stops when no unclaimed issue remains, when the session
+  session and stops when no unclaimed item remains, when the session
   budget (`NIGHT_MAX_SESSIONS`) is spent, or when a session claims
-  nothing - the night never spins on one stuck issue.
+  nothing - the night never spins on one stuck item.
 - Nobody answers approvals: allowlisted commands run (ADR-0015), and
   a denied call is a stop-and-escalate signal, never an obstacle to
   route around.
+- A session never ends on a wait: CI is waited for **actively**, with
+  `make wait-ci PR=N` (ADR-0018), inside the session's time budget -
+  "I will continue once CI finishes" is the attended reflex of a
+  session nobody will resume.
 - The morning audit is unchanged and is the whole point: `WORKLOG.md`,
   the pull requests, every `needs-human` issue, and every
   `night-claimed` issue tell the night's story (§7).
