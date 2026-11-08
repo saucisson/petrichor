@@ -5,6 +5,8 @@ target one-to-one (ADR-0021). This dispatcher only wires the
 subcommands to their domain modules; it owns no protocol of its own.
 """
 
+from __future__ import annotations
+
 import argparse
 import sys
 from typing import TYPE_CHECKING, Protocol

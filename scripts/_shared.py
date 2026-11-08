@@ -14,7 +14,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NewType
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -23,6 +23,12 @@ GITHUB_API_BASE_URL = "https://api.github.com"
 GITHUB_TOKEN_VARIABLE = "GITHUB_TOKEN"  # noqa: S105 - an env var NAME, never a secret
 ENVIRONMENT_FILE_NAME = ".env"
 CLAIM_LABEL_NAME = "night-claimed"
+
+RepositorySlug = NewType("RepositorySlug", str)
+"""The "owner/repository" slug of the origin remote."""
+
+PullRequestIdentifier = NewType("PullRequestIdentifier", int)
+"""A pull request number."""
 
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 
@@ -63,7 +69,7 @@ def load_github_token() -> str:
     return github_token
 
 
-def resolve_repository_slug() -> str:
+def resolve_repository_slug() -> RepositorySlug:
     """Return "owner/repository" from the origin remote, or fail closed."""
     remote_url = try_git(arguments=["remote", "get-url", "origin"]).stdout.strip()
     marker = "github.com"
@@ -83,7 +89,7 @@ def resolve_repository_slug() -> str:
             file=sys.stderr,
         )
         raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
-    return f"{owner}/{repository.strip('/')}"
+    return RepositorySlug(f"{owner}/{repository.strip('/')}")
 
 
 def try_git(*, arguments: Sequence[str]) -> subprocess.CompletedProcess[str]:
