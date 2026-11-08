@@ -17,7 +17,7 @@ repos:
     rev: v2.4.1
     hooks:
       - id: mypy
-        args: ["tools/notify/src", "tools/notify/tests", "scripts"]
+        args: ["tools/notify/src", "tools/notify/tests", "scripts", "src"]
         # args already enumerate the full scope (same command as CI);
         # appending filenames makes mypy report duplicate modules.
         pass_filenames: false
