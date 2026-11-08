@@ -40,6 +40,7 @@ def request_or_fail(
     method: str,
     url: str,
     json_payload: dict[str, object] | None = None,
+    params: dict[str, str] | None = None,
 ) -> httpx.Response:
     """Send one request; a transport error fails closed with exit 2.
 
@@ -48,7 +49,7 @@ def request_or_fail(
     protocol failure is the only honest verdict.
     """
     try:
-        return http_client.request(method, url, json=json_payload)
+        return http_client.request(method, url, json=json_payload, params=params)
     except httpx.TransportError as transport_error:
         print(
             f"Error: the GitHub API is unreachable ({method} {url}): {transport_error}",
