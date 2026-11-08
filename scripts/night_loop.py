@@ -485,12 +485,12 @@ def render_pull_request_section(
 
 def render_auto_worklist(
     *,
-    issues: Sequence[tuple[int, dict[str, object]]],
+    issues: Sequence[tuple[IssueIdentifier, dict[str, object]]],
     pull_requests: Sequence[tuple[PullRequestIdentifier, dict[str, object]]],
 ) -> str:
     """Render the combined worklist: unclaimed issues, then recoverable PRs."""
     sections = [
-        render_issue_section(issue=issue, issue_number=IssueIdentifier(issue_number))
+        render_issue_section(issue=issue, issue_number=issue_number)
         for issue_number, issue in issues
     ]
     sections.extend(
@@ -504,7 +504,7 @@ def render_auto_worklist(
 
 def auto_candidate_keys(
     *,
-    issues: Sequence[tuple[int, dict[str, object]]],
+    issues: Sequence[tuple[IssueIdentifier, dict[str, object]]],
     pull_requests: Sequence[tuple[PullRequestIdentifier, dict[str, object]]],
 ) -> set[tuple[str, int]]:
     """Build the anti-spin guard: one key per worklist item."""
@@ -517,7 +517,7 @@ def auto_candidate_keys(
 
 def describe_auto_candidates(
     *,
-    issues: Sequence[tuple[int, dict[str, object]]],
+    issues: Sequence[tuple[IssueIdentifier, dict[str, object]]],
     pull_requests: Sequence[tuple[PullRequestIdentifier, dict[str, object]]],
 ) -> str:
     """Render the candidate list for the loop's own trace."""
