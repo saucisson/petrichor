@@ -51,6 +51,14 @@ One entry per commit or pull request:
 - **Evidence**: run: `make check` green on the rebased daily (ruff + format, mypy strict, import-linter, 261 tests, coverage 94.76%; coverage warns petrichor not imported until PR #59 lands, floor still met). Rebase verified: `git merge-base --is-ancestor origin/main HEAD` OK. Not run: CI on the pushed daily until push.
 - **Judgement calls**: conflict resolution is normally a human decision (ADR-0020); the human pre-authorized this rebase in session.
 - **Escalations**: none (authorization given in session).
+## 2026-11-08 - PR #59 review round 2: arc-to-arc endpoint bug fixed; split proposal posted via make update-pr
+
+- **Issue**: #2 (P02), review round on PR #59 head `6462677`.
+- **Done**: fixed the reviewer's counterexample - an arc whose source/target was another arc's id passed validation then crashed `compute_content_hash` with a raw `KeyError`; arc endpoints are now validated against places/transitions only (`check_semantic_integrity`), with a new rejection case pinning it. PR body rewritten via `make update-pr PR=59 BODY_FILE=...` (ADR-0019, the sanctioned path that was denied in the night session): updated paths (`src/petrichor/`, `tests/`), current evidence, and the PR-level split proposal resolving the size-budget BLOCKING (precedent PR #57). Structured resolution comment posted on PR #59.
+- **Evidence**: run: `make check` green (ruff + format, mypy strict incl. src, import-linter, 228 tests, coverage 95.96%); `make update-pr` exit 0; CI green on the head. Not run: the re-review after this push (next step).
+- **Judgement calls**: the four constitutional-file BLOCKINGs (pyproject/Makefile/.pre-commit/ADR-0100) remain formally standing because ADR-0010 context isolation forbids the reviewer from consuming the in-session human directive; the directive is recorded in the PR comment and WORKLOG, and ADR-0100 awaits human acceptance.
+- **Escalations**: the architecture/config decision is human-directed in session; recorded on PR #59.
+
 ## 2026-11-08 - PR #59 review BLOCKING (architecture) resolved: product code moved to src/petrichor/ (ADR-0100 draft)
 
 - **Issue**: #2 (P02), review round on PR #59 after conflict resolution.
