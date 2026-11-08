@@ -1,20 +1,27 @@
-"""Issue claim driver: mark an issue taken before working it (ADR-0017).
+"""Claim driver: mark one issue or pull request taken (ADR-0017).
 
 In the auto-discovered night loop (``make night`` without ISSUES) each
-session picks its own issue, so its FIRST act is to claim it:
-``make claim ISSUE=N`` adds the ``night-claimed`` label through the
-GitHub API, with the same token as the other drivers. The claim is
-both the concurrency guard and the honesty record:
+session picks its own item, so its FIRST act is to claim it:
+``make claim ISSUE=N`` or ``make claim-pr PR=N`` adds the
+``night-claimed`` label through the GitHub API (the issues endpoint
+serves pull requests too), with the same token as the other drivers.
+The claim is both the concurrency guard and the honesty record:
 
-- the loop filters claimed issues out of every worklist, and this
-  driver refuses to claim twice, so two sessions do not pick the same
-  issue;
+- two sessions never work the same item (the loop filters claimed
+  items out of every worklist, and this driver refuses to claim
+  twice);
 - a failed attempt stays claimed: the morning audit sees what was
   tried, and the human - never an agent - decides the retry.
+
+Pull-request claims cover the recovery path (ADR-0017): a session may
+be handed - or pick - a pull request left open by an earlier failed
+session (red CI, unaddressed findings). The same rule applies: no
+claim, no work.
 
 Usage::
 
     make claim ISSUE=12
+    make claim-pr PR=52
 """
 
 import argparse
@@ -29,7 +36,7 @@ import httpx
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-IssueIdentifier = NewType("IssueIdentifier", int)
+ItemIdentifier = NewType("ItemIdentifier", int)
 
 GITHUB_API_BASE_URL = "https://api.github.com"
 GITHUB_DOMAIN_MARKER = "github.com"
@@ -132,58 +139,63 @@ def fetch_issue(
     *,
     http_client: httpx.Client,
     repository_slug: str,
-    issue_number: IssueIdentifier,
+    item_number: ItemIdentifier,
 ) -> dict[str, object]:
-    """Fetch the issue, or fail closed: no issue, no claim, no work."""
+    """Fetch the issue or pull request, or fail closed: no item, no claim."""
     response = request_or_fail(
         http_client=http_client,
         method="GET",
-        url=f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/issues/{issue_number}",
+        url=f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/issues/{item_number}",
     )
     if not response.is_success:
         print(
-            f"Error: could not fetch issue #{issue_number}"
-            f" ({response.status_code}) - do not work an unverified issue.",
+            f"Error: could not fetch #{item_number}"
+            f" ({response.status_code}) - do not work an unverified item.",
             file=sys.stderr,
         )
         raise SystemExit(EXIT_CODE_CRITERIA_UNMET)
     try:
         issue: object = response.json()
     except ValueError as error:
-        print("Error: the issue payload is not valid JSON - do not work it.", file=sys.stderr)
+        print("Error: the item payload is not valid JSON - do not work it.", file=sys.stderr)
         raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE) from error
     if not isinstance(issue, dict):
-        print("Error: the issue payload is unexpected - do not work it.", file=sys.stderr)
+        print("Error: the item payload is unexpected - do not work it.", file=sys.stderr)
         raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
     return issue
 
 
-def claim_is_allowed(*, issue: dict[str, object], issue_number: IssueIdentifier) -> None:
-    """Refuse to claim a pull request or an already-claimed issue."""
-    if "pull_request" in issue:
-        print(f"Error: #{issue_number} is a pull request, not an issue.", file=sys.stderr)
+def claim_is_allowed(
+    *,
+    issue: dict[str, object],
+    item_number: ItemIdentifier,
+    expected_kind: str,
+) -> None:
+    """Refuse a kind mismatch or an already-claimed item.
+
+    ``expected_kind`` is ``"issue"`` or ``"pull_request"``: the payload
+    must be exactly that kind (the issues endpoint serves both), so an
+    issue number passed to ``--pr`` - or the reverse - fails closed.
+    """
+    is_pull_request = "pull_request" in issue
+    if expected_kind == "pull_request" and not is_pull_request:
+        print(f"Error: #{item_number} is an issue, not a pull request.", file=sys.stderr)
+        raise SystemExit(EXIT_CODE_CRITERIA_UNMET)
+    if expected_kind == "issue" and is_pull_request:
+        print(f"Error: #{item_number} is a pull request, not an issue.", file=sys.stderr)
         raise SystemExit(EXIT_CODE_CRITERIA_UNMET)
     labels = issue.get("labels", [])
-    if not isinstance(labels, list):
+    if not isinstance(labels, list) or any(not isinstance(entry, dict) for entry in labels):
         print(
-            f"Error: issue #{issue_number} has a malformed labels payload -"
-            " do not work an unverified issue.",
+            f"Error: #{item_number} has a malformed labels payload -"
+            " do not work an unverified item.",
             file=sys.stderr,
         )
         raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
-    label_names: set[str] = set()
-    for entry in labels:
-        if not isinstance(entry, dict):
-            print(
-                f"Error: issue #{issue_number} has a malformed labels payload -"
-                " do not work an unverified issue.",
-                file=sys.stderr,
-            )
-            raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
-        label_names.add(str(entry.get("name", "")))
+    label_names = {str(entry.get("name", "")) for entry in labels if isinstance(entry, dict)}
     if CLAIM_LABEL_NAME in label_names:
         print(
-            f"Error: issue #{issue_number} is already claimed"
+            f"Error: #{item_number} is already claimed"
             f" ({CLAIM_LABEL_NAME}) - do not work it; the human decides"
             " the retry.",
             file=sys.stderr,
@@ -225,7 +237,7 @@ def add_claim_label(
     *,
     http_client: httpx.Client,
     repository_slug: str,
-    issue_number: IssueIdentifier,
+    issue_number: int,
 ) -> None:
     """Add the claim label; a failure means no claim, no work."""
     response = request_or_fail(
@@ -236,35 +248,45 @@ def add_claim_label(
     )
     if not response.is_success:
         print(
-            f"Error: could not claim issue #{issue_number}"
-            f" ({response.status_code}) - do not work an unclaimed issue.",
+            f"Error: could not claim #{issue_number}"
+            f" ({response.status_code}) - do not work an unclaimed item.",
             file=sys.stderr,
         )
         raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
 
 
 def parse_arguments(*, command_line_arguments: Sequence[str]) -> argparse.Namespace:
-    """Parse the script contract."""
+    """Parse the script contract: exactly one item, issue or pull request."""
     argument_parser = argparse.ArgumentParser(
         prog="claim_issue",
-        description="Claim one issue for an unattended session (ADR-0017).",
+        description="Claim one issue or pull request for an unattended session (ADR-0017).",
     )
-    argument_parser.add_argument(
+    item_group = argument_parser.add_mutually_exclusive_group(required=True)
+    item_group.add_argument(
         "--issue",
         type=int,
-        required=True,
         help="Issue number to claim (the session's first act).",
+    )
+    item_group.add_argument(
+        "--pr",
+        type=int,
+        help="Pull request number to claim (recovery path, ADR-0017).",
     )
     return argument_parser.parse_args(command_line_arguments)
 
 
 def main(*, command_line_arguments: Sequence[str]) -> int:
-    """Entry point: issue number in, claimed issue out."""
+    """Entry point: item number in, claimed item out."""
     arguments = parse_arguments(command_line_arguments=command_line_arguments)
-    issue_identifier = IssueIdentifier(arguments.issue)
     load_environment_file()
     github_token = load_github_token()
     repository_slug = resolve_repository_slug()
+    if arguments.issue is not None:
+        item_number = ItemIdentifier(arguments.issue)
+        expected_kind, item_word = "issue", "Issue"
+    else:
+        item_number = ItemIdentifier(arguments.pr)
+        expected_kind, item_word = "pull_request", "Pull request"
     with httpx.Client(
         headers={
             "Authorization": f"{AUTHORIZATION_SCHEME} {github_token}",
@@ -275,17 +297,21 @@ def main(*, command_line_arguments: Sequence[str]) -> int:
         issue = fetch_issue(
             http_client=http_client,
             repository_slug=repository_slug,
-            issue_number=issue_identifier,
+            item_number=item_number,
         )
-        claim_is_allowed(issue=issue, issue_number=issue_identifier)
+        claim_is_allowed(
+            issue=issue,
+            item_number=item_number,
+            expected_kind=expected_kind,
+        )
         ensure_claim_label(http_client=http_client, repository_slug=repository_slug)
         add_claim_label(
             http_client=http_client,
             repository_slug=repository_slug,
-            issue_number=issue_identifier,
+            issue_number=item_number,
         )
     print(
-        f"Issue #{issue_identifier} claimed ({CLAIM_LABEL_NAME}):"
+        f"{item_word} #{item_number} claimed ({CLAIM_LABEL_NAME}):"
         " it is yours, and no other session will pick it."
     )
     return EXIT_CODE_CLAIMED

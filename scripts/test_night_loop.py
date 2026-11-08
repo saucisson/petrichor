@@ -138,7 +138,10 @@ def test_fetch_candidate_issues_filters_and_sorts() -> None:
     ]
     client = client_with(lambda request: httpx.Response(200, json=payload))
     candidates = night_loop.fetch_candidate_issues(
-        http_client=client, repository_slug="o/r", candidate_limit=10
+        http_client=client,
+        repository_slug="o/r",
+        candidate_limit=10,
+        milestone_numbers=set(),
     )
     assert [number for number, _ in candidates] == [IssueIdentifier(1), IssueIdentifier(3)]
 
@@ -148,7 +151,10 @@ def test_fetch_candidate_issues_api_error_yields_empty_worklist() -> None:
     client = client_with(lambda request: httpx.Response(500, json={}))
     assert (
         night_loop.fetch_candidate_issues(
-            http_client=client, repository_slug="o/r", candidate_limit=10
+            http_client=client,
+            repository_slug="o/r",
+            candidate_limit=10,
+            milestone_numbers=set(),
         )
         == []
     )
@@ -262,6 +268,7 @@ def test_run_explicit_directive_runs_one_session_per_eligible_issue(
         prompt_directory=tmp_path,
         repository_slug="o/r",
         issue_numbers=[IssueIdentifier(12), IssueIdentifier(13)],
+        milestone_numbers=set(),
         prompt_template="T {{issue}}",
         arguments=arguments,
         results=results,
@@ -296,6 +303,7 @@ def test_run_explicit_directive_skips_triaged_issues(
         prompt_directory=tmp_path,
         repository_slug="o/r",
         issue_numbers=[IssueIdentifier(12)],
+        milestone_numbers=set(),
         prompt_template="T {{issue}}",
         arguments=arguments,
         results=results,
@@ -323,6 +331,7 @@ def test_run_auto_discovered_sessions_stops_when_nothing_is_claimed(
         http_client=client_with(lambda request: httpx.Response(200, json=[])),
         prompt_directory=tmp_path,
         repository_slug="o/r",
+        milestone_numbers=set(),
         prompt_template="W {{worklist}}",
         arguments=arguments,
         results=results,
@@ -351,6 +360,7 @@ def test_run_auto_discovered_sessions_stops_when_worklist_is_empty(
         http_client=client_with(lambda request: httpx.Response(200, json=[])),
         prompt_directory=tmp_path,
         repository_slug="o/r",
+        milestone_numbers=set(),
         prompt_template="W {{worklist}}",
         arguments=arguments,
         results=results,
@@ -390,3 +400,242 @@ def test_load_environment_file_sets_unset_variables(
     monkeypatch.delenv("NIGHT_TEST_VARIABLE", raising=False)
     night_loop.load_environment_file()
     assert os.environ["NIGHT_TEST_VARIABLE"] == "from-dotenv"
+
+
+def pull_request_payload(
+    *,
+    number: int,
+    head_ref: str = "feat/12",
+    labels: list[dict[str, str]] | None = None,
+    milestone: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Build a GitHub pull request payload."""
+    payload: dict[str, object] = {
+        "number": number,
+        "title": f"Pull request {number}",
+        "labels": labels or [],
+        "body": "pr body",
+        "head": {"ref": head_ref, "sha": "abc123"},
+    }
+    if milestone is not None:
+        payload["milestone"] = milestone
+    return payload
+
+
+def test_parse_milestone_list_accepts_comma_separated_numbers() -> None:
+    """The milestone filter parses to a set of milestone numbers."""
+    assert night_loop.parse_milestone_list(raw_milestone_list="3, 4,4") == {3, 4}
+
+
+def test_parse_milestone_list_empty_means_no_filtering() -> None:
+    """An empty milestone list is the empty set: no filtering."""
+    assert night_loop.parse_milestone_list(raw_milestone_list=" , ") == set()
+
+
+def test_parse_milestone_list_rejects_non_numbers() -> None:
+    """Anything but digits is a protocol failure."""
+    with pytest.raises(SystemExit) as excinfo:
+        night_loop.parse_milestone_list(raw_milestone_list="3,abc")
+    assert excinfo.value.code == night_loop.EXIT_CODE_PROTOCOL_FAILURE
+
+
+def test_parse_milestone_list_rejects_unicode_digits() -> None:
+    """'²'.isdigit() is True but int('²') raises: the guard must fail closed."""
+    with pytest.raises(SystemExit) as excinfo:
+        night_loop.parse_milestone_list(raw_milestone_list="²")
+    assert excinfo.value.code == night_loop.EXIT_CODE_PROTOCOL_FAILURE
+
+
+def test_item_milestone_number_reads_the_milestone() -> None:
+    """The milestone number is read from the milestone object."""
+    item: dict[str, object] = {"milestone": {"number": 7}}
+    assert night_loop.item_milestone_number(item=item) == 7
+
+
+def test_item_milestone_number_handles_missing_or_malformed() -> None:
+    """A missing, non-dict or non-int milestone yields None, never a crash."""
+    assert night_loop.item_milestone_number(item={}) is None
+    assert night_loop.item_milestone_number(item={"milestone": None}) is None
+    assert night_loop.item_milestone_number(item={"milestone": {"number": "7"}}) is None
+
+
+def test_milestone_matches_empty_set_accepts_everything() -> None:
+    """No milestone filter: every item passes, even without a milestone."""
+    assert night_loop.milestone_matches(item={}, milestone_numbers=set()) is True
+
+
+def test_milestone_matches_filters_by_number() -> None:
+    """With a filter, only items of those milestones pass."""
+    item: dict[str, object] = {"milestone": {"number": 3}}
+    assert night_loop.milestone_matches(item=item, milestone_numbers={3, 4}) is True
+    assert night_loop.milestone_matches(item=item, milestone_numbers={4}) is False
+    assert night_loop.milestone_matches(item={}, milestone_numbers={4}) is False
+
+
+def test_fetch_candidate_issues_applies_the_milestone_filter() -> None:
+    """Issues outside the requested milestones are excluded from the worklist."""
+    payload = [
+        issue_payload(number=1),
+        {**issue_payload(number=2), "milestone": {"number": 3}},
+        {**issue_payload(number=3), "milestone": {"number": 4}},
+    ]
+    client = client_with(lambda request: httpx.Response(200, json=payload))
+    candidates = night_loop.fetch_candidate_issues(
+        http_client=client,
+        repository_slug="o/r",
+        candidate_limit=10,
+        milestone_numbers={4},
+    )
+    assert [number for number, _ in candidates] == [IssueIdentifier(3)]
+
+
+def test_parse_backing_issue_number_reads_feat_and_fix_branches() -> None:
+    """feat/N and fix/N head branches map to their backing issue number."""
+    assert night_loop.parse_backing_issue_number(head_ref="feat/12") == 12
+    assert night_loop.parse_backing_issue_number(head_ref="fix/34") == 34
+    assert night_loop.parse_backing_issue_number(head_ref="daily") is None
+    assert night_loop.parse_backing_issue_number(head_ref="feat/abc") is None
+    assert night_loop.parse_backing_issue_number(head_ref=None) is None
+
+
+def test_item_has_claim_label_detects_the_claim() -> None:
+    """The claim label is detected; a malformed labels payload is not trusted."""
+    claimed = pull_request_payload(number=1, labels=[{"name": "night-claimed"}])
+    assert night_loop.item_has_claim_label(item=claimed) is True
+    assert night_loop.item_has_claim_label(item=pull_request_payload(number=1)) is False
+    malformed: dict[str, object] = {"labels": ["night-claimed"]}
+    assert night_loop.item_has_claim_label(item=malformed) is False
+
+
+def test_fetch_candidate_pull_requests_recovers_claimed_backing_issues(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A PR on feat/N whose backing issue is night-claimed is recoverable."""
+    backing_issue = issue_payload(number=12, labels=[{"name": "night-claimed"}])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/pulls" in request.url.path:
+            return httpx.Response(200, json=[pull_request_payload(number=53)])
+        if "/issues/12" in request.url.path:
+            return httpx.Response(200, json=backing_issue)
+        return httpx.Response(404, json={})
+
+    monkeypatch.setattr(night_loop, "fetch_issue", lambda **kwargs: backing_issue)
+    candidates = night_loop.fetch_candidate_pull_requests(
+        http_client=client_with(handler),
+        repository_slug="o/r",
+        candidate_limit=10,
+        milestone_numbers=set(),
+    )
+    assert [number for number, _ in candidates] == [53]
+
+
+def test_fetch_candidate_pull_requests_skips_unrecoverable_prs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Claimed PRs, non-feat heads and unclaimed backing issues are skipped."""
+    backing_issue = issue_payload(number=12, labels=[{"name": "night-claimed"}])
+    unclaimed_issue = issue_payload(number=13)
+    monkeypatch.setattr(
+        night_loop,
+        "fetch_issue",
+        lambda **kwargs: backing_issue if kwargs["issue_number"] == 12 else unclaimed_issue,
+    )
+    payload = [
+        pull_request_payload(number=1, labels=[{"name": "night-claimed"}]),
+        pull_request_payload(number=2, head_ref="daily"),
+        pull_request_payload(number=3, head_ref="feat/13"),
+        pull_request_payload(number=4, head_ref="feat/12"),
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/pulls" in request.url.path:
+            return httpx.Response(200, json=payload)
+        return httpx.Response(404, json={})
+
+    candidates = night_loop.fetch_candidate_pull_requests(
+        http_client=client_with(handler),
+        repository_slug="o/r",
+        candidate_limit=10,
+        milestone_numbers=set(),
+    )
+    assert [number for number, _ in candidates] == [4]
+
+
+def test_fetch_candidate_pull_requests_applies_the_milestone_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PRs outside the requested milestones are not recoverable."""
+    backing_issue = issue_payload(number=12, labels=[{"name": "night-claimed"}])
+    monkeypatch.setattr(night_loop, "fetch_issue", lambda **kwargs: backing_issue)
+    payload = [
+        {**pull_request_payload(number=1), "milestone": {"number": 3}},
+        {**pull_request_payload(number=2), "milestone": {"number": 4}},
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/pulls" in request.url.path:
+            return httpx.Response(200, json=payload)
+        return httpx.Response(404, json={})
+
+    candidates = night_loop.fetch_candidate_pull_requests(
+        http_client=client_with(handler),
+        repository_slug="o/r",
+        candidate_limit=10,
+        milestone_numbers={4},
+    )
+    assert [number for number, _ in candidates] == [2]
+
+
+def test_fetch_candidate_pull_requests_api_error_yields_empty_worklist() -> None:
+    """A failed listing warns and yields no candidates."""
+    client = client_with(lambda request: httpx.Response(500, json={}))
+    assert (
+        night_loop.fetch_candidate_pull_requests(
+            http_client=client,
+            repository_slug="o/r",
+            candidate_limit=10,
+            milestone_numbers=set(),
+        )
+        == []
+    )
+
+
+def test_render_pull_request_section_mentions_the_backing_issue() -> None:
+    """The recovery section names the PR, its branch and its backing issue."""
+    section = night_loop.render_pull_request_section(
+        pull_request=pull_request_payload(number=53, head_ref="feat/12"),
+        pr_number=53,
+    )
+    assert "# Pull request #53" in section
+    assert "`feat/12`" in section
+    assert "backing issue #12" in section
+
+
+def test_render_auto_worklist_combines_issues_and_pull_requests() -> None:
+    """The auto worklist renders issues first, then recoverable PRs."""
+    worklist = night_loop.render_auto_worklist(
+        issues=[(IssueIdentifier(1), issue_payload(number=1))],
+        pull_requests=[(53, pull_request_payload(number=53))],
+    )
+    assert "# Issue #1" in worklist
+    assert "# Pull request #53" in worklist
+    assert worklist.index("# Issue #1") < worklist.index("# Pull request #53")
+
+
+def test_auto_candidate_keys_covers_both_kinds() -> None:
+    """The anti-spin guard keys issues and pull requests distinctly."""
+    keys = night_loop.auto_candidate_keys(
+        issues=[(IssueIdentifier(1), issue_payload(number=1))],
+        pull_requests=[(53, pull_request_payload(number=53))],
+    )
+    assert keys == {("issue", 1), ("pull request", 53)}
+
+
+def test_describe_auto_candidates_lists_both_kinds() -> None:
+    """The trace line describes each candidate with its kind."""
+    description = night_loop.describe_auto_candidates(
+        issues=[(IssueIdentifier(1), issue_payload(number=1))],
+        pull_requests=[(53, pull_request_payload(number=53))],
+    )
+    assert description == "#1 (issue), #53 (pull request)"
