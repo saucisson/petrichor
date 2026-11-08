@@ -156,7 +156,7 @@ def test_add_claim_label_posts_the_label() -> None:
         return httpx.Response(200, json=[{"name": "night-claimed"}])
 
     claim_issue.add_claim_label(
-        http_client=client_with(handler), repository_slug="o/r", issue_number=ItemIdentifier(12)
+        http_client=client_with(handler), repository_slug="o/r", item_number=ItemIdentifier(12)
     )
     assert requests_seen[-1].url.path.endswith("/issues/12/labels")
 
@@ -166,7 +166,7 @@ def test_add_claim_label_failure_is_protocol_failure() -> None:
     client = client_with(lambda request: httpx.Response(500, json={}))
     with pytest.raises(SystemExit) as excinfo:
         claim_issue.add_claim_label(
-            http_client=client, repository_slug="o/r", issue_number=ItemIdentifier(12)
+            http_client=client, repository_slug="o/r", item_number=ItemIdentifier(12)
         )
     assert excinfo.value.code == claim_issue.EXIT_CODE_PROTOCOL_FAILURE
 
