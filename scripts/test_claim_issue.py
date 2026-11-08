@@ -53,6 +53,15 @@ def test_claim_refuses_an_already_claimed_issue() -> None:
     assert excinfo.value.code == claim_issue.EXIT_CODE_CRITERIA_UNMET
 
 
+def test_claim_refuses_a_malformed_labels_payload() -> None:
+    """A non-list labels field fails closed: protocol failure, never fail-open."""
+    payload = issue_payload([])
+    payload["labels"] = "night-claimed"
+    with pytest.raises(SystemExit) as excinfo:
+        claim_issue.claim_is_allowed(issue=payload, issue_number=IssueIdentifier(12))
+    assert excinfo.value.code == claim_issue.EXIT_CODE_PROTOCOL_FAILURE
+
+
 def test_fetch_issue_returns_payload_on_success() -> None:
     """A 2xx issue fetch returns the issue dict."""
     client = client_with(lambda request: httpx.Response(200, json=issue_payload([])))
