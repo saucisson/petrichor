@@ -57,6 +57,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 IssueIdentifier = NewType("IssueIdentifier", int)
+PullRequestIdentifier = NewType("PullRequestIdentifier", int)
 
 GITHUB_API_BASE_URL = "https://api.github.com"
 GITHUB_DOMAIN_MARKER = "github.com"
@@ -89,6 +90,7 @@ DAILY_BRANCH_NAME = "daily"
 NIGHT_HEAD_BRANCH_PATTERN = re.compile(r"^(?:feat|fix)/([0-9]+)$")
 TRIAGE_SKIP_LABELS = ("blocked", "needs-human", "night-claimed")
 CLAIM_LABEL_NAME = "night-claimed"
+UNKNOWN_HEAD_REF = "unknown"
 
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 
@@ -162,7 +164,7 @@ def parse_issue_list(*, raw_issue_list: str) -> list[IssueIdentifier]:
         stripped_number = raw_number.strip()
         if not stripped_number:
             continue
-        if not stripped_number.isascii():
+        if not (stripped_number.isascii() and stripped_number.isdigit()):
             print(f"Error: not an issue number: {stripped_number}.", file=sys.stderr)
             raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
         try:
@@ -190,7 +192,7 @@ def parse_milestone_list(*, raw_milestone_list: str) -> set[int]:
         stripped_number = raw_number.strip()
         if not stripped_number:
             continue
-        if not stripped_number.isascii():
+        if not (stripped_number.isascii() and stripped_number.isdigit()):
             print(f"Error: not a milestone number: {stripped_number}.", file=sys.stderr)
             raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
         try:
@@ -397,7 +399,7 @@ def fetch_candidate_pull_requests(
     repository_slug: str,
     candidate_limit: int,
     milestone_numbers: set[int],
-) -> list[tuple[IssueIdentifier, dict[str, object]]]:
+) -> list[tuple[PullRequestIdentifier, dict[str, object]]]:
     """Derive the recoverable pull requests (ADR-0017 recovery path).
 
     A pull request is recoverable when all of these hold: it is open,
@@ -427,7 +429,7 @@ def fetch_candidate_pull_requests(
     if not isinstance(payload, list):
         print("Warning: the open-pull-requests payload is unexpected.")
         return []
-    candidates: list[tuple[IssueIdentifier, dict[str, object]]] = []
+    candidates: list[tuple[PullRequestIdentifier, dict[str, object]]] = []
     for pull_request in payload:
         if not isinstance(pull_request, dict):
             continue
@@ -450,7 +452,7 @@ def fetch_candidate_pull_requests(
             backing_issue=backing_issue,
         ):
             continue
-        candidates.append((IssueIdentifier(pull_request_number), pull_request))
+        candidates.append((PullRequestIdentifier(pull_request_number), pull_request))
     candidates.sort(key=lambda candidate: candidate[0])
     return candidates[:candidate_limit]
 
@@ -458,13 +460,13 @@ def fetch_candidate_pull_requests(
 def render_pull_request_section(
     *,
     pull_request: dict[str, object],
-    pull_request_number: int,
+    pull_request_number: PullRequestIdentifier,
 ) -> str:
     """Render a recoverable pull request as the prompt's worklist section."""
     title = pull_request.get("title", "")
     title_text = title if isinstance(title, str) else ""
     head = pull_request.get("head")
-    head_ref = head.get("ref") if isinstance(head, dict) else "unknown"
+    head_ref = head.get("ref") if isinstance(head, dict) else UNKNOWN_HEAD_REF
     backing_issue_number = parse_backing_issue_number(head_ref=head_ref)
     backing_clause = (
         f", backing issue #{backing_issue_number}" if backing_issue_number is not None else ""
@@ -484,7 +486,7 @@ def render_pull_request_section(
 def render_auto_worklist(
     *,
     issues: Sequence[tuple[int, dict[str, object]]],
-    pull_requests: Sequence[tuple[int, dict[str, object]]],
+    pull_requests: Sequence[tuple[PullRequestIdentifier, dict[str, object]]],
 ) -> str:
     """Render the combined worklist: unclaimed issues, then recoverable PRs."""
     sections = [
@@ -503,7 +505,7 @@ def render_auto_worklist(
 def auto_candidate_keys(
     *,
     issues: Sequence[tuple[int, dict[str, object]]],
-    pull_requests: Sequence[tuple[int, dict[str, object]]],
+    pull_requests: Sequence[tuple[PullRequestIdentifier, dict[str, object]]],
 ) -> set[tuple[str, int]]:
     """Build the anti-spin guard: one key per worklist item."""
     issue_keys = {("issue", issue_number) for issue_number, _ in issues}
@@ -516,7 +518,7 @@ def auto_candidate_keys(
 def describe_auto_candidates(
     *,
     issues: Sequence[tuple[int, dict[str, object]]],
-    pull_requests: Sequence[tuple[int, dict[str, object]]],
+    pull_requests: Sequence[tuple[PullRequestIdentifier, dict[str, object]]],
 ) -> str:
     """Render the candidate list for the loop's own trace."""
     descriptions = [f"#{issue_number} (issue)" for issue_number, _ in issues]
