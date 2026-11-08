@@ -11,6 +11,7 @@ import argparse
 import sys
 from typing import TYPE_CHECKING, Protocol
 
+from scripts import pulls
 from scripts._shared import load_environment_file
 
 if TYPE_CHECKING:
@@ -24,7 +25,7 @@ if TYPE_CHECKING:
             ...
 
 
-COMMAND_MODULES: tuple[CommandModule, ...] = ()  # grown by each domain PR (ADR-0021)
+COMMAND_MODULES: tuple[CommandModule, ...] = (pulls,)  # grown by each domain PR (ADR-0021)
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
