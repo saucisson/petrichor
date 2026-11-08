@@ -23,7 +23,7 @@ import json
 import os
 import sys
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from scripts._github import extract_head_sha, open_github_client, request_or_fail
 from scripts._shared import (
@@ -31,6 +31,7 @@ from scripts._shared import (
     EXIT_CODE_PROTOCOL_FAILURE,
     EXIT_CODE_SUCCESS,
     GITHUB_API_BASE_URL,
+    PullRequestIdentifier,
     load_github_token,
     resolve_repository_slug,
 )
@@ -46,11 +47,24 @@ DEFAULT_POLL_INTERVAL_SECONDS = 20
 DEFAULT_TIMEOUT_SECONDS = 1800
 NOT_FOUND_STATUS_CODE = 404
 
-POLL_STATUS_FETCH_FAILED = "fetch-failed"
-POLL_STATUS_NO_CHECKS = "no-checks"
-POLL_STATUS_PENDING = "pending"
-POLL_STATUS_GREEN = "green"
-POLL_STATUS_FAILED = "failed"
+PollStatus = Literal[
+    "fetch-failed",
+    "no-checks",
+    "pending",
+    "green",
+    "failed",
+]
+"""The closed set of poll verdicts (ADR-0006)."""
+
+POLL_STATUS_FETCH_FAILED: PollStatus = "fetch-failed"
+POLL_STATUS_NO_CHECKS: PollStatus = "no-checks"
+POLL_STATUS_PENDING: PollStatus = "pending"
+POLL_STATUS_GREEN: PollStatus = "green"
+POLL_STATUS_FAILED: PollStatus = "failed"
+
+UNNAMED_CHECK_NAME = "unnamed check"
+CHECK_RUN_COMPLETED_STATUS = "completed"
+CHECK_RUN_SUCCESS_CONCLUSION = "success"
 
 EXIT_CODE_GREEN = EXIT_CODE_SUCCESS  # a subcommand-local alias, same protocol code
 EXIT_CODE_CI_FAILED = EXIT_CODE_CRITERIA_UNMET  # CI red or timed out: criteria unmet
@@ -60,7 +74,7 @@ def try_fetch_pull_request(
     *,
     http_client: httpx.Client,
     repository_slug: str,
-    pull_request_number: int,
+    pull_request_number: PullRequestIdentifier,
 ) -> dict[str, object] | None:
     """Fetch the pull request; None means a transient API refusal."""
     response = request_or_fail(
@@ -114,8 +128,8 @@ def poll_once(
     *,
     http_client: httpx.Client,
     repository_slug: str,
-    pull_request_number: int,
-) -> tuple[str, str, str]:
+    pull_request_number: PullRequestIdentifier,
+) -> tuple[PollStatus, str, str]:
     """One poll: (status, head_sha, progress detail)."""
     pull_request = try_fetch_pull_request(
         http_client=http_client,
@@ -135,13 +149,18 @@ def poll_once(
     if not check_runs:
         return POLL_STATUS_NO_CHECKS, head_sha, ""
     failed = [
-        str(check_run.get("name", "unnamed check"))
+        str(check_run.get("name", UNNAMED_CHECK_NAME))
         for check_run in check_runs
-        if check_run.get("status") == "completed" and check_run.get("conclusion") != "success"
+        if check_run.get("status") == CHECK_RUN_COMPLETED_STATUS
+        and check_run.get("conclusion") != CHECK_RUN_SUCCESS_CONCLUSION
     ]
     if failed:
         return POLL_STATUS_FAILED, head_sha, ", ".join(failed)
-    running = [check_run for check_run in check_runs if check_run.get("status") != "completed"]
+    running = [
+        check_run
+        for check_run in check_runs
+        if check_run.get("status") != CHECK_RUN_COMPLETED_STATUS
+    ]
     if not running:
         return POLL_STATUS_GREEN, head_sha, str(len(check_runs))
     return (
@@ -151,7 +170,7 @@ def poll_once(
     )
 
 
-def interpret_status(*, status: str, detail: str) -> int | None:
+def interpret_status(*, status: PollStatus, detail: str) -> int | None:
     """Map one poll to an exit code; None means: keep waiting."""
     if status == POLL_STATUS_GREEN:
         print(f"CI is green on the head ({detail} check runs): the review can start.")
@@ -243,7 +262,7 @@ def run_watch(
     *,
     http_client: httpx.Client,
     repository_slug: str,
-    pull_request_number: int,
+    pull_request_number: PullRequestIdentifier,
     interval_seconds: int,
     timeout_seconds: int,
 ) -> int:
@@ -292,7 +311,7 @@ def run(*, arguments: argparse.Namespace) -> int:
         return run_watch(
             http_client=http_client,
             repository_slug=repository_slug,
-            pull_request_number=arguments.pr_number,
+            pull_request_number=PullRequestIdentifier(arguments.pr_number),
             interval_seconds=arguments.interval_seconds,
             timeout_seconds=arguments.timeout_seconds,
         )
