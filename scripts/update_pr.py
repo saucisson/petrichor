@@ -45,6 +45,8 @@ EXIT_CODE_UPDATED = 0
 EXIT_CODE_CRITERIA_UNMET = 1
 EXIT_CODE_PROTOCOL_FAILURE = 2
 
+HTTP_TIMEOUT_SECONDS = 30.0
+
 
 def load_environment_file() -> None:
     """Read KEY=VALUE pairs from .env into the environment if unset."""
@@ -231,7 +233,7 @@ def main(*, command_line_arguments: Sequence[str]) -> int:
             "Authorization": f"Bearer {github_token}",
             "Accept": "application/vnd.github.v3+json",
         },
-        timeout=30.0,
+        timeout=HTTP_TIMEOUT_SECONDS,
     ) as http_client:
         issue = fetch_issue(
             http_client=http_client,
