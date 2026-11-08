@@ -154,10 +154,11 @@ def parse_issue_list(*, raw_issue_list: str) -> list[IssueIdentifier]:
         stripped_number = raw_number.strip()
         if not stripped_number:
             continue
-        if not stripped_number.isdigit():
+        try:
+            issue_numbers.append(IssueIdentifier(int(stripped_number)))
+        except ValueError:
             print(f"Error: not an issue number: {stripped_number}.", file=sys.stderr)
-            raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
-        issue_numbers.append(IssueIdentifier(int(stripped_number)))
+            raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE) from None
     if not issue_numbers:
         print(
             "Error: no issues to process - the night directive is the issue"
@@ -531,8 +532,8 @@ def run_auto_discovered_sessions(
 
 def main(*, command_line_arguments: Sequence[str]) -> int:
     """Entry point: night directive in (or auto-discovered), report out."""
-    arguments = parse_arguments(command_line_arguments=command_line_arguments)
     load_environment_file()
+    arguments = parse_arguments(command_line_arguments=command_line_arguments)
     github_token = load_github_token()
     if shutil.which(DEVELOPER_CLI_COMMAND) is None:
         print(
