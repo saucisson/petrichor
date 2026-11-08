@@ -108,6 +108,14 @@ One entry per commit or pull request:
 - **Judgement calls**: constitutional files kept out of the agent PR per the repo precedent (PR #54 review round 1); the human directive covers the sync as a whole.
 - **Escalations**: none (human directive in session).
 
+## 2026-11-08 - PR #59 recovery stopped on a denied write: needs-human escalation sent, item left claimed for the morning audit
+
+- **Issue**: #2 (P02), via recovery of pull request #59 (claimed with `make claim-pr PR=59`).
+- **Done**: the code side of the recovery is complete and green — head `1e435e9` repairs the red local gate found on the pushed head `44347f8` (8 ruff E501 lines; 5 rejection tests validating a minimal payload instead of a complete canonical document) and completes the earlier session's uncommitted rework; `make check` green on the final state (ruff + format, mypy strict, import-linter, 205 tests, coverage 94.76%); pushed to `feat/2-canonical-petri-json`. The standing review BLOCKING (diff ~690 lines > ~500, "or split proposed") is resolvable only by a split proposal in the PR body (precedent PR #57); the GitHub PR-body update and the structured PR comment were both **denied** by the approval system this session, and per the night protocol a denied call is a stop signal, not an obstacle to route around — no `gh`, no raw API, no second PR for the same branch. Escalation sent via the sanctioned local path `make notify severity=question ...` (delivered through console; a second send carrying the issue identifier was itself denied — not retried).
+- **Evidence**: `make check` green on `1e435e9` (205 tests, coverage 94.76% vs floor 90%); `make wait-ci PR=59` exit 0 on the previous head `44347f8` (2 check runs success); `make notify` console delivery confirmed. Not done: CI wait on the new head, `make review`, `make merge-pr` — blocked as described.
+- **Judgement calls**: the item is left labeled `night-claimed` (the claim stays for the morning audit, per ADR-0017 a failed attempt stays claimed); the structured question for the human is whether the PR #59 body may be updated with the PR-level split proposal or the split directed otherwise.
+- **Escalations**: one `question`-severity `needs-human` request on PR #59 / issue #2, sent via `make notify` (console channel in this environment).
+
 ## 2026-11-08 - Resumed PR #59 (P02 canonical petri+json): local gate red on the pushed head + review BLOCKING on PR size
 
 - **Issue**: #2 (P02), via recovery of pull request #59 left open by an earlier session (ADR-0017).
