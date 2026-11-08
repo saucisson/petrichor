@@ -72,6 +72,16 @@ def test_fetch_issue_api_error_is_criteria_unmet() -> None:
     assert excinfo.value.code == claim_issue.EXIT_CODE_CRITERIA_UNMET
 
 
+def test_fetch_issue_malformed_json_is_protocol_failure() -> None:
+    """A 2xx with an undecodable body fails closed with exit 2, not a traceback."""
+    client = client_with(lambda request: httpx.Response(200, content=b"not json{"))
+    with pytest.raises(SystemExit) as excinfo:
+        claim_issue.fetch_issue(
+            http_client=client, repository_slug="o/r", issue_number=IssueIdentifier(12)
+        )
+    assert excinfo.value.code == claim_issue.EXIT_CODE_PROTOCOL_FAILURE
+
+
 def test_ensure_claim_label_is_idempotent_when_label_exists() -> None:
     """An existing label: only the GET happens, no creation POST."""
     requests_seen: list[httpx.Request] = []
