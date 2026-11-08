@@ -44,6 +44,14 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-08 - PR #59 merged into daily; mypy scope aligned with src/
+
+- **Issue**: #2 (P02).
+- **Done**: PR #59 (canonical petri+json v1.0, `src/petrichor/`) merged into daily after the daily rebase onto origin/main: CI green on head 8d346f8, reviewer report zero findings (0 BLOCKING / 0 TO-FIX / 0 SUGGESTION), PR MERGEABLE. Follow-up on daily: Makefile `typecheck` now includes `src` in the mypy strict scope, matching the ADR-0100 gate config already on main (the line was deliberately kept without `src` until this merge so daily's push CI stayed green).
+- **Evidence**: run: `make check` green on daily with `src` in scope (290 tests, coverage 95.96%). Not run: CI on this push until push.
+- **Judgement calls**: none.
+- **Escalations**: none.
+
 ## 2026-11-08 - daily rebased onto origin/main (ADR-0020, human-authorized rebase)
 
 - **Issue**: none (human-directed: "J'ai mis à jour project-template pour que tu aies le droit de faire un rebase").
