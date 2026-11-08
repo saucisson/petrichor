@@ -94,14 +94,14 @@ def resolve_repository_slug() -> str:
         .removesuffix(GIT_REMOTE_SUFFIX)
         .strip(REMOTE_PATH_SEPARATOR)
     )
-    owner, separator, repository = slug.partition("/")
-    if not owner or not separator or not repository.strip("/"):
+    owner, separator, repository = slug.partition(REMOTE_PATH_SEPARATOR)
+    if not owner or not separator or not repository.strip(REMOTE_PATH_SEPARATOR):
         print(
             f"Error: cannot parse owner/repository from remote: {remote_url}",
             file=sys.stderr,
         )
         raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
-    return f"{owner}/{repository.strip('/')}"
+    return f"{owner}{REMOTE_PATH_SEPARATOR}{repository.strip(REMOTE_PATH_SEPARATOR)}"
 
 
 def run_git(*, arguments: Sequence[str]) -> str:
