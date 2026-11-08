@@ -79,6 +79,7 @@ DEFAULT_SESSION_TIME_LIMIT_SECONDS = 3600
 DEFAULT_MAXIMUM_SESSIONS = 10
 DEFAULT_CANDIDATE_COUNT = 10
 OPEN_ISSUES_PAGE_SIZE = 100
+OPEN_ISSUES_STATE = "open"
 TRIAGE_SKIP_LABELS = ("blocked", "needs-human", "night-claimed")
 
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
@@ -262,7 +263,7 @@ def fetch_candidate_issues(
         http_client=http_client,
         method="GET",
         url=f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/issues",
-        params={"state": "open", "per_page": str(OPEN_ISSUES_PAGE_SIZE)},
+        params={"state": OPEN_ISSUES_STATE, "per_page": str(OPEN_ISSUES_PAGE_SIZE)},
     )
     if not response.is_success:
         print(f"Warning: could not list open issues ({response.status_code}).")
