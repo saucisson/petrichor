@@ -21,8 +21,8 @@ def client_returning(payload: object, status_code: int = 200) -> httpx.Client:
 
 
 def test_open_github_client_uses_the_shared_timeout() -> None:
-    header_value = "test-token"
     """The shared client applies the named HTTP timeout."""
+    header_value = "test-token"
     client = _github.open_github_client(token=header_value)
     assert client.timeout == httpx.Timeout(_github.HTTP_TIMEOUT_SECONDS)
     assert client.headers["Authorization"] == "Bearer test-token"
@@ -85,3 +85,48 @@ def test_extract_head_sha_fails_closed_without_sha() -> None:
     with pytest.raises(SystemExit) as excinfo:
         _github.extract_head_sha(pull_request={"head": {}})
     assert excinfo.value.code == EXIT_CODE_PROTOCOL_FAILURE
+
+
+def test_extract_head_ref_returns_the_branch_name() -> None:
+    """The head ref is extracted from the pull request payload."""
+    pull_request: dict[str, object] = {"head": {"ref": "feat/2-x"}}
+    assert _github.extract_head_ref(pull_request=pull_request) == "feat/2-x"
+
+
+def test_extract_head_ref_empty_when_head_is_not_a_dict() -> None:
+    """A malformed head container yields an empty ref, not a crash."""
+    pull_request: dict[str, object] = {"head": "junk"}
+    assert _github.extract_head_ref(pull_request=pull_request) == ""
+
+
+def test_check_runs_allow_merge_refuses_empty_runs() -> None:
+    """No check runs on the head means: refused with a reason."""
+    reason = _github.check_runs_allow_merge(check_runs=[])
+    assert reason is not None and "no CI check runs" in reason
+
+
+def test_check_runs_allow_merge_refuses_running_check() -> None:
+    """A still-running check refuses the merge."""
+    reason = _github.check_runs_allow_merge(
+        check_runs=[{"name": "quality", "status": "in_progress", "conclusion": None}]
+    )
+    assert reason is not None and "still running" in reason
+
+
+def test_check_runs_allow_merge_refuses_failed_check() -> None:
+    """A completed-but-failed check refuses the merge."""
+    reason = _github.check_runs_allow_merge(
+        check_runs=[{"name": "quality", "status": "completed", "conclusion": "failure"}]
+    )
+    assert reason is not None and "did not succeed" in reason
+
+
+def test_check_runs_allow_merge_accepts_all_success() -> None:
+    """Every check completed with success: no refusal reason."""
+    reason = _github.check_runs_allow_merge(
+        check_runs=[
+            {"name": "quality", "status": "completed", "conclusion": "success"},
+            {"name": "security", "status": "completed", "conclusion": "success"},
+        ]
+    )
+    assert reason is None

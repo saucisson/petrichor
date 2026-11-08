@@ -75,8 +75,8 @@ def test_run_git_fails_closed_on_error(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_github_headers_carry_bearer_and_accept() -> None:
-    header_value = "test-token"
     """The shared headers carry the bearer token and the v3 media type."""
+    header_value = "test-token"
     headers = _shared.github_headers(token=header_value)
     assert headers["Authorization"] == "Bearer test-token"
     assert headers["Accept"] == "application/vnd.github.v3+json"
