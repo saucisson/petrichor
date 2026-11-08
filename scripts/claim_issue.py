@@ -22,12 +22,14 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NewType
 
 import httpx
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+IssueIdentifier = NewType("IssueIdentifier", int)
 
 GITHUB_API_BASE_URL = "https://api.github.com"
 GITHUB_DOMAIN_MARKER = "github.com"
@@ -35,6 +37,8 @@ REMOTE_SCP_SEPARATOR = ":"
 REMOTE_PATH_SEPARATOR = "/"
 GIT_REMOTE_SUFFIX = ".git"
 HTTP_TIMEOUT_SECONDS = 30.0
+AUTHORIZATION_SCHEME = "Bearer"
+GITHUB_ACCEPT_MEDIA_TYPE = "application/vnd.github.v3+json"
 GITHUB_TOKEN_VARIABLE = "GITHUB_TOKEN"  # noqa: S105 - an env var NAME, never a secret
 ENVIRONMENT_FILE_NAME = ".env"
 CLAIM_LABEL_NAME = "night-claimed"
@@ -128,7 +132,7 @@ def fetch_issue(
     *,
     http_client: httpx.Client,
     repository_slug: str,
-    issue_number: int,
+    issue_number: IssueIdentifier,
 ) -> dict[str, object]:
     """Fetch the issue, or fail closed: no issue, no claim, no work."""
     response = request_or_fail(
@@ -150,7 +154,7 @@ def fetch_issue(
     return issue
 
 
-def claim_is_allowed(*, issue: dict[str, object], issue_number: int) -> None:
+def claim_is_allowed(*, issue: dict[str, object], issue_number: IssueIdentifier) -> None:
     """Refuse to claim a pull request or an already-claimed issue."""
     if "pull_request" in issue:
         print(f"Error: #{issue_number} is a pull request, not an issue.", file=sys.stderr)
@@ -202,7 +206,7 @@ def add_claim_label(
     *,
     http_client: httpx.Client,
     repository_slug: str,
-    issue_number: int,
+    issue_number: IssueIdentifier,
 ) -> None:
     """Add the claim label; a failure means no claim, no work."""
     response = request_or_fail(
@@ -238,30 +242,31 @@ def parse_arguments(*, command_line_arguments: Sequence[str]) -> argparse.Namesp
 def main(*, command_line_arguments: Sequence[str]) -> int:
     """Entry point: issue number in, claimed issue out."""
     arguments = parse_arguments(command_line_arguments=command_line_arguments)
+    issue_identifier = IssueIdentifier(arguments.issue)
     load_environment_file()
     github_token = load_github_token()
     repository_slug = resolve_repository_slug()
     with httpx.Client(
         headers={
-            "Authorization": f"Bearer {github_token}",
-            "Accept": "application/vnd.github.v3+json",
+            "Authorization": f"{AUTHORIZATION_SCHEME} {github_token}",
+            "Accept": GITHUB_ACCEPT_MEDIA_TYPE,
         },
         timeout=HTTP_TIMEOUT_SECONDS,
     ) as http_client:
         issue = fetch_issue(
             http_client=http_client,
             repository_slug=repository_slug,
-            issue_number=arguments.issue,
+            issue_number=issue_identifier,
         )
-        claim_is_allowed(issue=issue, issue_number=arguments.issue)
+        claim_is_allowed(issue=issue, issue_number=issue_identifier)
         ensure_claim_label(http_client=http_client, repository_slug=repository_slug)
         add_claim_label(
             http_client=http_client,
             repository_slug=repository_slug,
-            issue_number=arguments.issue,
+            issue_number=issue_identifier,
         )
     print(
-        f"Issue #{arguments.issue} claimed ({CLAIM_LABEL_NAME}):"
+        f"Issue #{issue_identifier} claimed ({CLAIM_LABEL_NAME}):"
         " it is yours, and no other session will pick it."
     )
     return EXIT_CODE_CLAIMED
