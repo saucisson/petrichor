@@ -174,12 +174,12 @@ def read_integer_setting(*, variable_name: str, default_value: int) -> int:
         return default_value
     try:
         return int(raw_value)
-    except ValueError:
+    except ValueError as error:
         print(
             f"Error: {variable_name} is not an integer: {raw_value}.",
             file=sys.stderr,
         )
-        raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE) from None
+        raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE) from error
 
 
 def request_or_fail(
