@@ -327,3 +327,19 @@ def test_write_body_transport_error_is_protocol_failure() -> None:
             new_body="new body",
         )
     assert excinfo.value.code == _shared.EXIT_CODE_PROTOCOL_FAILURE
+
+
+def test_fetch_issue_undecodable_json_is_protocol_failure() -> None:
+    """A 2xx with undecodable bytes fails closed with exit 2, not a traceback."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"not json{")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    with pytest.raises(SystemExit) as excinfo:
+        pulls.fetch_issue(
+            http_client=client,
+            repository_slug="o/r",
+            item_number=59,
+        )
+    assert excinfo.value.code == _shared.EXIT_CODE_PROTOCOL_FAILURE
