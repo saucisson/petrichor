@@ -23,6 +23,9 @@ htmlcov/
 # Reviewer working directory (ADR-0010) - bundles, diffs, reports, context.
 .review/
 
+# Unattended loop trace (ADR-0017) - verbose worklists, anti-spin decisions.
+.night/
+
 # uv lock is COMMITTED (ADR-0001) - never ignore it.
 
 # Editors and OS

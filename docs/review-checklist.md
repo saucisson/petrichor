@@ -78,7 +78,9 @@ applies its equivalents.
 - [ ] No constitutional file touched: `AGENTS.md`, `docs/agents/`,
       `docs/decisions/`, `docs/architecture.md`, `docs/branching.md`,
       lint/type/coverage configuration.
-- [ ] Pull request under ~500 changed lines, or split proposed.
+- [ ] Pull request under ~500 changed lines, or split proposed in the
+      pull request body via `make update-pr PR=N BODY_FILE=...`
+      (ADR-0019 - the only body-update path).
 - [ ] Errors: typed domain errors, causes preserved, nothing swallowed.
 - [ ] Conventional Commit message matching the actual change.
 

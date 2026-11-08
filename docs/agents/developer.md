@@ -112,7 +112,13 @@ The review runs locally as an isolated Vibe Code session (ADR-0010):
    (`WORKLOG.md`, the pull request, the issue) are the continuity -
    never the session.
 3. **Exit 1** (findings): address every BLOCKING and TO-FIX finding,
-   push, wait for CI, and re-run `make review PR=N`.
+   push, wait for CI, and re-run `make review PR=N`. A size-budget
+   finding (diff over ~500 lines) is resolved by a split proposal
+   written into the pull request body: compose the new body file (the
+   existing body plus the proposal) and run
+   `make update-pr PR=N BODY_FILE=...` - the only body-update path;
+   it replaces the whole body, so keep the existing body in the
+   file (ADR-0019).
 4. **Exit 2** (protocol failure): do not retry blindly - report it as a
    `needs-human` blocker with the error message.
 5. **Exit 3** (preconditions unmet): not a verdict and not an attempt -
@@ -151,6 +157,9 @@ merge - and your `WORKLOG.md` entry names the resumption honestly.
   write (the reviewer session did). The reviewer session never merges.
 - Open a pull request outside `make pr`: `gh` is not the protocol's
   tool, and the unattended flow cannot use it (ADR-0017).
+- Update a pull request body outside `make update-pr`: the raw API is
+  denied in an unattended session, and that denial is the allowlist
+  working, not an obstacle - the driver is the path (ADR-0019).
 - Work an item you have not claimed first (auto-discovered night
   sessions): `make claim ISSUE=N` or `make claim-pr PR=N` is what
   keeps two sessions off the same issue or the same abandoned pull

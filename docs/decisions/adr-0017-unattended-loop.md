@@ -128,3 +128,25 @@ Consequences of the amendment:
   its backing issue `night-claimed` by hand - the hand-off path is
   the label, not a new protocol;
 - un-claiming stays a human act, for issues and pull requests alike.
+
+## Amendment 2026-11-08 - recovery tolerates suffixed branches; the loop speaks to a human
+
+The first recovery night in anger (an instance repository) surfaced
+two corrections:
+
+- **Suffixed branch names are tolerated.** Agents name their branches
+  `feat/2-canonical-petri-json`, not the bare `feat/2` the first
+  amendment assumed; the strict pattern silently hid those pull
+  requests from the recovery worklist. The candidate pattern is now
+  `feat/N` or `fix/N` with an optional descriptive suffix after the
+  number - the number alone decides the backing issue. Without this,
+  a session can be tempted to pick an abandoned pull request
+  out-of-band, the worklist itself shows no progress, and the
+  anti-spin guard correctly stops the night.
+- **Two output channels.** The loop's stdout was the verbose trace:
+  candidate lists with kinds, anti-spin decisions, fetch warnings -
+  unreadable at a glance for the morning audit. Stdout is now the
+  short, human-readable summary (one line per session, one verdict at
+  the end); the verbose trace lands in `.night/night-loop.log`
+  (override with `NIGHT_LOG_FILE`). The morning audit reads the
+  terminal; the post-mortem reads the log.
