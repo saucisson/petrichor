@@ -2,25 +2,17 @@ r"""The reviewer agent: one local session, one structured verdict (ADR-0010).
 
 The reviewer is a headless Vibe Code session (``vibe --prompt-file``)
 launched in an ISOLATED empty directory whose only content is the
-review bundle (built by ``build_review_bundle.py``). Isolation is
-enforced by construction: the session sees no repository, no AGENTS.md
-and no session history - only the bundle (ADR-0010). It answers with a
-JSON report; this script recomputes every count locally, fails closed
-on anything it cannot verify, and exits with a status the merge driver
-(``merge_pr.py``) gates on.
+review bundle (built by ``make review-bundle``). Isolation is enforced
+by construction: the session sees no repository, no AGENTS.md and no
+session history - only the bundle (ADR-0010). It answers with a JSON
+report; this driver recomputes every count locally, fails closed on
+anything it cannot verify, and exits with a status the merge driver
+(``make merge-pr``) gates on.
 
-The session spends the INCLUDED usage of the local Vibe Code plan, not
-pay-per-token API calls - that is the point of ADR-0010.
-
-Usage::
-
-    python scripts/agent_review.py \\
-        --bundle-file .review/bundle.md \\
-        --report-file .review/review-report.json \\
-        --comment-file .review/review-comment.md
+The session spends the INCLUDED usage of the local Vibe Code plan,
+not pay-per-token API calls - that is the point of ADR-0010.
 """
 
-import argparse
 import json
 import os
 import shutil
@@ -33,6 +25,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    import argparse
     from collections.abc import Sequence
 
 REVIEWER_CLI_COMMAND = "vibe"
@@ -107,7 +100,7 @@ Severity contract: BLOCKING = violates a checklist rule, an ADR or the \
 acceptance criteria, no merge until fixed. TO-FIX = real problem, merge \
 can proceed only if trivial and tracked. SUGGESTION = advisory, never \
 blocks. Zero findings is a valid answer. You never merge, never modify \
-code, and never soften a violation."""
+code, and never soften a violation.\""""
 
 
 REVIEWER_PROMPT_TEXT = """You are reviewing a pull request. The file \
@@ -147,7 +140,7 @@ def load_time_limit_seconds() -> int:
         return int(raw_value)
     except ValueError:
         print(
-            f"Error: {SESSION_TIME_LIMIT_VARIABLE} is not an integer: {raw_value}",
+            f"Error: {SESSION_TIME_LIMIT_VARIABLE} is not an integer: {raw_value}.",
             file=sys.stderr,
         )
         raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE) from None
@@ -187,13 +180,21 @@ def run_reviewer_session(*, model_name: str, bundle_path: Path) -> str:
             command += ["--model", model_name]
         if load_max_tokens():
             command += ["--max-tokens", load_max_tokens()]
-        completed_process = subprocess.run(
-            command,
-            cwd=session_directory,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        try:
+            completed_process = subprocess.run(
+                command,
+                cwd=session_directory,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError as launch_error:
+            print(
+                f"Error: the reviewer session could not start"
+                f" ({REVIEWER_CLI_COMMAND}): {launch_error}",
+                file=sys.stderr,
+            )
+            raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE) from launch_error
     finally:
         shutil.rmtree(session_directory, ignore_errors=True)
     if completed_process.returncode != EXIT_CODE_REVIEWED_CLEAN:
@@ -374,33 +375,33 @@ def render_markdown_comment(
     return "\n".join(comment_sections)
 
 
-def parse_arguments(*, command_line_arguments: Sequence[str]) -> argparse.Namespace:
-    """Parse the script contract."""
-    argument_parser = argparse.ArgumentParser(
-        prog="agent_review",
+def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Register the agent-review subcommand."""
+    subparser = subparsers.add_parser(
+        "agent-review",
+        help="Run the local reviewer session on a review bundle (ADR-0010).",
         description="Run the local reviewer session on a review bundle (ADR-0010).",
     )
-    argument_parser.add_argument(
+    subparser.add_argument(
         "--bundle-file",
         required=True,
-        help="Path to the review bundle built by build_review_bundle.py.",
+        help="Path to the review bundle built by `make review-bundle`.",
     )
-    argument_parser.add_argument(
+    subparser.add_argument(
         "--report-file",
         required=True,
         help="Path where the machine-readable JSON report is written.",
     )
-    argument_parser.add_argument(
+    subparser.add_argument(
         "--comment-file",
         default=None,
         help="Optional path where the Markdown comment is written.",
     )
-    return argument_parser.parse_args(command_line_arguments)
+    subparser.set_defaults(runner=run)
 
 
-def main(*, command_line_arguments: Sequence[str]) -> int:
+def run(*, arguments: argparse.Namespace) -> int:
     """Entry point: bundle in, verified verdict out."""
-    arguments = parse_arguments(command_line_arguments=command_line_arguments)
     answer_text = run_reviewer_session(
         model_name=load_model_name(),
         bundle_path=Path(arguments.bundle_file),
@@ -444,7 +445,3 @@ def main(*, command_line_arguments: Sequence[str]) -> int:
     if counts[FindingSeverity.BLOCKING] > 0:
         return EXIT_CODE_BLOCKING_FINDINGS
     return EXIT_CODE_REVIEWED_CLEAN
-
-
-if __name__ == "__main__":
-    sys.exit(main(command_line_arguments=sys.argv[1:]))
