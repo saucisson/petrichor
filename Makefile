@@ -68,7 +68,7 @@ merge-pr: ## Merge pull request PR=N into daily after review and CI (ADR-0009).
 	$(PYTHON) scripts/merge_pr.py --pr-number $(PR)
 
 pr: ## Open the pull request from the current branch: TITLE=... [BODY_FILE=...] (ADR-0017).
-	$(PYTHON) scripts/open_pr.py --title "$(TITLE)" --body-file "$(BODY_FILE)"
+	$(PYTHON) -m scripts pr --title "$(TITLE)" --body-file "$(BODY_FILE)"
 
 claim: ## Claim an issue before working it (auto-discovered night sessions): ISSUE=N (ADR-0017).
 	$(PYTHON) scripts/claim_issue.py --issue "$(ISSUE)"
@@ -77,7 +77,7 @@ claim-pr: ## Claim a pull request before resuming it (night recovery): PR=N (ADR
 	$(PYTHON) scripts/claim_issue.py --pr "$(PR)"
 
 update-pr: ## Replace a pull request body from a file: PR=N BODY_FILE=... (ADR-0019).
-	$(PYTHON) scripts/update_pr.py --pr-number "$(PR)" --body-file "$(BODY_FILE)"
+	$(PYTHON) -m scripts update-pr --pr-number "$(PR)" --body-file "$(BODY_FILE)"
 
 wait-ci: ## Actively wait for CI on the pull request head: PR=N (ADR-0018).
 	$(PYTHON) scripts/wait_ci.py --pr-number "$(PR)"
