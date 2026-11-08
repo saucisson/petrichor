@@ -86,7 +86,7 @@ wait-ci: ## Actively wait for CI on the pull request head: PR=N (ADR-0018).
 	$(PYTHON) -m scripts wait-ci --pr-number "$(PR)"
 
 night: ## Run the unattended loop: ISSUES="12,13,14", MILESTONES="3,4", or auto-discovery when empty (ADR-0017).
-	$(PYTHON) scripts/night_loop.py --issues "$(ISSUES)" --milestones "$(MILESTONES)"
+	$(PYTHON) -m scripts night --issues "$(ISSUES)" --milestones "$(MILESTONES)"
 
 review-bundle: ## Print the reviewer bundle against origin/daily (ADR-0010).
 	$(PYTHON) -m scripts review-bundle --base-ref origin/daily
