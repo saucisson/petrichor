@@ -65,22 +65,22 @@ review: ## Run the local reviewer session on pull request PR=N (ADR-0010).
 	$(PYTHON) scripts/pr_review.py --pr-number $(PR)
 
 merge-pr: ## Merge pull request PR=N into daily after review and CI (ADR-0009).
-	$(PYTHON) scripts/merge_pr.py --pr-number $(PR)
+	$(PYTHON) -m scripts merge-pr --pr-number $(PR)
 
 pr: ## Open the pull request from the current branch: TITLE=... [BODY_FILE=...] (ADR-0017).
 	$(PYTHON) -m scripts pr --title "$(TITLE)" --body-file "$(BODY_FILE)"
 
 claim: ## Claim an issue before working it (auto-discovered night sessions): ISSUE=N (ADR-0017).
-	$(PYTHON) scripts/claim_issue.py --issue "$(ISSUE)"
+	$(PYTHON) -m scripts claim --issue "$(ISSUE)"
 
 claim-pr: ## Claim a pull request before resuming it (night recovery): PR=N (ADR-0017).
-	$(PYTHON) scripts/claim_issue.py --pr "$(PR)"
+	$(PYTHON) -m scripts claim --pr "$(PR)"
 
 update-pr: ## Replace a pull request body from a file: PR=N BODY_FILE=... (ADR-0019).
 	$(PYTHON) -m scripts update-pr --pr-number "$(PR)" --body-file "$(BODY_FILE)"
 
 wait-ci: ## Actively wait for CI on the pull request head: PR=N (ADR-0018).
-	$(PYTHON) scripts/wait_ci.py --pr-number "$(PR)"
+	$(PYTHON) -m scripts wait-ci --pr-number "$(PR)"
 
 night: ## Run the unattended loop: ISSUES="12,13,14", MILESTONES="3,4", or auto-discovery when empty (ADR-0017).
 	$(PYTHON) scripts/night_loop.py --issues "$(ISSUES)" --milestones "$(MILESTONES)"

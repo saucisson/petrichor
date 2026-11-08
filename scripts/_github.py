@@ -6,6 +6,7 @@ fetch primitives here. The modules that never touch the API
 module, so they stay stdlib-only (ADR-0021).
 """
 
+import json
 import sys
 from typing import TYPE_CHECKING, NewType
 
@@ -33,6 +34,29 @@ def open_github_client(*, token: str) -> httpx.Client:
     return httpx.Client(headers=github_headers(token=token), timeout=HTTP_TIMEOUT_SECONDS)
 
 
+def request_or_fail(
+    *,
+    http_client: httpx.Client,
+    method: str,
+    url: str,
+    json_payload: dict[str, object] | None = None,
+) -> httpx.Response:
+    """Send one request; a transport error fails closed with exit 2.
+
+    A network failure is never a traceback and never exit 1: the
+    caller cannot distinguish "refused" from "unreachable", so the
+    protocol failure is the only honest verdict.
+    """
+    try:
+        return http_client.request(method, url, json=json_payload)
+    except httpx.TransportError as transport_error:
+        print(
+            f"Error: the GitHub API is unreachable ({method} {url}): {transport_error}",
+            file=sys.stderr,
+        )
+        raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE) from transport_error
+
+
 def fetch_pull_request(
     *,
     http_client: httpx.Client,
@@ -40,8 +64,10 @@ def fetch_pull_request(
     pull_request_number: PullRequestIdentifier,
 ) -> dict[str, object]:
     """Fetch the pull request, or fail closed."""
-    response = http_client.get(
-        f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/pulls/{pull_request_number}"
+    response = request_or_fail(
+        http_client=http_client,
+        method="GET",
+        url=f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/pulls/{pull_request_number}",
     )
     if not response.is_success:
         print(
@@ -50,7 +76,11 @@ def fetch_pull_request(
             file=sys.stderr,
         )
         raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
-    pull_request: object = response.json()
+    try:
+        pull_request: object = response.json()
+    except json.JSONDecodeError as json_error:
+        print("Error: the pull request payload is not valid JSON.", file=sys.stderr)
+        raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE) from json_error
     if not isinstance(pull_request, dict):
         raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
     return pull_request
@@ -63,8 +93,10 @@ def fetch_check_runs(
     head_sha: HeadSha,
 ) -> list[dict[str, object]]:
     """List the CI check runs of the pull request head, or fail closed."""
-    response = http_client.get(
-        f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/commits/{head_sha}/check-runs"
+    response = request_or_fail(
+        http_client=http_client,
+        method="GET",
+        url=f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/commits/{head_sha}/check-runs",
     )
     if not response.is_success:
         print(
@@ -73,7 +105,11 @@ def fetch_check_runs(
             file=sys.stderr,
         )
         raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
-    payload: object = response.json()
+    try:
+        payload: object = response.json()
+    except json.JSONDecodeError as json_error:
+        print(f"Error: the check-runs payload of {head_sha} is not valid JSON.", file=sys.stderr)
+        raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE) from json_error
     check_runs = payload.get("check_runs", []) if isinstance(payload, dict) else []
     if not isinstance(check_runs, list):
         return []

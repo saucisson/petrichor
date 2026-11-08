@@ -44,6 +44,14 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-08 - template sync 2aa4d27, part 3/4: ci + claims + merge domains (ADR-0021)
+
+- **Issue**: none (human-directed template sync).
+- **Done**: `scripts/ci.py` (wait-ci), `scripts/claims.py` (claim), `scripts/merge.py` (merge-pr) from template @ 2aa4d27 replace `wait_ci.py`, `claim_issue.py`, `merge_pr.py`; `__main__.py` registers `(pulls, ci, claims, merge)`; Makefile `wait-ci`/`claim`/`claim-pr`/`merge-pr` now call `python -m scripts ...`. Tests ported to `test_ci.py`/`test_claims.py`/`test_merge.py` (subcommand wiring via `register` + argparse, shared names via `_shared`/`_github`). Review-driven hardening re-applied on the template version: `request_or_fail` in `_github.py` turns `httpx.TransportError` into exit 2; `json.JSONDecodeError` guarded in `_github.fetch_*`, `ci.try_fetch_*` (transient None), `claims.fetch_issue` (exit 2); `claims.claim_is_allowed` fails closed on malformed labels again.
+- **Evidence**: run: `make check` green (ruff + format, mypy strict, import-linter, 219 tests, coverage 94.76%). Not run: CI/review until push.
+- **Judgement calls**: `poll_once` in the template counts any non-"success" conclusion (skipped/neutral included) as failed - tests pin that behavior. `delete_branch` stays best-effort (transport error is a warning, never a merge failure).
+- **Escalations**: none.
+
 ## 2026-11-08 - template sync 2aa4d27, part 2/4: pulls domain (pr + update-pr subcommands, ADR-0021)
 
 - **Issue**: none (human-directed template sync).
