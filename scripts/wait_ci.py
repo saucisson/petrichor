@@ -54,6 +54,7 @@ DEFAULT_POLL_INTERVAL_SECONDS = 20
 DEFAULT_TIMEOUT_SECONDS = 1800
 NOT_FOUND_STATUS_CODE = 404
 UNNAMED_CHECK_NAME = "unnamed check"
+NON_FAILURE_CONCLUSIONS = ("success", "neutral", "skipped")
 
 PollStatus = Literal["fetch-failed", "no-checks", "pending", "green", "failed"]
 
@@ -234,7 +235,8 @@ def poll_once(
     failed = [
         str(check_run.get("name", UNNAMED_CHECK_NAME))
         for check_run in check_runs
-        if check_run.get("status") == "completed" and check_run.get("conclusion") != "success"
+        if check_run.get("status") == "completed"
+        and check_run.get("conclusion") not in NON_FAILURE_CONCLUSIONS
     ]
     if failed:
         return POLL_STATUS_FAILED, head_sha, ", ".join(failed)
