@@ -51,7 +51,13 @@ One entry per commit or pull request:
 - **Evidence**: run: `make check` green on the rebased daily (ruff + format, mypy strict, import-linter, 261 tests, coverage 94.76%; coverage warns petrichor not imported until PR #59 lands, floor still met). Rebase verified: `git merge-base --is-ancestor origin/main HEAD` OK. Not run: CI on the pushed daily until push.
 - **Judgement calls**: conflict resolution is normally a human decision (ADR-0020); the human pre-authorized this rebase in session.
 - **Escalations**: none (authorization given in session).
+## 2026-11-08 - PR #59 review BLOCKING (architecture) resolved: product code moved to src/petrichor/ (ADR-0100 draft)
 
+- **Issue**: #2 (P02), review round on PR #59 after conflict resolution.
+- **Done**: the BLOCKING finding "product module in scripts/ violates ADR-0014" is resolved by moving `scripts/petri_canonical.py` to `src/petrichor/petri_canonical.py` (package `petrichor`) and its tests to `tests/test_petri_canonical.py`; quality gates extended in the same change - ruff `src` += `src`, mypy strict on `src` (Makefile `typecheck` + pre-commit hook args), pytest `testpaths` += `tests` with `pythonpath = ["src"]`, coverage measures `petrichor` alongside `notify` (floor unchanged at 90%). ADR-0100 drafted in the PR (numbered from 0100 per ADR-0010; human accepts). Also fixed while moving the test file: the two bare `cast(...)` now carry the ADR-0006 inline justification (TO-FIX), and `lambda p:` renamed to `lambda payload:` (SUGGESTION). Constitutional files (pyproject.toml, Makefile, .pre-commit-config.yaml, docs/decisions/) touched under the human's explicit directive in this session.
+- **Evidence**: run: `make check` green (ruff + format, mypy strict incl. src, import-linter, 227 tests, coverage 95.96% vs floor 90%). Not run: CI and review until push.
+- **Judgement calls**: product layout `src/petrichor/` + `tests/` chosen as the conventional Python layout ADR-0014 names; the size-budget BLOCKING (~698 lines) remains - resolvable via `make update-pr` (ADR-0019) with a PR-level split proposal.
+- **Escalations**: the architecture/config change was directed by the human in session ("Résous la partie BLOCKING d'architecture"), consuming the escalation-list requirement; ADR-0100 is drafted for human acceptance.
 ## 2026-11-08 - template sync 2aa4d27, part 4c of 4c: night domain (ADR-0017/0021) - template sync complete
 
 - **Issue**: none (human-directed template sync).
