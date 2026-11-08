@@ -6,9 +6,9 @@ session picks its own issue, so its FIRST act is to claim it:
 GitHub API, with the same token as the other drivers. The claim is
 both the concurrency guard and the honesty record:
 
-- two sessions never work the same issue (the loop filters claimed
-  issues out of every worklist, and this driver refuses to claim
-  twice);
+- the loop filters claimed issues out of every worklist, and this
+  driver refuses to claim twice, so two sessions do not pick the same
+  issue;
 - a failed attempt stays claimed: the morning audit sees what was
   tried, and the human - never an agent - decides the retry.
 
@@ -123,7 +123,7 @@ def request_or_fail(
         if json_payload is None:
             return http_client.request(method, url)
         return http_client.request(method, url, json=json_payload)
-    except httpx.TransportError as error:
+    except httpx.RequestError as error:
         print(f"Error: could not reach the GitHub API: {error}", file=sys.stderr)
         raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE) from error
 
@@ -147,7 +147,11 @@ def fetch_issue(
             file=sys.stderr,
         )
         raise SystemExit(EXIT_CODE_CRITERIA_UNMET)
-    issue: object = response.json()
+    try:
+        issue: object = response.json()
+    except ValueError as error:
+        print("Error: the issue payload is not valid JSON - do not work it.", file=sys.stderr)
+        raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE) from error
     if not isinstance(issue, dict):
         print("Error: the issue payload is unexpected - do not work it.", file=sys.stderr)
         raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
