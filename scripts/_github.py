@@ -7,7 +7,7 @@ module, so they stay stdlib-only (ADR-0021).
 """
 
 import sys
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NewType
 
 import httpx
 
@@ -20,10 +20,15 @@ from scripts._shared import (
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+HeadSha = NewType("HeadSha", str)
+"""A commit SHA at the pull request head."""
+
+HTTP_TIMEOUT_SECONDS = 30.0
+
 
 def open_github_client(*, token: str) -> httpx.Client:
     """Build the GitHub API client every driver uses."""
-    return httpx.Client(headers=github_headers(token=token), timeout=30.0)
+    return httpx.Client(headers=github_headers(token=token), timeout=HTTP_TIMEOUT_SECONDS)
 
 
 def fetch_pull_request(
@@ -53,7 +58,7 @@ def fetch_check_runs(
     *,
     http_client: httpx.Client,
     repository_slug: str,
-    head_sha: str,
+    head_sha: HeadSha,
 ) -> list[dict[str, object]]:
     """List the CI check runs of the pull request head, or fail closed."""
     response = http_client.get(
@@ -73,14 +78,14 @@ def fetch_check_runs(
     return [entry for entry in check_runs if isinstance(entry, dict)]
 
 
-def extract_head_sha(*, pull_request: dict[str, object]) -> str:
+def extract_head_sha(*, pull_request: dict[str, object]) -> HeadSha:
     """Return the pull request head SHA, or fail closed."""
     head_container = pull_request.get("head")
     head_sha = head_container.get("sha", "") if isinstance(head_container, dict) else ""
     if not head_sha:
         print("Error: the pull request has no head SHA.", file=sys.stderr)
         raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
-    return head_sha
+    return HeadSha(head_sha)
 
 
 def extract_head_ref(*, pull_request: dict[str, object]) -> str:
