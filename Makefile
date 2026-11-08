@@ -9,8 +9,8 @@ DAY_TAG := daily-$(shell date +%F)
 
 .DEFAULT_GOAL := help
 .PHONY: help install lint format typecheck imports test check security build \
-        day-start day-report smoke-test mutate notify review merge-pr pr claim night \
-        review-bundle clean
+        day-start day-report smoke-test mutate notify review merge-pr pr claim \
+        claim-pr wait-ci night review-bundle clean
 
 help: ## List available targets with their description.
 	@grep --extended-regexp '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -73,8 +73,14 @@ pr: ## Open the pull request from the current branch: TITLE=... [BODY_FILE=...] 
 claim: ## Claim an issue before working it (auto-discovered night sessions): ISSUE=N (ADR-0017).
 	$(PYTHON) scripts/claim_issue.py --issue "$(ISSUE)"
 
-night: ## Run the unattended loop: ISSUES="12,13,14" or auto-discovery when empty (ADR-0017).
-	$(PYTHON) scripts/night_loop.py --issues "$(ISSUES)"
+claim-pr: ## Claim a pull request before resuming it (night recovery): PR=N (ADR-0017).
+	$(PYTHON) scripts/claim_issue.py --pr "$(PR)"
+
+wait-ci: ## Actively wait for CI on the pull request head: PR=N (ADR-0018).
+	$(PYTHON) scripts/wait_ci.py --pr-number "$(PR)"
+
+night: ## Run the unattended loop: ISSUES="12,13,14", MILESTONES="3,4", or auto-discovery when empty (ADR-0017).
+	$(PYTHON) scripts/night_loop.py --issues "$(ISSUES)" --milestones "$(MILESTONES)"
 
 review-bundle: ## Print the reviewer bundle against origin/daily (ADR-0010).
 	$(PYTHON) scripts/build_review_bundle.py --base-ref origin/daily
