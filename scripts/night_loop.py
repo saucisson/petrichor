@@ -33,6 +33,13 @@ versioned prompt, runs the session, records the exit code, and moves
 on. The verdicts live in the repository (``WORKLOG.md``, the pull
 requests, the issues) for the morning audit.
 
+Output has two channels (ADR-0017): stdout is the short, readable
+summary - one line per session and one verdict at the end - while the
+verbose trace (full candidate lists, anti-spin decisions, fetch
+warnings) lands in ``.night/night-loop.log`` (override it with
+``NIGHT_LOG_FILE``). The morning audit reads the terminal; the
+post-mortem reads the log.
+
 Usage::
 
     make night ISSUES=12,13,14
@@ -41,6 +48,7 @@ Usage::
 """
 
 import argparse
+import dataclasses
 import os
 import re
 import shutil
@@ -79,6 +87,9 @@ NIGHT_MAX_TURNS_VARIABLE = "NIGHT_MAX_TURNS"
 SESSION_TIME_LIMIT_VARIABLE = "NIGHT_TIME_LIMIT_SECONDS"
 NIGHT_MAXIMUM_SESSIONS_VARIABLE = "NIGHT_MAX_SESSIONS"
 NIGHT_CANDIDATES_VARIABLE = "NIGHT_CANDIDATES"
+NIGHT_LOG_FILE_VARIABLE = "NIGHT_LOG_FILE"
+DEFAULT_NIGHT_LOG_FILE_NAME = ".night/night-loop.log"
+LOG_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 DEFAULT_MAXIMUM_SESSION_TURNS = 100
 DEFAULT_SESSION_TIME_LIMIT_SECONDS = 3600
 DEFAULT_MAXIMUM_SESSIONS = 10
@@ -87,7 +98,7 @@ OPEN_ISSUES_PAGE_SIZE = 100
 OPEN_STATE_FILTER = "open"
 OPEN_PULL_REQUESTS_PAGE_SIZE = 100
 DAILY_BRANCH_NAME = "daily"
-NIGHT_HEAD_BRANCH_PATTERN = re.compile(r"^(?:feat|fix)/([0-9]+)$")
+NIGHT_HEAD_BRANCH_PATTERN = re.compile(r"^(?:feat|fix)/([0-9]+)(?:-.*)?$")
 TRIAGE_SKIP_LABELS = ("blocked", "needs-human", "night-claimed")
 CLAIM_LABEL_NAME = "night-claimed"
 UNKNOWN_HEAD_REF = "unknown"
@@ -354,7 +365,12 @@ def render_worklist(*, candidates: Sequence[tuple[IssueIdentifier, dict[str, obj
 
 
 def parse_backing_issue_number(*, head_ref: object) -> int | None:
-    """Return the backing issue number of a ``feat/N`` or ``fix/N`` branch."""
+    """Return the backing issue number of a ``feat/N`` or ``fix/N`` branch.
+
+    A descriptive suffix after the number (``feat/12-canonical-hash``)
+    is tolerated: agents name branches that way, and the number alone
+    decides the backing issue.
+    """
     if not isinstance(head_ref, str):
         return None
     match = NIGHT_HEAD_BRANCH_PATTERN.match(head_ref)
@@ -579,6 +595,43 @@ def format_duration(*, seconds: int) -> str:
     return f"{seconds // 60:02d}:{seconds % 60:02d}"
 
 
+def resolve_log_file_path() -> Path:
+    """Resolve the verbose trace location: stdout stays for the human."""
+    configured_path = os.environ.get(NIGHT_LOG_FILE_VARIABLE, "").strip()
+    log_file = Path(configured_path) if configured_path else Path(DEFAULT_NIGHT_LOG_FILE_NAME)
+    if log_file.is_absolute():
+        return log_file
+    return REPOSITORY_ROOT / log_file
+
+
+def write_log_entry(*, log_file: Path, text: str) -> None:
+    """Append one timestamped line to the verbose night trace."""
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    with log_file.open("a", encoding="utf-8") as log_stream:
+        log_stream.write(f"[{time.strftime(LOG_TIMESTAMP_FORMAT)}] {text}\n")
+
+
+@dataclasses.dataclass
+class NightJournal:
+    """The loop's two output channels (ADR-0017).
+
+    ``record`` pairs one short stdout line for the morning audit with
+    its verbose log counterpart; ``log`` writes to the trace only.
+    """
+
+    log_file: Path
+    summary_lines: list[str] = dataclasses.field(default_factory=list)
+
+    def log(self, *, text: str) -> None:
+        """Append one entry to the verbose trace only."""
+        write_log_entry(log_file=self.log_file, text=text)
+
+    def record(self, *, line: str, text: str) -> None:
+        """Add a stdout summary line and its verbose counterpart."""
+        self.summary_lines.append(line)
+        self.log(text=text)
+
+
 def parse_arguments(*, command_line_arguments: Sequence[str]) -> argparse.Namespace:
     """Parse the script contract."""
     argument_parser = argparse.ArgumentParser(
@@ -645,18 +698,22 @@ def run_explicit_directive(
     milestone_numbers: set[int],
     prompt_template: str,
     arguments: argparse.Namespace,
-    results: list[str],
+    journal: NightJournal,
 ) -> None:
     """Explicit mode: one session per issue of the human's list."""
     for issue_number in issue_numbers:
         print(f"\n=== Issue #{issue_number} ===")
+        journal.log(text=f"explicit session: issue #{issue_number}")
         issue = fetch_issue(
             http_client=http_client,
             repository_slug=repository_slug,
             issue_number=issue_number,
         )
         if issue is None:
-            results.append(f"Issue #{issue_number}: skipped - could not fetch it")
+            journal.record(
+                line=f"Issue #{issue_number}: skipped - could not fetch it",
+                text=f"issue #{issue_number}: could not fetch it",
+            )
             continue
         skip_reason = triage_issue(issue=issue)
         if skip_reason is None and not milestone_matches(
@@ -665,7 +722,10 @@ def run_explicit_directive(
             skip_reason = "it is not in the requested milestones"
         if skip_reason:
             print(f"Skipped: {skip_reason}.")
-            results.append(f"Issue #{issue_number}: skipped - {skip_reason}")
+            journal.record(
+                line=f"Issue #{issue_number}: skipped - {skip_reason}",
+                text=f"issue #{issue_number} skipped: {skip_reason}",
+            )
             continue
         issue_section = render_issue_section(issue=issue, issue_number=issue_number)
         prompt_path = prompt_directory / f"issue-{issue_number}.md"
@@ -683,9 +743,15 @@ def run_explicit_directive(
             session_time_limit_seconds=arguments.time_limit,
         )
         print(f"Session exited {exit_code} after {format_duration(seconds=elapsed_seconds)}.")
-        results.append(
-            f"Issue #{issue_number}: session exit {exit_code}"
-            f" ({format_duration(seconds=elapsed_seconds)})"
+        journal.record(
+            line=(
+                f"Issue #{issue_number}: session exit {exit_code}"
+                f" ({format_duration(seconds=elapsed_seconds)})"
+            ),
+            text=(
+                f"issue #{issue_number}: session exit {exit_code}"
+                f" after {format_duration(seconds=elapsed_seconds)}"
+            ),
         )
 
 
@@ -697,7 +763,7 @@ def run_auto_discovered_sessions(
     milestone_numbers: set[int],
     prompt_template: str,
     arguments: argparse.Namespace,
-    results: list[str],
+    journal: NightJournal,
 ) -> None:
     """Auto-discovery: each session picks one item and claims it first."""
     if arguments.max_sessions < 1:
@@ -729,14 +795,19 @@ def run_auto_discovered_sessions(
         )
         if not issues and not pull_requests:
             print("\nNo unclaimed eligible item left - the night is done.")
+            journal.log(text="worklist empty - the night is done")
             break
         candidate_description = describe_auto_candidates(
             issues=issues,
             pull_requests=pull_requests,
         )
         print(
-            f"\n=== Session {sessions_started + 1} of at most"
-            f" {arguments.max_sessions} - candidates: {candidate_description} ==="
+            f"\nNight session {sessions_started + 1} of at most"
+            f" {arguments.max_sessions}: {len(issues)} issue(s),"
+            f" {len(pull_requests)} pull request(s) in the worklist."
+        )
+        journal.log(
+            text=f"session {sessions_started + 1} candidates: {candidate_description}",
         )
         prompt_path = prompt_directory / f"session-{sessions_started + 1}.md"
         prompt_path.write_text(
@@ -753,10 +824,19 @@ def run_auto_discovered_sessions(
             session_time_limit_seconds=arguments.time_limit,
         )
         sessions_started += 1
-        print(f"Session exited {exit_code} after {format_duration(seconds=elapsed_seconds)}.")
-        results.append(
-            f"Session {sessions_started} (candidates: {candidate_description}):"
-            f" exit {exit_code} ({format_duration(seconds=elapsed_seconds)})"
+        print(
+            f"Session {sessions_started}: exit {exit_code}"
+            f" in {format_duration(seconds=elapsed_seconds)}."
+        )
+        journal.record(
+            line=(
+                f"Session {sessions_started}: exit {exit_code}"
+                f" in {format_duration(seconds=elapsed_seconds)}"
+            ),
+            text=(
+                f"session {sessions_started}: exit {exit_code}"
+                f" after {format_duration(seconds=elapsed_seconds)}"
+            ),
         )
         fresh_issues = fetch_candidate_issues(
             http_client=http_client,
@@ -780,10 +860,20 @@ def run_auto_discovered_sessions(
                 "No candidate was claimed - stopping the loop instead of"
                 " retrying the same worklist."
             )
-            results.append(
-                "Loop stopped: no candidate was claimed last session - the morning audit decides."
+            journal.record(
+                line=(
+                    "Loop stopped: no candidate was claimed last session"
+                    " - the morning audit decides."
+                ),
+                text=(
+                    f"anti-spin stop: no candidate claimed,"
+                    f" worklist unchanged: {candidate_description}"
+                ),
             )
             break
+        journal.log(
+            text=(f"anti-spin pass: before={sorted(candidate_keys)} fresh={sorted(fresh_keys)}"),
+        )
 
 
 def main(*, command_line_arguments: Sequence[str]) -> int:
@@ -800,7 +890,15 @@ def main(*, command_line_arguments: Sequence[str]) -> int:
         return EXIT_CODE_PROTOCOL_FAILURE
     repository_slug = resolve_repository_slug()
     milestone_numbers = parse_milestone_list(raw_milestone_list=arguments.milestones)
-    results: list[str] = []
+    journal = NightJournal(log_file=resolve_log_file_path())
+    print(f"Verbose trace: {journal.log_file}")
+    journal.log(
+        text=(
+            f"night loop started: mode="
+            f"{'explicit' if arguments.issues else 'auto-discovered'}"
+            f", repository={repository_slug}"
+        ),
+    )
     with (
         httpx.Client(
             headers={
@@ -822,7 +920,7 @@ def main(*, command_line_arguments: Sequence[str]) -> int:
                 milestone_numbers=milestone_numbers,
                 prompt_template=prompt_template,
                 arguments=arguments,
-                results=results,
+                journal=journal,
             )
         else:
             prompt_template = load_prompt_template(template_path=AUTO_PROMPT_TEMPLATE_PATH)
@@ -833,12 +931,15 @@ def main(*, command_line_arguments: Sequence[str]) -> int:
                 milestone_numbers=milestone_numbers,
                 prompt_template=prompt_template,
                 arguments=arguments,
-                results=results,
+                journal=journal,
             )
     print("\n=== Night summary ===")
-    for result in results:
+    for result in journal.summary_lines:
         print(f"- {result}")
     print("Morning audit: WORKLOG.md, the pull requests, and every issue labeled needs-human.")
+    journal.log(
+        text=f"night loop finished: {len(journal.summary_lines)} result line(s) on stdout",
+    )
     return EXIT_CODE_ALL_ISSUES_PROCESSED
 
 
