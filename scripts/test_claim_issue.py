@@ -7,7 +7,7 @@ import httpx
 import pytest
 
 import claim_issue
-from claim_issue import IssueIdentifier
+from claim_issue import ItemIdentifier
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -31,7 +31,9 @@ def issue_payload(
 def test_claim_is_allowed_on_a_plain_open_issue() -> None:
     """An open issue without the claim label can be claimed."""
     claim_issue.claim_is_allowed(
-        issue=issue_payload([{"name": "enhancement"}]), issue_number=IssueIdentifier(12)
+        issue=issue_payload([{"name": "enhancement"}]),
+        item_number=ItemIdentifier(12),
+        expected_kind="issue",
     )
 
 
@@ -39,7 +41,9 @@ def test_claim_refuses_a_pull_request() -> None:
     """A pull request is not an issue: refuse with criteria-unmet."""
     with pytest.raises(SystemExit) as excinfo:
         claim_issue.claim_is_allowed(
-            issue=issue_payload([], is_pull_request=True), issue_number=IssueIdentifier(12)
+            issue=issue_payload([], is_pull_request=True),
+            item_number=ItemIdentifier(12),
+            expected_kind="issue",
         )
     assert excinfo.value.code == claim_issue.EXIT_CODE_CRITERIA_UNMET
 
@@ -49,7 +53,8 @@ def test_claim_refuses_an_already_claimed_issue() -> None:
     with pytest.raises(SystemExit) as excinfo:
         claim_issue.claim_is_allowed(
             issue=issue_payload([{"name": claim_issue.CLAIM_LABEL_NAME}]),
-            issue_number=IssueIdentifier(12),
+            item_number=ItemIdentifier(12),
+            expected_kind="issue",
         )
     assert excinfo.value.code == claim_issue.EXIT_CODE_CRITERIA_UNMET
 
@@ -59,7 +64,9 @@ def test_claim_refuses_a_malformed_labels_payload() -> None:
     payload = issue_payload([])
     payload["labels"] = "night-claimed"
     with pytest.raises(SystemExit) as excinfo:
-        claim_issue.claim_is_allowed(issue=payload, issue_number=IssueIdentifier(12))
+        claim_issue.claim_is_allowed(
+            issue=payload, item_number=ItemIdentifier(12), expected_kind="issue"
+        )
     assert excinfo.value.code == claim_issue.EXIT_CODE_PROTOCOL_FAILURE
 
 
@@ -68,7 +75,9 @@ def test_claim_refuses_non_dict_label_entries() -> None:
     payload = issue_payload([])
     payload["labels"] = ["night-claimed"]
     with pytest.raises(SystemExit) as excinfo:
-        claim_issue.claim_is_allowed(issue=payload, issue_number=IssueIdentifier(12))
+        claim_issue.claim_is_allowed(
+            issue=payload, item_number=ItemIdentifier(12), expected_kind="issue"
+        )
     assert excinfo.value.code == claim_issue.EXIT_CODE_PROTOCOL_FAILURE
 
 
@@ -76,7 +85,7 @@ def test_fetch_issue_returns_payload_on_success() -> None:
     """A 2xx issue fetch returns the issue dict."""
     client = client_with(lambda request: httpx.Response(200, json=issue_payload([])))
     issue = claim_issue.fetch_issue(
-        http_client=client, repository_slug="o/r", issue_number=IssueIdentifier(12)
+        http_client=client, repository_slug="o/r", item_number=ItemIdentifier(12)
     )
     assert issue["number"] == 12
 
@@ -86,7 +95,7 @@ def test_fetch_issue_api_error_is_criteria_unmet() -> None:
     client = client_with(lambda request: httpx.Response(404, json={}))
     with pytest.raises(SystemExit) as excinfo:
         claim_issue.fetch_issue(
-            http_client=client, repository_slug="o/r", issue_number=IssueIdentifier(12)
+            http_client=client, repository_slug="o/r", item_number=ItemIdentifier(12)
         )
     assert excinfo.value.code == claim_issue.EXIT_CODE_CRITERIA_UNMET
 
@@ -96,7 +105,7 @@ def test_fetch_issue_malformed_json_is_protocol_failure() -> None:
     client = client_with(lambda request: httpx.Response(200, content=b"not json{"))
     with pytest.raises(SystemExit) as excinfo:
         claim_issue.fetch_issue(
-            http_client=client, repository_slug="o/r", issue_number=IssueIdentifier(12)
+            http_client=client, repository_slug="o/r", item_number=ItemIdentifier(12)
         )
     assert excinfo.value.code == claim_issue.EXIT_CODE_PROTOCOL_FAILURE
 
@@ -147,7 +156,7 @@ def test_add_claim_label_posts_the_label() -> None:
         return httpx.Response(200, json=[{"name": "night-claimed"}])
 
     claim_issue.add_claim_label(
-        http_client=client_with(handler), repository_slug="o/r", issue_number=IssueIdentifier(12)
+        http_client=client_with(handler), repository_slug="o/r", issue_number=ItemIdentifier(12)
     )
     assert requests_seen[-1].url.path.endswith("/issues/12/labels")
 
@@ -157,15 +166,28 @@ def test_add_claim_label_failure_is_protocol_failure() -> None:
     client = client_with(lambda request: httpx.Response(500, json={}))
     with pytest.raises(SystemExit) as excinfo:
         claim_issue.add_claim_label(
-            http_client=client, repository_slug="o/r", issue_number=IssueIdentifier(12)
+            http_client=client, repository_slug="o/r", issue_number=ItemIdentifier(12)
         )
     assert excinfo.value.code == claim_issue.EXIT_CODE_PROTOCOL_FAILURE
 
 
-def test_parse_arguments_requires_an_issue_number() -> None:
-    """The script contract: --issue is a required integer."""
+def test_parse_arguments_accepts_issue_or_pr() -> None:
+    """The script contract: exactly one of --issue / --pr."""
     arguments = claim_issue.parse_arguments(command_line_arguments=["--issue", "12"])
-    assert arguments.issue == 12
+    assert arguments.issue == 12 and arguments.pr is None
+    arguments = claim_issue.parse_arguments(command_line_arguments=["--pr", "53"])
+    assert arguments.pr == 53 and arguments.issue is None
+
+
+def test_claim_refuses_kind_mismatch_for_pr() -> None:
+    """An issue number passed to --pr fails closed: criteria-unmet."""
+    with pytest.raises(SystemExit) as excinfo:
+        claim_issue.claim_is_allowed(
+            issue=issue_payload([]),
+            item_number=ItemIdentifier(12),
+            expected_kind="pull_request",
+        )
+    assert excinfo.value.code == claim_issue.EXIT_CODE_CRITERIA_UNMET
 
 
 def test_request_or_fail_transport_error_is_protocol_failure() -> None:
