@@ -3,7 +3,7 @@
 import httpx
 import pytest
 
-import merge_pr
+from scripts import merge_pr
 
 
 def client_returning(payload: object, status_code: int = 200) -> httpx.Client:

@@ -6,8 +6,8 @@ from typing import TYPE_CHECKING
 import httpx
 import pytest
 
-import claim_issue
-from claim_issue import ItemIdentifier
+from scripts import claim_issue
+from scripts.claim_issue import ItemIdentifier
 
 if TYPE_CHECKING:
     from collections.abc import Callable

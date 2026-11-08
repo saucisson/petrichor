@@ -5,7 +5,7 @@ from typing import Protocol
 import httpx
 import pytest
 
-import pr_review
+from scripts import pr_review
 
 HEAD_SHA = "abc123"
 PULL_REQUEST: dict[str, object] = {"head": {"sha": HEAD_SHA}}
