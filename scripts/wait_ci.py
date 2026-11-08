@@ -53,6 +53,7 @@ TIMEOUT_VARIABLE = "WAIT_CI_TIMEOUT_SECONDS"
 DEFAULT_POLL_INTERVAL_SECONDS = 20
 DEFAULT_TIMEOUT_SECONDS = 1800
 NOT_FOUND_STATUS_CODE = 404
+UNNAMED_CHECK_NAME = "unnamed check"
 
 PollStatus = Literal["fetch-failed", "no-checks", "pending", "green", "failed"]
 
@@ -231,7 +232,7 @@ def poll_once(
     if not check_runs:
         return POLL_STATUS_NO_CHECKS, head_sha, ""
     failed = [
-        str(check_run.get("name", "unnamed check"))
+        str(check_run.get("name", UNNAMED_CHECK_NAME))
         for check_run in check_runs
         if check_run.get("status") == "completed" and check_run.get("conclusion") != "success"
     ]

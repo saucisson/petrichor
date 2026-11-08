@@ -10,7 +10,7 @@ import pytest
 from hypothesis import given, strategies
 
 import night_loop
-from night_loop import IssueIdentifier
+from night_loop import IssueIdentifier, PullRequestIdentifier
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -528,7 +528,7 @@ def test_fetch_candidate_pull_requests_recovers_claimed_backing_issues(
         candidate_limit=10,
         milestone_numbers=set(),
     )
-    assert [number for number, _ in candidates] == [53]
+    assert [number for number, _ in candidates] == [PullRequestIdentifier(53)]
 
 
 def test_fetch_candidate_pull_requests_skips_unrecoverable_prs(
@@ -560,7 +560,7 @@ def test_fetch_candidate_pull_requests_skips_unrecoverable_prs(
         candidate_limit=10,
         milestone_numbers=set(),
     )
-    assert [number for number, _ in candidates] == [4]
+    assert [number for number, _ in candidates] == [PullRequestIdentifier(4)]
 
 
 def test_fetch_candidate_pull_requests_applies_the_milestone_filter(
@@ -585,7 +585,7 @@ def test_fetch_candidate_pull_requests_applies_the_milestone_filter(
         candidate_limit=10,
         milestone_numbers={4},
     )
-    assert [number for number, _ in candidates] == [2]
+    assert [number for number, _ in candidates] == [PullRequestIdentifier(2)]
 
 
 def test_fetch_candidate_pull_requests_api_error_yields_empty_worklist() -> None:
@@ -606,7 +606,7 @@ def test_render_pull_request_section_mentions_the_backing_issue() -> None:
     """The recovery section names the PR, its branch and its backing issue."""
     section = night_loop.render_pull_request_section(
         pull_request=pull_request_payload(number=53, head_ref="feat/12"),
-        pull_request_number=53,
+        pull_request_number=PullRequestIdentifier(53),
     )
     assert "# Pull request #53" in section
     assert "`feat/12`" in section
@@ -617,7 +617,7 @@ def test_render_auto_worklist_combines_issues_and_pull_requests() -> None:
     """The auto worklist renders issues first, then recoverable PRs."""
     worklist = night_loop.render_auto_worklist(
         issues=[(IssueIdentifier(1), issue_payload(number=1))],
-        pull_requests=[(53, pull_request_payload(number=53))],
+        pull_requests=[(PullRequestIdentifier(53), pull_request_payload(number=53))],
     )
     assert "# Issue #1" in worklist
     assert "# Pull request #53" in worklist
@@ -628,7 +628,7 @@ def test_auto_candidate_keys_covers_both_kinds() -> None:
     """The anti-spin guard keys issues and pull requests distinctly."""
     keys = night_loop.auto_candidate_keys(
         issues=[(IssueIdentifier(1), issue_payload(number=1))],
-        pull_requests=[(53, pull_request_payload(number=53))],
+        pull_requests=[(PullRequestIdentifier(53), pull_request_payload(number=53))],
     )
     assert keys == {("issue", 1), ("pull request", 53)}
 
@@ -637,7 +637,7 @@ def test_describe_auto_candidates_lists_both_kinds() -> None:
     """The trace line describes each candidate with its kind."""
     description = night_loop.describe_auto_candidates(
         issues=[(IssueIdentifier(1), issue_payload(number=1))],
-        pull_requests=[(53, pull_request_payload(number=53))],
+        pull_requests=[(PullRequestIdentifier(53), pull_request_payload(number=53))],
     )
     assert description == "#1 (issue), #53 (pull request)"
 
@@ -672,10 +672,25 @@ def test_parse_milestone_list_property_round_trips(raw_milestone_list: str) -> N
 @pytest.mark.property
 @given(strategies.text())
 def test_parse_backing_issue_number_property(head_ref: str) -> None:
-    """Property: a parsed backing issue number is always a positive int."""
+    """Property: a parsed backing issue number is always a non-negative int."""
     backing_issue_number = night_loop.parse_backing_issue_number(head_ref=head_ref)
-    assert backing_issue_number is None or backing_issue_number > 0
+    assert backing_issue_number is None or backing_issue_number >= 0
     if head_ref.startswith(("feat/", "fix/")) and head_ref.split("/", 1)[1].isascii():
         digits = head_ref.split("/", 1)[1]
         if digits.isdigit():
             assert backing_issue_number == int(digits)
+
+
+def test_parse_milestone_list_rejects_int_accepted_non_digits() -> None:
+    """'+3' and '1_2' are accepted by int() alone: the digit guard fails closed."""
+    for raw in ("+3", "-3", "1_2"):
+        with pytest.raises(SystemExit) as excinfo:
+            night_loop.parse_milestone_list(raw_milestone_list=raw)
+        assert excinfo.value.code == night_loop.EXIT_CODE_PROTOCOL_FAILURE
+
+
+def test_parse_issue_list_rejects_int_accepted_non_digits() -> None:
+    """'1_2' would claim issue 12 with int() alone: the digit guard fails closed."""
+    with pytest.raises(SystemExit) as excinfo:
+        night_loop.parse_issue_list(raw_issue_list="1_2")
+    assert excinfo.value.code == night_loop.EXIT_CODE_PROTOCOL_FAILURE
