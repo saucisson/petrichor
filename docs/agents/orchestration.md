@@ -134,7 +134,9 @@ and a session that dies at 3 a.m. costs one issue, not the night.
 - **Recovery** (auto-discovery only): a session may pick, or be
   handed, a pull request an earlier session left open. A pull request
   is recoverable when it is open, targets `daily`, its head branch is
-  `feat/N` or `fix/N`, its backing issue #N carries `night-claimed`
+  `feat/N` or `fix/N` (a descriptive suffix after the number, e.g.
+  `feat/2-canonical-petri-json`, is tolerated - the number decides
+  the backing issue), its backing issue #N carries `night-claimed`
   (the mark of the earlier attempt), and the pull request itself is
   not claimed by another recovery session. The session claims it
   (`make claim-pr PR=N`) before touching it, diagnoses it with
@@ -164,6 +166,16 @@ and a session that dies at 3 a.m. costs one issue, not the night.
   `make wait-ci PR=N` (ADR-0018), inside the session's time budget -
   "I will continue once CI finishes" is the attended reflex of a
   session nobody will resume.
+- A size-budget BLOCKING is resolved by a split proposal written into
+  the pull request body with `make update-pr PR=N BODY_FILE=...`
+  (ADR-0019 - the only body-update path; it replaces the whole body,
+  so the session composes the existing body plus the proposal first).
+  Raw API writes are denied unattended, and that is the allowlist
+  working - the driver is the answer, not a bypass.
+- The loop speaks to a human on stdout: one line per session and one
+  verdict at the end. The verbose trace - full candidate lists,
+  anti-spin decisions, fetch warnings - lands in
+  `.night/night-loop.log` (override: `NIGHT_LOG_FILE`, ADR-0017).
 - The morning audit is unchanged and is the whole point: `WORKLOG.md`,
   the pull requests, every `needs-human` issue, and every
   `night-claimed` issue tell the night's story (§7).

@@ -49,6 +49,12 @@ Then:
    resume you. Exit 0, then `make review PR=N`; exit 1 means fix,
    push, wait again.
 6. Address every BLOCKING and TO-FIX finding, push, wait, re-review.
+   A size-budget BLOCKING (diff over ~500 lines) is resolved by a
+   PR-level split proposal: compose the new body file (the pull
+   request's existing body plus the proposal) and write it with
+   `make update-pr PR=N BODY_FILE=...` - the only body-update path,
+   and it REPLACES the whole body, so keep the existing body in the
+   file. Then re-review.
 7. Merge via `make merge-pr PR=N`.
 8. STOP. Do not start another item: the loop owns the next session
    and the next worklist.
