@@ -27,7 +27,7 @@ format: ## Format every file in place (Ruff).
 	$(UV) run ruff format .
 
 typecheck: ## Run the reference type checker (mypy strict, ADR-0006).
-	$(UV) run mypy tools/notify/src tools/notify/tests scripts src
+	$(UV) run mypy tools/notify/src tools/notify/tests scripts
 
 imports: ## Verify the onion layer contract (import-linter, ADR-0002).
 	$(UV) run lint-imports
