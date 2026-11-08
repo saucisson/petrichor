@@ -44,6 +44,14 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-08 - template sync 2aa4d27, part 4a: day + session domains (day-report, sync-daily, agent-review; ADR-0020/0021)
+
+- **Issue**: none (human-directed template sync).
+- **Done**: `scripts/day.py` (day-report + sync-daily subcommands, ADR-0020) and `scripts/session.py` (agent-review) from template @ 2aa4d27 replace `day_report.py` and `agent_review.py`; `__main__.py` registers `(pulls, ci, claims, merge, day, session)`; Makefile `day-report` now calls `python -m scripts day-report` and gains the `sync-daily` target (`python -m scripts sync-daily`). No test files existed for the replaced modules; dispatcher smoke-tested via `python -m scripts --help`.
+- **Evidence**: run: `make check` green (ruff + format, mypy strict, import-linter, 219 tests, coverage 94.76%) and `python -m scripts --help` lists day-report/sync-daily/agent-review. Not run: CI/review until push; `make sync-daily` itself not run yet (needs part 4b merged first).
+- **Judgement calls**: docs/ references to `agent_review.py` are constitutional and stay on the `template/constitutional-2aa4d27` branch, not in this PR.
+- **Escalations**: none.
+
 ## 2026-11-08 - template sync 2aa4d27, part 3/4: ci + claims + merge domains (ADR-0021)
 
 - **Issue**: none (human-directed template sync).
