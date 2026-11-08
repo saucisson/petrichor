@@ -59,7 +59,7 @@ def fetch_pull_request(
 def fetch_check_runs(
     *,
     http_client: httpx.Client,
-    repository_slug: str,
+    repository_slug: RepositorySlug,
     head_sha: HeadSha,
 ) -> list[dict[str, object]]:
     """List the CI check runs of the pull request head, or fail closed."""
