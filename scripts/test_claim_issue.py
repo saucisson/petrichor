@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 import claim_issue
+from claim_issue import IssueIdentifier
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -28,13 +29,17 @@ def issue_payload(
 
 def test_claim_is_allowed_on_a_plain_open_issue() -> None:
     """An open issue without the claim label can be claimed."""
-    claim_issue.claim_is_allowed(issue=issue_payload([{"name": "enhancement"}]), issue_number=12)
+    claim_issue.claim_is_allowed(
+        issue=issue_payload([{"name": "enhancement"}]), issue_number=IssueIdentifier(12)
+    )
 
 
 def test_claim_refuses_a_pull_request() -> None:
     """A pull request is not an issue: refuse with criteria-unmet."""
     with pytest.raises(SystemExit) as excinfo:
-        claim_issue.claim_is_allowed(issue=issue_payload([], is_pull_request=True), issue_number=12)
+        claim_issue.claim_is_allowed(
+            issue=issue_payload([], is_pull_request=True), issue_number=IssueIdentifier(12)
+        )
     assert excinfo.value.code == claim_issue.EXIT_CODE_CRITERIA_UNMET
 
 
@@ -42,7 +47,8 @@ def test_claim_refuses_an_already_claimed_issue() -> None:
     """The night-claimed label blocks a second session: criteria-unmet."""
     with pytest.raises(SystemExit) as excinfo:
         claim_issue.claim_is_allowed(
-            issue=issue_payload([{"name": claim_issue.CLAIM_LABEL_NAME}]), issue_number=12
+            issue=issue_payload([{"name": claim_issue.CLAIM_LABEL_NAME}]),
+            issue_number=IssueIdentifier(12),
         )
     assert excinfo.value.code == claim_issue.EXIT_CODE_CRITERIA_UNMET
 
@@ -50,7 +56,9 @@ def test_claim_refuses_an_already_claimed_issue() -> None:
 def test_fetch_issue_returns_payload_on_success() -> None:
     """A 2xx issue fetch returns the issue dict."""
     client = client_with(lambda request: httpx.Response(200, json=issue_payload([])))
-    issue = claim_issue.fetch_issue(http_client=client, repository_slug="o/r", issue_number=12)
+    issue = claim_issue.fetch_issue(
+        http_client=client, repository_slug="o/r", issue_number=IssueIdentifier(12)
+    )
     assert issue["number"] == 12
 
 
@@ -58,14 +66,23 @@ def test_fetch_issue_api_error_is_criteria_unmet() -> None:
     """A failed fetch means no claim, no work: criteria-unmet, not a crash."""
     client = client_with(lambda request: httpx.Response(404, json={}))
     with pytest.raises(SystemExit) as excinfo:
-        claim_issue.fetch_issue(http_client=client, repository_slug="o/r", issue_number=12)
+        claim_issue.fetch_issue(
+            http_client=client, repository_slug="o/r", issue_number=IssueIdentifier(12)
+        )
     assert excinfo.value.code == claim_issue.EXIT_CODE_CRITERIA_UNMET
 
 
 def test_ensure_claim_label_is_idempotent_when_label_exists() -> None:
-    """An existing label: no creation call needed."""
-    client = client_with(lambda request: httpx.Response(200, json={"name": "night-claimed"}))
-    claim_issue.ensure_claim_label(http_client=client, repository_slug="o/r")
+    """An existing label: only the GET happens, no creation POST."""
+    requests_seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests_seen.append(request)
+        return httpx.Response(200, json={"name": "night-claimed"})
+
+    claim_issue.ensure_claim_label(http_client=client_with(handler), repository_slug="o/r")
+    assert len(requests_seen) == 1
+    assert requests_seen[0].method == "GET"
 
 
 def test_ensure_claim_label_creates_it_once() -> None:
@@ -101,7 +118,7 @@ def test_add_claim_label_posts_the_label() -> None:
         return httpx.Response(200, json=[{"name": "night-claimed"}])
 
     claim_issue.add_claim_label(
-        http_client=client_with(handler), repository_slug="o/r", issue_number=12
+        http_client=client_with(handler), repository_slug="o/r", issue_number=IssueIdentifier(12)
     )
     assert requests_seen[-1].url.path.endswith("/issues/12/labels")
 
@@ -110,7 +127,9 @@ def test_add_claim_label_failure_is_protocol_failure() -> None:
     """A failed label post means no claim, no work: protocol failure."""
     client = client_with(lambda request: httpx.Response(500, json={}))
     with pytest.raises(SystemExit) as excinfo:
-        claim_issue.add_claim_label(http_client=client, repository_slug="o/r", issue_number=12)
+        claim_issue.add_claim_label(
+            http_client=client, repository_slug="o/r", issue_number=IssueIdentifier(12)
+        )
     assert excinfo.value.code == claim_issue.EXIT_CODE_PROTOCOL_FAILURE
 
 
@@ -147,6 +166,7 @@ def test_request_or_fail_passes_json_payload() -> None:
         json_payload={"labels": ["night-claimed"]},
     )
     assert requests_seen[-1].method == "POST"
+    assert b"night-claimed" in requests_seen[-1].content
 
 
 def test_resolve_repository_slug_from_origin_remote() -> None:
