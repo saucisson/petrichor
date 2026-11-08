@@ -10,7 +10,7 @@ DAY_TAG := daily-$(shell date +%F)
 .DEFAULT_GOAL := help
 .PHONY: help install lint format typecheck imports test check security build \
         day-start day-report smoke-test mutate notify review merge-pr pr claim \
-        claim-pr update-pr wait-ci night review-bundle clean
+        claim-pr update-pr wait-ci night review-bundle sync-daily clean
 
 help: ## List available targets with their description.
 	@grep --extended-regexp '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -47,7 +47,10 @@ day-start: ## Tag the morning restore point on `daily` (docs/branching.md).
 	git tag "$(DAY_TAG)"
 
 day-report: ## Print the end-of-day report since the morning tag.
-	$(PYTHON) scripts/day_report.py --since-tag "$(DAY_TAG)"
+	$(PYTHON) -m scripts day-report --since-tag "$(DAY_TAG)"
+
+sync-daily: ## Rebase daily onto origin/main, early in the day, push with lease (ADR-0020).
+	$(PYTHON) -m scripts sync-daily
 
 smoke-test: ## Verify the notification pipeline via console delivery.
 	$(CONSOLE_SCRIPT) smoke
