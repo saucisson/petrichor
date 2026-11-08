@@ -129,9 +129,17 @@ def fetch_issue(
     item_number: int,
 ) -> dict[str, object]:
     """Fetch the item, or fail closed: no item, no update."""
-    response = http_client.get(
-        f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/issues/{item_number}"
-    )
+    try:
+        response = http_client.get(
+            f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/issues/{item_number}"
+        )
+    except httpx.TransportError as transport_error:
+        print(
+            f"Error: network failure while fetching #{item_number}:"
+            f" {transport_error} - the body is unchanged.",
+            file=sys.stderr,
+        )
+        raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE) from transport_error
     if not response.is_success:
         print(
             f"Error: could not fetch #{item_number}"
@@ -170,10 +178,18 @@ def write_body(
     new_body: str,
 ) -> None:
     """Replace the pull request body; a failure means no update."""
-    response = http_client.patch(
-        f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/pulls/{pull_request_number}",
-        json={"body": new_body},
-    )
+    try:
+        response = http_client.patch(
+            f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/pulls/{pull_request_number}",
+            json={"body": new_body},
+        )
+    except httpx.TransportError as transport_error:
+        print(
+            f"Error: network failure while updating pull request"
+            f" #{pull_request_number}: {transport_error} - the body is unchanged.",
+            file=sys.stderr,
+        )
+        raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE) from transport_error
     if not response.is_success:
         print(
             f"Error: could not update pull request #{pull_request_number}"
