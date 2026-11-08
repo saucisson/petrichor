@@ -1,5 +1,6 @@
 """Tests for the unattended night loop night_loop.py (ADR-0017, template 3463aea)."""
 
+import os
 import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -20,10 +21,10 @@ def client_with(handler: Callable[[httpx.Request], httpx.Response]) -> httpx.Cli
 
 
 def issue_payload(
+    *,
     number: int,
     labels: list[dict[str, str]] | None = None,
     body: str = "acceptance criteria",
-    *,
     is_pull_request: bool = False,
 ) -> dict[str, object]:
     """Build a GitHub issue payload."""
@@ -88,31 +89,31 @@ def test_read_integer_setting_rejects_non_integer(
 
 def test_triage_skips_pull_requests() -> None:
     """A pull request is never work: the triage gate skips it."""
-    reason = night_loop.triage_issue(issue=issue_payload(1, is_pull_request=True))
+    reason = night_loop.triage_issue(issue=issue_payload(number=1, is_pull_request=True))
     assert reason is not None and "pull request" in reason
 
 
 def test_triage_skips_blocked_needs_human_and_claimed() -> None:
     """The three skip labels are all honored by the triage gate."""
     for label in night_loop.TRIAGE_SKIP_LABELS:
-        reason = night_loop.triage_issue(issue=issue_payload(1, [{"name": label}]))
+        reason = night_loop.triage_issue(issue=issue_payload(number=1, labels=[{"name": label}]))
         assert reason is not None and label in reason
 
 
 def test_triage_skips_issues_without_acceptance_criteria() -> None:
     """An empty body fails the triage gate."""
-    reason = night_loop.triage_issue(issue=issue_payload(1, body="  "))
+    reason = night_loop.triage_issue(issue=issue_payload(number=1, body="  "))
     assert reason is not None and "acceptance criteria" in reason
 
 
 def test_triage_accepts_a_plain_open_issue() -> None:
     """An open issue with a body passes the gate."""
-    assert night_loop.triage_issue(issue=issue_payload(1)) is None
+    assert night_loop.triage_issue(issue=issue_payload(number=1)) is None
 
 
 def test_triage_skips_a_malformed_labels_payload() -> None:
     """A non-list or non-dict labels payload is skipped, never trusted."""
-    payload = issue_payload(1)
+    payload = issue_payload(number=1)
     payload["labels"] = ["blocked"]
     reason = night_loop.triage_issue(issue=payload)
     assert reason is not None and "malformed" in reason
@@ -121,7 +122,7 @@ def test_triage_skips_a_malformed_labels_payload() -> None:
 def test_render_issue_section_includes_title_and_body() -> None:
     """The prompt's issue section carries the issue number, title and body."""
     section = night_loop.render_issue_section(
-        issue=issue_payload(7), issue_number=IssueIdentifier(7)
+        issue=issue_payload(number=7), issue_number=IssueIdentifier(7)
     )
     assert "# Issue #7: Issue 7" in section
     assert "acceptance criteria" in section
@@ -130,10 +131,10 @@ def test_render_issue_section_includes_title_and_body() -> None:
 def test_fetch_candidate_issues_filters_and_sorts() -> None:
     """The worklist excludes triaged-out issues and sorts by number."""
     payload = [
-        issue_payload(3),
-        issue_payload(1),
-        issue_payload(2, [{"name": "blocked"}]),
-        issue_payload(4, is_pull_request=True),
+        issue_payload(number=3),
+        issue_payload(number=1),
+        issue_payload(number=2, labels=[{"name": "blocked"}]),
+        issue_payload(number=4, is_pull_request=True),
     ]
     client = client_with(lambda request: httpx.Response(200, json=payload))
     candidates = night_loop.fetch_candidate_issues(
@@ -155,7 +156,10 @@ def test_fetch_candidate_issues_api_error_yields_empty_worklist() -> None:
 
 def test_render_worklist_joins_issue_sections() -> None:
     """The worklist renders one section per candidate, separated."""
-    candidates = [(IssueIdentifier(1), issue_payload(1)), (IssueIdentifier(2), issue_payload(2))]
+    candidates = [
+        (IssueIdentifier(1), issue_payload(number=1)),
+        (IssueIdentifier(2), issue_payload(number=2)),
+    ]
     worklist = night_loop.render_worklist(candidates=candidates)
     assert "# Issue #1" in worklist and "# Issue #2" in worklist and "---" in worklist
 
@@ -250,7 +254,7 @@ def test_run_explicit_directive_runs_one_session_per_eligible_issue(
         return 0, 5
 
     monkeypatch.setattr(night_loop, "run_developer_session", fake_session)
-    client = client_with(lambda request: httpx.Response(200, json=issue_payload(12)))
+    client = client_with(lambda request: httpx.Response(200, json=issue_payload(number=12)))
     arguments = night_loop.parse_arguments(command_line_arguments=[])
     results: list[str] = []
     night_loop.run_explicit_directive(
@@ -281,7 +285,9 @@ def test_run_explicit_directive_skips_triaged_issues(
 
     monkeypatch.setattr(night_loop, "run_developer_session", fake_session)
     client = client_with(
-        lambda request: httpx.Response(200, json=issue_payload(12, [{"name": "blocked"}]))
+        lambda request: httpx.Response(
+            200, json=issue_payload(number=12, labels=[{"name": "blocked"}])
+        )
     )
     arguments = night_loop.parse_arguments(command_line_arguments=[])
     results: list[str] = []
@@ -307,7 +313,7 @@ def test_run_auto_discovered_sessions_stops_when_nothing_is_claimed(
     def fake_candidates(**kwargs: object) -> list[tuple[IssueIdentifier, dict[str, object]]]:
         nonlocal derivations
         derivations += 1
-        return [(IssueIdentifier(1), issue_payload(1))]
+        return [(IssueIdentifier(1), issue_payload(number=1))]
 
     monkeypatch.setattr(night_loop, "fetch_candidate_issues", fake_candidates)
     monkeypatch.setattr(night_loop, "run_developer_session", lambda **kwargs: (0, 3))
@@ -351,3 +357,36 @@ def test_run_auto_discovered_sessions_stops_when_worklist_is_empty(
     )
     assert sessions == []
     assert results == []
+
+
+def test_parse_issue_list_rejects_unicode_digits(monkeypatch: pytest.MonkeyPatch) -> None:
+    """'²'.isdigit() is True but int('²') raises: the guard must fail closed."""
+    with pytest.raises(SystemExit) as excinfo:
+        night_loop.parse_issue_list(raw_issue_list="²")
+    assert excinfo.value.code == night_loop.EXIT_CODE_PROTOCOL_FAILURE
+
+
+def test_load_github_token_absent_is_protocol_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No token in the environment: fail closed with exit 2."""
+    monkeypatch.delenv(night_loop.GITHUB_TOKEN_VARIABLE, raising=False)
+    with pytest.raises(SystemExit) as excinfo:
+        night_loop.load_github_token()
+    assert excinfo.value.code == night_loop.EXIT_CODE_PROTOCOL_FAILURE
+
+
+def test_load_github_token_present_is_returned(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A token in the environment is returned stripped."""
+    monkeypatch.setenv(night_loop.GITHUB_TOKEN_VARIABLE, "  token-value  ")
+    assert night_loop.load_github_token() == "token-value"
+
+
+def test_load_environment_file_sets_unset_variables(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """KEY=VALUE pairs from .env land in the environment when unset."""
+    environment_file = tmp_path / ".env"
+    environment_file.write_text("NIGHT_TEST_VARIABLE=from-dotenv\n# comment\n\n", encoding="utf-8")
+    monkeypatch.setattr(night_loop, "REPOSITORY_ROOT", tmp_path)
+    monkeypatch.delenv("NIGHT_TEST_VARIABLE", raising=False)
+    night_loop.load_environment_file()
+    assert os.environ["NIGHT_TEST_VARIABLE"] == "from-dotenv"
