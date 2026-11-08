@@ -36,9 +36,10 @@ If you are unsure which role this session assigns you, stop and ask.
 - Unattended: `make night [ISSUES="12,13,14"]` runs the loop headlessly
   overnight - one fresh session per issue (ADR-0017). With ISSUES the
   human writes the directive; without it, each session picks one
-  unclaimed open issue and claims it first (`make claim ISSUE=N`).
-  Nobody answers approvals: a denied call is a stop-and-escalate
-  signal, never an obstacle to route around.
+  unclaimed item - an open issue or a pull request an earlier session
+  left open - and claims it first (`make claim ISSUE=N` or
+  `make claim-pr PR=N`). Nobody answers approvals: a denied call is a
+  stop-and-escalate signal, never an obstacle to route around.
 - The morning directive (issue list) is set by the human and is **never
   edited by agents**.
 - End of day: freeze merges, `make day-report`, `make smoke-test`;
