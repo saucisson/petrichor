@@ -44,6 +44,14 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-08 - daily rebased onto origin/main (ADR-0020, human-authorized rebase)
+
+- **Issue**: none (human-directed: "J'ai mis à jour project-template pour que tu aies le droit de faire un rebase").
+- **Done**: `daily` rebased onto `origin/main` (constitutional commit 1e5da69 = ADR-0100 + gate config). Conflict resolution rule: constitutional files (AGENTS.md, docs/, .pre-commit-config.yaml, pyproject.toml, .vibe/) take main's version; code and WORKLOG take daily's. `make sync-daily` itself refused (exit 1, conflict abort, daily untouched) as designed; the rebase was then performed manually under the human's explicit authorization, verified (origin/main is ancestor, 40 daily-only commits replayed, commit count preserved per commit), and pushed with --force-with-lease. The Makefile `typecheck` line keeps daily's scope (no `src` yet): `src/petrichor` arrives with PR #59, and adding `src` before that would make daily's push CI red; the line is aligned right after PR #59 merges.
+- **Evidence**: run: `make check` green on the rebased daily (ruff + format, mypy strict, import-linter, 261 tests, coverage 94.76%; coverage warns petrichor not imported until PR #59 lands, floor still met). Rebase verified: `git merge-base --is-ancestor origin/main HEAD` OK. Not run: CI on the pushed daily until push.
+- **Judgement calls**: conflict resolution is normally a human decision (ADR-0020); the human pre-authorized this rebase in session.
+- **Escalations**: none (authorization given in session).
+
 ## 2026-11-08 - template sync 2aa4d27, part 4c of 4c: night domain (ADR-0017/0021) - template sync complete
 
 - **Issue**: none (human-directed template sync).
