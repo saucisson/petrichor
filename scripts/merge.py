@@ -1,106 +1,54 @@
 """Merge driver: merge one reviewed pull request into daily (ADR-0009).
 
-The developer agent merges each completed pull request into `daily` -
-through this script and nothing else. The script IS the codified merge
-criteria: it refuses to merge unless the review report exists, was
-written for THIS pull request and its CURRENT head (review context),
-contains zero BLOCKING findings, the pull request is open and
-mergeable, and every check run on its head has concluded "success".
-Then it merges through the GitHub API with the linear method the
-repository allows - squash preferred, a rebase merge as the fallback
-when squash is disabled; a merge commit is never issued (linear
-history on `daily`, ADR-0009) - and deletes the branch.
+The developer agent merges each completed pull request into ``daily``
+- through this driver and nothing else. The driver IS the codified
+merge criteria: it refuses to merge unless the review report exists,
+was written for THIS pull request and its CURRENT head (review
+context), contains zero BLOCKING findings, the pull request is open
+and mergeable, and every check run on its head has concluded
+"success". Then it merges through the GitHub API with the linear
+method the repository allows - squash preferred, a rebase merge as
+the fallback when squash is disabled; a merge commit is never issued
+(linear history on ``daily``, ADR-0009) - and deletes the branch.
 
-The reviewer session never merges: it writes the report; this script
-reads it. `main` is never merged here - that stays a human action.
-
-Usage::
-
-    make merge-pr PR=42
+The reviewer session never merges: it writes the report; this driver
+reads it. ``main`` is never merged here - that stays a human action.
 """
 
-import argparse
 import json
-import os
-import subprocess
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import httpx
 
+from scripts._github import (
+    check_runs_allow_merge,
+    extract_head_ref,
+    extract_head_sha,
+    fetch_check_runs,
+    fetch_pull_request,
+    open_github_client,
+    request_or_fail,
+)
+from scripts._shared import (
+    EXIT_CODE_CRITERIA_UNMET,
+    EXIT_CODE_PROTOCOL_FAILURE,
+    EXIT_CODE_SUCCESS,
+    GITHUB_API_BASE_URL,
+    load_github_token,
+    resolve_repository_slug,
+)
+
 if TYPE_CHECKING:
+    import argparse
     from collections.abc import Sequence
 
-GITHUB_API_BASE_URL = "https://api.github.com"
-GITHUB_TOKEN_VARIABLE = "GITHUB_TOKEN"  # noqa: S105 - an env var NAME, never a secret
-ENVIRONMENT_FILE_NAME = ".env"
 DEFAULT_REPORT_FILE_NAME = ".review/review-report.json"
 DEFAULT_CONTEXT_FILE_NAME = ".review/review-context.json"
 MERGE_METHOD_PREFERENCE = ("squash", "rebase")
 METHOD_NOT_ALLOWED_STATUS_CODE = 405
-
-REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
-
-EXIT_CODE_MERGED = 0
-EXIT_CODE_CRITERIA_UNMET = 1
-EXIT_CODE_PROTOCOL_FAILURE = 2
-
-
-def load_environment_file() -> None:
-    """Read KEY=VALUE pairs from .env into the environment if unset."""
-    environment_path = REPOSITORY_ROOT / ENVIRONMENT_FILE_NAME
-    if not environment_path.is_file():
-        return
-    for raw_line in environment_path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip())
-
-
-def load_github_token() -> str:
-    """Read the GitHub token; absent means protocol failure."""
-    github_token = os.environ.get(GITHUB_TOKEN_VARIABLE, "").strip()
-    if not github_token:
-        print(
-            f"Error: {GITHUB_TOKEN_VARIABLE} is not set - cannot reach the"
-            " GitHub API (fine-grained PAT: pull requests read/write,"
-            " repository contents read/write).",
-            file=sys.stderr,
-        )
-        raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
-    return github_token
-
-
-def resolve_repository_slug() -> str:
-    """Return "owner/repository" from the origin remote, or fail closed."""
-    completed_process = subprocess.run(
-        ["git", "remote", "get-url", "origin"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    remote_url = completed_process.stdout.strip()
-    marker = "github.com"
-    separator_index = remote_url.find(marker)
-    if separator_index == -1:
-        print(
-            f"Error: the origin remote is not on GitHub: {remote_url}",
-            file=sys.stderr,
-        )
-        raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
-    slug = remote_url[separator_index + len(marker) :]
-    slug = slug.removeprefix(":").removeprefix("/").removesuffix(".git").strip("/")
-    owner, separator, repository = slug.partition("/")
-    if not owner or not separator or not repository.strip("/"):
-        print(
-            f"Error: cannot parse owner/repository from remote: {remote_url}",
-            file=sys.stderr,
-        )
-        raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
-    return f"{owner}/{repository.strip('/')}"
+EXIT_CODE_MERGED = EXIT_CODE_SUCCESS  # a subcommand-local alias, same protocol code
 
 
 def load_review_report(*, report_file: str) -> dict[str, object]:
@@ -188,53 +136,6 @@ def check_review_context(
         raise SystemExit(EXIT_CODE_CRITERIA_UNMET)
 
 
-def fetch_pull_request(
-    *,
-    http_client: httpx.Client,
-    repository_slug: str,
-    pull_request_number: int,
-) -> dict[str, object]:
-    """Fetch the pull request, or fail closed."""
-    response = http_client.get(
-        f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/pulls/{pull_request_number}"
-    )
-    if not response.is_success:
-        print(
-            f"Error: the GitHub API returned {response.status_code}"
-            f" for pull request {pull_request_number}.",
-            file=sys.stderr,
-        )
-        raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
-    pull_request: object = response.json()
-    if not isinstance(pull_request, dict):
-        raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
-    return pull_request
-
-
-def fetch_check_runs(
-    *,
-    http_client: httpx.Client,
-    repository_slug: str,
-    head_sha: str,
-) -> list[dict[str, object]]:
-    """List the CI check runs of the pull request head."""
-    response = http_client.get(
-        f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/commits/{head_sha}/check-runs"
-    )
-    if not response.is_success:
-        print(
-            f"Error: the GitHub API returned {response.status_code}"
-            f" for the check runs of {head_sha}.",
-            file=sys.stderr,
-        )
-        raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
-    payload: object = response.json()
-    check_runs = payload.get("check_runs", []) if isinstance(payload, dict) else []
-    if not isinstance(check_runs, list):
-        return []
-    return [entry for entry in check_runs if isinstance(entry, dict)]
-
-
 def resolve_merge_method(
     *,
     http_client: httpx.Client,
@@ -244,11 +145,15 @@ def resolve_merge_method(
 
     Squash is preferred (one commit per pull request, the whole review
     trace in one place); a rebase merge is the accepted fallback when
-    the repository forbids squash - both keep the history of `daily`
+    the repository forbids squash - both keep the history of ``daily``
     linear, so no merge commit is ever issued. A repository allowing
     neither is a human decision away, not an agent one.
     """
-    response = http_client.get(f"{GITHUB_API_BASE_URL}/repos/{repository_slug}")
+    response = request_or_fail(
+        http_client=http_client,
+        method="GET",
+        url=f"{GITHUB_API_BASE_URL}/repos/{repository_slug}",
+    )
     if not response.is_success:
         print(
             f"Error: the GitHub API returned {response.status_code}"
@@ -298,14 +203,9 @@ def evaluate_merge_criteria(  # noqa: PLR0911 - one return per codified criterio
         return False, (
             "the pull request is not cleanly mergeable - rebase it on daily and rerun the review"
         )
-    if len(check_runs) == 0:
-        return False, "no CI check runs on the head - wait for CI, or push first"
-    for check_run in check_runs:
-        name = str(check_run.get("name", "unnamed check"))
-        if check_run.get("status") != "completed":
-            return False, f"CI check {name} is still running - wait for CI"
-        if check_run.get("conclusion") != "success":
-            return False, f"CI check {name} did not succeed - fix CI first"
+    refusal_reason = check_runs_allow_merge(check_runs=check_runs)
+    if refusal_reason is not None:
+        return False, refusal_reason
     return True, "criteria satisfied: review clean, CI green, PR mergeable"
 
 
@@ -318,9 +218,11 @@ def merge_pull_request(
     merge_method: str,
 ) -> bool:
     """Merge the pull request with the given linear method; fail closed."""
-    response = http_client.put(
-        f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/pulls/{pull_request_number}/merge",
-        json={"sha": head_sha, "merge_method": merge_method},
+    response = request_or_fail(
+        http_client=http_client,
+        method="PUT",
+        url=f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/pulls/{pull_request_number}/merge",
+        json_payload={"sha": head_sha, "merge_method": merge_method},
     )
     if response.is_success:
         return True
@@ -349,63 +251,56 @@ def delete_branch(
     """Delete the merged branch; best effort, never a merge failure."""
     if not head_ref:
         return
-    response = http_client.delete(
-        f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/git/refs/heads/{head_ref}"
-    )
+    try:
+        response = http_client.delete(
+            f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/git/refs/heads/{head_ref}"
+        )
+    except httpx.TransportError as transport_error:
+        print(f"Warning: could not delete branch {head_ref} ({transport_error}).")
+        return
     if not response.is_success:
         print(f"Warning: could not delete branch {head_ref} (status {response.status_code}).")
 
 
-def parse_arguments(*, command_line_arguments: Sequence[str]) -> argparse.Namespace:
-    """Parse the script contract."""
-    argument_parser = argparse.ArgumentParser(
-        prog="merge_pr",
+def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Register the merge-pr subcommand."""
+    subparser = subparsers.add_parser(
+        "merge-pr",
+        help="Merge one reviewed pull request into daily (ADR-0009).",
         description="Merge one reviewed pull request into daily (ADR-0009).",
     )
-    argument_parser.add_argument(
+    subparser.add_argument(
         "--pr-number",
         type=int,
         required=True,
         help="Number of the pull request to merge.",
     )
-    argument_parser.add_argument(
+    subparser.add_argument(
         "--report-file",
         default=DEFAULT_REPORT_FILE_NAME,
         help="Path to the review report produced by make review.",
     )
-    argument_parser.add_argument(
+    subparser.add_argument(
         "--context-file",
         default=DEFAULT_CONTEXT_FILE_NAME,
         help="Path to the review context produced by make review.",
     )
-    return argument_parser.parse_args(command_line_arguments)
+    subparser.set_defaults(runner=run)
 
 
-def main(*, command_line_arguments: Sequence[str]) -> int:
+def run(*, arguments: argparse.Namespace) -> int:
     """Entry point: criteria checked, pull request merged, branch deleted."""
-    arguments = parse_arguments(command_line_arguments=command_line_arguments)
-    load_environment_file()
     github_token = load_github_token()
     repository_slug = resolve_repository_slug()
     report = load_review_report(report_file=arguments.report_file)
-    with httpx.Client(
-        headers={
-            "Authorization": f"Bearer {github_token}",
-            "Accept": "application/vnd.github.v3+json",
-        },
-        timeout=30.0,
-    ) as http_client:
+    with open_github_client(token=github_token) as http_client:
         pull_request = fetch_pull_request(
             http_client=http_client,
             repository_slug=repository_slug,
             pull_request_number=arguments.pr_number,
         )
-        head_container = pull_request.get("head")
-        head_sha = head_container.get("sha", "") if isinstance(head_container, dict) else ""
-        head_ref = head_container.get("ref", "") if isinstance(head_container, dict) else ""
-        if not head_sha:
-            print("Error: the pull request has no head SHA.", file=sys.stderr)
-            return EXIT_CODE_PROTOCOL_FAILURE
+        head_sha = extract_head_sha(pull_request=pull_request)
+        head_ref = extract_head_ref(pull_request=pull_request)
         context = load_review_context(context_file=arguments.context_file)
         check_review_context(
             context=context,
@@ -444,7 +339,3 @@ def main(*, command_line_arguments: Sequence[str]) -> int:
         )
     print(f"PR #{arguments.pr_number} merged into daily ({merge_method} merge); branch deleted.")
     return EXIT_CODE_MERGED
-
-
-if __name__ == "__main__":
-    sys.exit(main(command_line_arguments=sys.argv[1:]))
