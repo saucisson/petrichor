@@ -694,3 +694,58 @@ def test_parse_issue_list_rejects_int_accepted_non_digits() -> None:
     with pytest.raises(SystemExit) as excinfo:
         night_loop.parse_issue_list(raw_issue_list="1_2")
     assert excinfo.value.code == night_loop.EXIT_CODE_PROTOCOL_FAILURE
+
+
+def test_fetch_candidate_pull_requests_skips_prs_with_unreachable_backing_issue() -> None:
+    """A deleted/invisible backing issue (404) skips the PR, never aborts the loop."""
+    payload = [pull_request_payload(number=9, head_ref="feat/999")]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/pulls" in request.url.path:
+            return httpx.Response(200, json=payload)
+        return httpx.Response(404, json={})
+
+    candidates = night_loop.fetch_candidate_pull_requests(
+        http_client=client_with(handler),
+        repository_slug="o/r",
+        candidate_limit=10,
+        milestone_numbers=set(),
+    )
+    assert candidates == []
+
+
+def test_run_explicit_directive_skips_issues_outside_the_milestones(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Explicit mode honors the milestone filter: out-of-milestone issues get no session."""
+    sessions: list[Path] = []
+
+    def fake_session(**kwargs: object) -> tuple[int, int]:
+        prompt_path = kwargs["prompt_path"]
+        assert isinstance(prompt_path, Path)
+        sessions.append(prompt_path)
+        return 0, 1
+
+    monkeypatch.setattr(night_loop, "run_developer_session", fake_session)
+    in_milestone = {**issue_payload(number=12), "milestone": {"number": 4}}
+    out_of_milestone = {**issue_payload(number=13), "milestone": {"number": 3}}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/issues/12" in request.url.path:
+            return httpx.Response(200, json=in_milestone)
+        return httpx.Response(200, json=out_of_milestone)
+
+    arguments = night_loop.parse_arguments(command_line_arguments=[])
+    results: list[str] = []
+    night_loop.run_explicit_directive(
+        http_client=client_with(handler),
+        prompt_directory=tmp_path,
+        repository_slug="o/r",
+        issue_numbers=[IssueIdentifier(12), IssueIdentifier(13)],
+        milestone_numbers={4},
+        prompt_template="T {{issue}}",
+        arguments=arguments,
+        results=results,
+    )
+    assert len(sessions) == 1
+    assert any("not in the requested milestones" in result for result in results)
