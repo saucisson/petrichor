@@ -1,6 +1,7 @@
 """Tests for the unattended night loop night_loop.py (ADR-0017, template 3463aea)."""
 
 import subprocess
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import httpx
@@ -11,7 +12,6 @@ from night_loop import IssueIdentifier
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from pathlib import Path
 
 
 def client_with(handler: Callable[[httpx.Request], httpx.Response]) -> httpx.Client:
@@ -235,3 +235,119 @@ def test_resolve_repository_slug_rejects_non_github_remote(monkeypatch: pytest.M
     with pytest.raises(SystemExit) as excinfo:
         night_loop.resolve_repository_slug()
     assert excinfo.value.code == night_loop.EXIT_CODE_PROTOCOL_FAILURE
+
+
+def test_run_explicit_directive_runs_one_session_per_eligible_issue(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Explicit mode: one headless session per issue of the directive, in order."""
+    sessions: list[Path] = []
+
+    def fake_session(**kwargs: object) -> tuple[int, int]:
+        prompt_path = kwargs["prompt_path"]
+        assert isinstance(prompt_path, Path)
+        sessions.append(prompt_path)
+        return 0, 5
+
+    monkeypatch.setattr(night_loop, "run_developer_session", fake_session)
+    client = client_with(lambda request: httpx.Response(200, json=issue_payload(12)))
+    arguments = night_loop.parse_arguments(command_line_arguments=[])
+    results: list[str] = []
+    night_loop.run_explicit_directive(
+        http_client=client,
+        prompt_directory=tmp_path,
+        repository_slug="o/r",
+        issue_numbers=[IssueIdentifier(12), IssueIdentifier(13)],
+        prompt_template="T {{issue}}",
+        arguments=arguments,
+        results=results,
+    )
+    assert len(sessions) == 2
+    assert "# Issue #12" in sessions[0].read_text(encoding="utf-8")
+    assert any("Issue #13" in result for result in results)
+
+
+def test_run_explicit_directive_skips_triaged_issues(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A blocked issue in the directive gets no session, only a skip record."""
+    sessions: list[Path] = []
+
+    def fake_session(**kwargs: object) -> tuple[int, int]:
+        prompt_path = kwargs["prompt_path"]
+        assert isinstance(prompt_path, Path)
+        sessions.append(prompt_path)
+        return 0, 1
+
+    monkeypatch.setattr(night_loop, "run_developer_session", fake_session)
+    client = client_with(
+        lambda request: httpx.Response(200, json=issue_payload(12, [{"name": "blocked"}]))
+    )
+    arguments = night_loop.parse_arguments(command_line_arguments=[])
+    results: list[str] = []
+    night_loop.run_explicit_directive(
+        http_client=client,
+        prompt_directory=tmp_path,
+        repository_slug="o/r",
+        issue_numbers=[IssueIdentifier(12)],
+        prompt_template="T {{issue}}",
+        arguments=arguments,
+        results=results,
+    )
+    assert sessions == []
+    assert any("skipped" in result for result in results)
+
+
+def test_run_auto_discovered_sessions_stops_when_nothing_is_claimed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """If a session claims nothing, the loop stops instead of spinning."""
+    derivations = 0
+
+    def fake_candidates(**kwargs: object) -> list[tuple[IssueIdentifier, dict[str, object]]]:
+        nonlocal derivations
+        derivations += 1
+        return [(IssueIdentifier(1), issue_payload(1))]
+
+    monkeypatch.setattr(night_loop, "fetch_candidate_issues", fake_candidates)
+    monkeypatch.setattr(night_loop, "run_developer_session", lambda **kwargs: (0, 3))
+    arguments = night_loop.parse_arguments(command_line_arguments=["--max-sessions", "5"])
+    results: list[str] = []
+    night_loop.run_auto_discovered_sessions(
+        http_client=client_with(lambda request: httpx.Response(200, json=[])),
+        prompt_directory=tmp_path,
+        repository_slug="o/r",
+        prompt_template="W {{worklist}}",
+        arguments=arguments,
+        results=results,
+    )
+    assert derivations == 2
+    assert any("no candidate was claimed" in result.lower() for result in results)
+
+
+def test_run_auto_discovered_sessions_stops_when_worklist_is_empty(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """No unclaimed eligible issue left: the night ends cleanly."""
+    monkeypatch.setattr(night_loop, "fetch_candidate_issues", lambda **kwargs: [])
+    sessions: list[Path] = []
+
+    def fake_session(**kwargs: object) -> tuple[int, int]:
+        prompt_path = kwargs["prompt_path"]
+        assert isinstance(prompt_path, Path)
+        sessions.append(prompt_path)
+        return 0, 1
+
+    monkeypatch.setattr(night_loop, "run_developer_session", fake_session)
+    arguments = night_loop.parse_arguments(command_line_arguments=["--max-sessions", "5"])
+    results: list[str] = []
+    night_loop.run_auto_discovered_sessions(
+        http_client=client_with(lambda request: httpx.Response(200, json=[])),
+        prompt_directory=tmp_path,
+        repository_slug="o/r",
+        prompt_template="W {{worklist}}",
+        arguments=arguments,
+        results=results,
+    )
+    assert sessions == []
+    assert results == []
