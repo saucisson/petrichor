@@ -50,13 +50,13 @@ claims before working**. The claim (a `night-claimed` label, set by
   lists the open, eligible, unclaimed issues, and each session picks
   one from the worklist.
 - A session's FIRST act in auto-discovery is the claim:
-  `make claim ISSUE=N` (`scripts/claim_issue.py`) adds the
+  `make claim ISSUE=N` adds the
   `night-claimed` label through the GitHub API before any work. The
   loop filters claimed issues out of every worklist, and the driver
   refuses to claim twice: two sessions never work the same issue. A
   failed attempt stays claimed - the human, never an agent, decides
   the retry in the morning.
-- `scripts/night_loop.py` fetches the issues, applies the triage gate
+- The `night` subcommand fetches the issues, applies the triage gate
   (skip pull requests, `blocked`, `needs-human`, `night-claimed`, and
   issues without acceptance criteria), renders the versioned prompt
   (`.vibe/prompts/night-issue.md` or `night-auto.md`), and runs ONE
@@ -66,7 +66,7 @@ claims before working**. The claim (a `night-claimed` label, set by
   (`NIGHT_MAX_SESSIONS`) is spent, or when a session claims nothing -
   the night never spins on one stuck issue. The
   loop owns the sequence; no session ever starts a second issue.
-- Pull requests are opened through `scripts/open_pr.py`
+- Pull requests are opened through the `pr` subcommand
   (`make pr TITLE=... BODY_FILE=...`) - the GitHub API driver, with
   the same token as the review and merge drivers - so the unattended
   flow needs no `gh` and no allowlist widening (ADR-0015).
@@ -109,7 +109,7 @@ request**. A pull request is recoverable when it is open, targets
 #N carries `night-claimed` (the mark of the earlier attempt), and
 the pull request itself is not claimed by another recovery session.
 The claim is uniform over both kinds: `make claim-pr PR=N`
-(`scripts/claim_issue.py --pr`) labels the pull request itself before
+(`python -m scripts claim --pr`) labels the pull request itself before
 any work, with the same guards (kind must match, no double claim).
 The session then resumes it: diagnose with `make wait-ci PR=N`, a
 local `make check`, and a full read of the diff and review comments;

@@ -41,7 +41,7 @@ the pull request: the human tests at the end of day, on `daily`.
   `feat|fix/<issue>` (one issue per branch).
 - After a clean review and green CI, the developer agent merges each
   pull request into `daily` through the merge driver
-  (`make merge-pr`, `scripts/merge_pr.py`). This is the merge path;
+  (`make merge-pr`, `python -m scripts merge-pr`). This is the merge path;
   there is no other agent path, and no platform auto-merge.
 - The driver refuses to merge unless ALL hold: the review report
   exists with zero BLOCKING findings, it was written for THIS pull

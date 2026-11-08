@@ -160,6 +160,10 @@ merge - and your `WORKLOG.md` entry names the resumption honestly.
 - Update a pull request body outside `make update-pr`: the raw API is
   denied in an unattended session, and that denial is the allowlist
   working, not an obstacle - the driver is the path (ADR-0019).
+- Rebase or force-push `daily` outside `make sync-daily`, or run the
+  sync unattended: rewriting the day's shared branch is exactly one
+  driver, never a hand command, and `main` is never rewritten at all
+  (ADR-0020).
 - Work an item you have not claimed first (auto-discovered night
   sessions): `make claim ISSUE=N` or `make claim-pr PR=N` is what
   keeps two sessions off the same issue or the same abandoned pull

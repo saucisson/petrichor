@@ -107,20 +107,15 @@ convention = "google"
 # ever reaches argv; S607 git/uv are resolved through PATH, like every
 # documented git invocation (trusted machine, not a seccomp boundary).
 "scripts/*" = ["T201", "S603", "S607"]
-# A script's tests live next to it (ADR-0014) and are collected by the
-# same gate as the tools' tests (see testpaths below); they get the same
-# test exemptions, whether in scripts/tests/ or next to the script.
-"scripts/tests/*" = [
-    "S101",     # asserts are the point of tests
-    "D",        # docstrings optional in tests
-    "PLR2004",  # magic values are fine in test scenarios
-]
+# A driver's tests live in scripts/tests/ (ADR-0014, ADR-0021) and are
+# collected by the same gate as the tools' tests (see testpaths
+# below); they get the same test exemptions.
 "tests/*" = [
     "S101",     # asserts are the point of tests
     "D",        # docstrings optional in tests
     "PLR2004",  # magic values are fine in test scenarios
 ]
-"scripts/test_*.py" = [
+"scripts/tests/*" = [
     "S101",     # asserts are the point of tests
     "D",        # docstrings optional in tests
     "PLR2004",  # magic values are fine in test scenarios
@@ -181,7 +176,7 @@ layers = [
 # scripts/ is collected too: a script's tests live in scripts/tests/
 # (ADR-0014) and run in the same gate as the tools' tests - a test the
 # runner never collects is theater.
-testpaths = ["tools/notify/tests", "scripts", "tests"]
+testpaths = ["tools/notify/tests", "scripts/tests", "tests"]
 # ADR-0100: the product package lives in src/.
 pythonpath = ["src"]
 addopts = "--strict-markers --cov=notify --cov=petrichor --cov-branch --cov-report=term-missing --cov-fail-under=90"

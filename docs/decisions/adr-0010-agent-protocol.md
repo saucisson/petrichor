@@ -47,14 +47,14 @@ review, run as a headless local session, costs no API tokens at all.
 - The reviewer runs as a **headless Vibe Code session**
   (`vibe --prompt-file ... --system-prompt-file ... --output json
   --max-turns 8 --time-limit 600`), launched by
-  `scripts/agent_review.py` in a fresh **empty temporary directory**
+  the `agent-review` subcommand in a fresh **empty temporary directory**
   whose only content is the review bundle (role contract, architecture
   rules, review checklist, the ADRs, the pull request specification,
   the diff) and the two prompt files. Isolation is enforced by
   construction: no repository, no project configuration, no session
   history - nothing else to read. Programmatic mode denies any tool
   call that would need an approval, so the review answers from the
-  bundle alone. `make review PR=N` (`scripts/pr_review.py`) fetches
+  bundle alone. `make review PR=N` fetches
   the pull request, builds the bundle, runs the session and posts the
   comment - and refuses to start (exit code 3, not a verdict, not an
   attempt) unless the pull request head is the local HEAD and every
