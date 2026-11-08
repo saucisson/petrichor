@@ -65,7 +65,7 @@ notify: ## Notify the owner: make notify severity=... message=... [issue-identif
 		--issue-identifier "$(issue_identifier)"
 
 review: ## Run the local reviewer session on pull request PR=N (ADR-0010).
-	$(PYTHON) scripts/pr_review.py --pr-number $(PR)
+	$(PYTHON) -m scripts review --pr-number $(PR)
 
 merge-pr: ## Merge pull request PR=N into daily after review and CI (ADR-0009).
 	$(PYTHON) -m scripts merge-pr --pr-number $(PR)
@@ -89,7 +89,7 @@ night: ## Run the unattended loop: ISSUES="12,13,14", MILESTONES="3,4", or auto-
 	$(PYTHON) scripts/night_loop.py --issues "$(ISSUES)" --milestones "$(MILESTONES)"
 
 review-bundle: ## Print the reviewer bundle against origin/daily (ADR-0010).
-	$(PYTHON) scripts/build_review_bundle.py --base-ref origin/daily
+	$(PYTHON) -m scripts review-bundle --base-ref origin/daily
 
 clean: ## Remove caches, build outputs and mutation cache.
 	rm -rf .pytest_cache .mypy_cache .ruff_cache .mutmut-cache htmlcov \
