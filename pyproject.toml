@@ -45,7 +45,7 @@ packages = ["tools/notify/src/notify"]
 [tool.ruff]
 target-version = "py315"
 line-length = 100
-src = ["tools/notify/src", "tools/notify/tests", "scripts"]
+src = ["tools/notify/src", "tools/notify/tests", "scripts", "src"]
 
 [tool.ruff.lint]
 # T20 bans print() outside CLI entry points (see per-file-ignores below).
@@ -115,6 +115,11 @@ convention = "google"
     "D",        # docstrings optional in tests
     "PLR2004",  # magic values are fine in test scenarios
 ]
+"tests/*" = [
+    "S101",     # asserts are the point of tests
+    "D",        # docstrings optional in tests
+    "PLR2004",  # magic values are fine in test scenarios
+]
 "scripts/test_*.py" = [
     "S101",     # asserts are the point of tests
     "D",        # docstrings optional in tests
@@ -176,8 +181,10 @@ layers = [
 # scripts/ is collected too: a script's tests live in scripts/tests/
 # (ADR-0014) and run in the same gate as the tools' tests - a test the
 # runner never collects is theater.
-testpaths = ["tools/notify/tests", "scripts"]
-addopts = "--strict-markers --cov=notify --cov-branch --cov-report=term-missing --cov-fail-under=90"
+testpaths = ["tools/notify/tests", "scripts", "tests"]
+# ADR-0100: the product package lives in src/.
+pythonpath = ["src"]
+addopts = "--strict-markers --cov=notify --cov=petrichor --cov-branch --cov-report=term-missing --cov-fail-under=90"
 markers = [
     "integration: exercises adapter boundaries through injected fakes (http, filesystem).",
     "property: hypothesis-based invariant tests (ADR-0012).",
@@ -186,7 +193,7 @@ filterwarnings = ["error"]
 
 [tool.coverage.run]
 branch = true
-source = ["notify"]
+source = ["notify", "petrichor"]
 
 [tool.coverage.report]
 show_missing = true
