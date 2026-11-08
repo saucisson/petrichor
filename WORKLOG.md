@@ -44,6 +44,14 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-08 - template sync 2aa4d27, part 4c of 4c: night domain (ADR-0017/0021) - template sync complete
+
+- **Issue**: none (human-directed template sync).
+- **Done**: `scripts/night.py` from template @ 2aa4d27 replaces `night_loop.py`; `__main__.py` now registers the full `(pulls, ci, claims, merge, day, review, session, night)` set; Makefile `night` calls `python -m scripts night`. `test_night_loop.py` ported to `test_night.py` (61 tests; subcommand wiring via `register`, shared names via `_shared`/`_github`, plain ints for issue/PR numbers). Drift fixed on the template version: ASCII-only digit parsing in `parse_issue_list`/`parse_milestone_list` (unicode digits fail closed with exit 2, never a ValueError traceback), `re.ASCII` on the branch pattern (`feat/١٢` is not issue 12), triage skips malformed labels (fail-safe: never worked). The scripts CLI package (ADR-0021) is now fully synced at template 2aa4d27.
+- **Evidence**: run: `make check` green (ruff + format, mypy strict, import-linter, 261 tests, coverage 94.76%) and `python -m scripts --help` lists all 10 subcommands. Not run: CI/review until push.
+- **Judgement calls**: none beyond the declared 4a/4b/4c split.
+- **Escalations**: none.
+
 ## 2026-11-08 - template sync 2aa4d27, part 4b of 4c: session + review domains (agent-review, review, review-bundle; ADR-0010/0021)
 
 - **Issue**: none (human-directed template sync).
