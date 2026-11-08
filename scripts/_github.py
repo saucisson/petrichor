@@ -14,6 +14,8 @@ import httpx
 from scripts._shared import (
     EXIT_CODE_PROTOCOL_FAILURE,
     GITHUB_API_BASE_URL,
+    PullRequestIdentifier,
+    RepositorySlug,
     github_headers,
 )
 
@@ -34,8 +36,8 @@ def open_github_client(*, token: str) -> httpx.Client:
 def fetch_pull_request(
     *,
     http_client: httpx.Client,
-    repository_slug: str,
-    pull_request_number: int,
+    repository_slug: RepositorySlug,
+    pull_request_number: PullRequestIdentifier,
 ) -> dict[str, object]:
     """Fetch the pull request, or fail closed."""
     response = http_client.get(
