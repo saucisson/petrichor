@@ -39,15 +39,8 @@ verbose trace (full candidate lists, anti-spin decisions, fetch
 warnings) lands in ``.night/night-loop.log`` (override it with
 ``NIGHT_LOG_FILE``). The morning audit reads the terminal; the
 post-mortem reads the log.
-
-Usage::
-
-    make night ISSUES=12,13,14
-    make night MILESTONES=3,4
-    make night
 """
 
-import argparse
 import dataclasses
 import os
 import re
@@ -57,26 +50,26 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, NewType
+from typing import TYPE_CHECKING
 
-import httpx
+from scripts._github import open_github_client
+from scripts._shared import (
+    CLAIM_LABEL_NAME,
+    EXIT_CODE_PROTOCOL_FAILURE,
+    EXIT_CODE_SUCCESS,
+    GITHUB_API_BASE_URL,
+    REPOSITORY_ROOT,
+    load_github_token,
+    resolve_repository_slug,
+)
 
 if TYPE_CHECKING:
+    import argparse
     from collections.abc import Sequence
 
-IssueIdentifier = NewType("IssueIdentifier", int)
-PullRequestIdentifier = NewType("PullRequestIdentifier", int)
+    import httpx
 
-GITHUB_API_BASE_URL = "https://api.github.com"
-GITHUB_DOMAIN_MARKER = "github.com"
-REMOTE_SCP_SEPARATOR = ":"
-REMOTE_PATH_SEPARATOR = "/"
-GIT_REMOTE_SUFFIX = ".git"
-HTTP_TIMEOUT_SECONDS = 30.0
-AUTHORIZATION_SCHEME = "Bearer"
-GITHUB_ACCEPT_MEDIA_TYPE = "application/vnd.github.v3+json"
-GITHUB_TOKEN_VARIABLE = "GITHUB_TOKEN"  # noqa: S105 - an env var NAME, never a secret
-ENVIRONMENT_FILE_NAME = ".env"
+EXIT_CODE_ALL_ISSUES_PROCESSED = EXIT_CODE_SUCCESS  # a subcommand-local alias, same protocol code
 DEVELOPER_CLI_COMMAND = "vibe"
 PROMPT_TEMPLATE_PATH = ".vibe/prompts/night-issue.md"
 AUTO_PROMPT_TEMPLATE_PATH = ".vibe/prompts/night-auto.md"
@@ -95,80 +88,13 @@ DEFAULT_SESSION_TIME_LIMIT_SECONDS = 3600
 DEFAULT_MAXIMUM_SESSIONS = 10
 DEFAULT_CANDIDATE_COUNT = 10
 OPEN_ISSUES_PAGE_SIZE = 100
-OPEN_STATE_FILTER = "open"
 OPEN_PULL_REQUESTS_PAGE_SIZE = 100
 DAILY_BRANCH_NAME = "daily"
-NIGHT_HEAD_BRANCH_PATTERN = re.compile(r"^(?:feat|fix)/([0-9]+)(?:-.*)?$")
-TRIAGE_SKIP_LABELS = ("blocked", "needs-human", "night-claimed")
-CLAIM_LABEL_NAME = "night-claimed"
-UNKNOWN_HEAD_REF = "unknown"
-
-REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
-
-EXIT_CODE_ALL_ISSUES_PROCESSED = 0
-EXIT_CODE_PROTOCOL_FAILURE = 2
+NIGHT_HEAD_BRANCH_PATTERN = re.compile(r"^(?:feat|fix)/(\d+)(?:-.*)?$", re.ASCII)
+TRIAGE_SKIP_LABELS = ("blocked", "needs-human", CLAIM_LABEL_NAME)
 
 
-def load_environment_file() -> None:
-    """Read KEY=VALUE pairs from .env into the environment if unset."""
-    environment_path = REPOSITORY_ROOT / ENVIRONMENT_FILE_NAME
-    if not environment_path.is_file():
-        return
-    for raw_line in environment_path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip())
-
-
-def load_github_token() -> str:
-    """Read the GitHub token; absent means protocol failure."""
-    github_token = os.environ.get(GITHUB_TOKEN_VARIABLE, "").strip()
-    if not github_token:
-        print(
-            f"Error: {GITHUB_TOKEN_VARIABLE} is not set - cannot fetch the"
-            " issues of the night directive.",
-            file=sys.stderr,
-        )
-        raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
-    return github_token
-
-
-def resolve_repository_slug() -> str:
-    """Return "owner/repository" from the origin remote, or fail closed."""
-    completed_process = subprocess.run(
-        ["git", "remote", "get-url", "origin"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    remote_url = completed_process.stdout.strip()
-    separator_index = remote_url.find(GITHUB_DOMAIN_MARKER)
-    if separator_index == -1:
-        print(
-            f"Error: the origin remote is not on GitHub: {remote_url}",
-            file=sys.stderr,
-        )
-        raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
-    slug = remote_url[separator_index + len(GITHUB_DOMAIN_MARKER) :]
-    slug = (
-        slug.removeprefix(REMOTE_SCP_SEPARATOR)
-        .removeprefix(REMOTE_PATH_SEPARATOR)
-        .removesuffix(GIT_REMOTE_SUFFIX)
-        .strip(REMOTE_PATH_SEPARATOR)
-    )
-    owner, separator, repository = slug.partition(REMOTE_PATH_SEPARATOR)
-    if not owner or not separator or not repository.strip(REMOTE_PATH_SEPARATOR):
-        print(
-            f"Error: cannot parse owner/repository from remote: {remote_url}",
-            file=sys.stderr,
-        )
-        raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
-    return f"{owner}{REMOTE_PATH_SEPARATOR}{repository.strip(REMOTE_PATH_SEPARATOR)}"
-
-
-def parse_issue_list(*, raw_issue_list: str) -> list[IssueIdentifier]:
+def parse_issue_list(*, raw_issue_list: str) -> list[int]:
     """Parse the night directive: comma-separated issue numbers, nothing else."""
     issue_numbers = []
     for raw_number in raw_issue_list.split(","):
@@ -178,11 +104,7 @@ def parse_issue_list(*, raw_issue_list: str) -> list[IssueIdentifier]:
         if not (stripped_number.isascii() and stripped_number.isdigit()):
             print(f"Error: not an issue number: {stripped_number}.", file=sys.stderr)
             raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
-        try:
-            issue_numbers.append(IssueIdentifier(int(stripped_number)))
-        except ValueError as error:
-            print(f"Error: not an issue number: {stripped_number}.", file=sys.stderr)
-            raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE) from error
+        issue_numbers.append(int(stripped_number))
     if not issue_numbers:
         print(
             "Error: no issues to process - the night directive is the issue"
@@ -206,11 +128,7 @@ def parse_milestone_list(*, raw_milestone_list: str) -> set[int]:
         if not (stripped_number.isascii() and stripped_number.isdigit()):
             print(f"Error: not a milestone number: {stripped_number}.", file=sys.stderr)
             raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
-        try:
-            milestone_numbers.add(int(stripped_number))
-        except ValueError as error:
-            print(f"Error: not a milestone number: {stripped_number}.", file=sys.stderr)
-            raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE) from error
+        milestone_numbers.add(int(stripped_number))
     return milestone_numbers
 
 
@@ -237,51 +155,28 @@ def read_integer_setting(*, variable_name: str, default_value: int) -> int:
         return default_value
     try:
         return int(raw_value)
-    except ValueError as error:
+    except ValueError:
         print(
             f"Error: {variable_name} is not an integer: {raw_value}.",
             file=sys.stderr,
         )
-        raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE) from error
-
-
-def request_or_fail(
-    *,
-    http_client: httpx.Client,
-    method: str,
-    url: str,
-    params: dict[str, str] | None = None,
-) -> httpx.Response:
-    """Perform an HTTP request; a transport error fails closed (exit 2)."""
-    try:
-        if params is None:
-            return http_client.request(method, url)
-        return http_client.request(method, url, params=params)
-    except httpx.RequestError as error:
-        print(f"Error: could not reach the GitHub API: {error}", file=sys.stderr)
-        raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE) from error
+        raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE) from None
 
 
 def fetch_issue(
     *,
     http_client: httpx.Client,
     repository_slug: str,
-    issue_number: IssueIdentifier,
+    issue_number: int,
 ) -> dict[str, object] | None:
     """Fetch the issue, or report and return None if the API refuses it."""
-    response = request_or_fail(
-        http_client=http_client,
-        method="GET",
-        url=f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/issues/{issue_number}",
+    response = http_client.get(
+        f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/issues/{issue_number}"
     )
     if not response.is_success:
         print(f"Warning: could not fetch issue #{issue_number} ({response.status_code}).")
         return None
-    try:
-        issue: object = response.json()
-    except ValueError:
-        print(f"Warning: issue #{issue_number} has an undecodable payload.")
-        return None
+    issue: object = response.json()
     if not isinstance(issue, dict):
         print(f"Warning: issue #{issue_number} has an unexpected payload.")
         return None
@@ -294,8 +189,8 @@ def triage_issue(*, issue: dict[str, object]) -> str | None:
         return "it is a pull request, not an issue"
     labels = issue.get("labels", [])
     if not isinstance(labels, list) or any(not isinstance(entry, dict) for entry in labels):
-        return "it has a malformed labels payload (triage gate)"
-    label_names = {str(entry.get("name", "")) for entry in labels if isinstance(entry, dict)}
+        return "its labels payload is malformed - skipped, never trusted"
+    label_names: set[str] = {str(entry.get("name", "")) for entry in labels}
     for label in TRIAGE_SKIP_LABELS:
         if label in label_names:
             return f"it is labeled {label}"
@@ -305,7 +200,7 @@ def triage_issue(*, issue: dict[str, object]) -> str | None:
     return None
 
 
-def render_issue_section(*, issue: dict[str, object], issue_number: IssueIdentifier) -> str:
+def render_issue_section(*, issue: dict[str, object], issue_number: int) -> str:
     """Render the issue (title and body) as the prompt's issue section."""
     title = issue.get("title", "")
     title_text = title if isinstance(title, str) else ""
@@ -320,26 +215,20 @@ def fetch_candidate_issues(
     repository_slug: str,
     candidate_limit: int,
     milestone_numbers: set[int],
-) -> list[tuple[IssueIdentifier, dict[str, object]]]:
+) -> list[tuple[int, dict[str, object]]]:
     """Derive the auto-discovered worklist: open, eligible, unclaimed, in scope."""
-    response = request_or_fail(
-        http_client=http_client,
-        method="GET",
-        url=f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/issues",
-        params={"state": OPEN_STATE_FILTER, "per_page": str(OPEN_ISSUES_PAGE_SIZE)},
+    response = http_client.get(
+        f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/issues",
+        params={"state": "open", "per_page": OPEN_ISSUES_PAGE_SIZE},
     )
     if not response.is_success:
         print(f"Warning: could not list open issues ({response.status_code}).")
         return []
-    try:
-        payload = response.json()
-    except ValueError:
-        print("Warning: the open-issues payload is not valid JSON.")
-        return []
+    payload = response.json()
     if not isinstance(payload, list):
         print("Warning: the open-issues payload is unexpected.")
         return []
-    candidates: list[tuple[IssueIdentifier, dict[str, object]]] = []
+    candidates: list[tuple[int, dict[str, object]]] = []
     for issue in payload:
         if not isinstance(issue, dict):
             continue
@@ -350,12 +239,12 @@ def fetch_candidate_issues(
         issue_number = issue.get("number")
         if not isinstance(issue_number, int):
             continue
-        candidates.append((IssueIdentifier(issue_number), issue))
+        candidates.append((issue_number, issue))
     candidates.sort(key=lambda candidate: candidate[0])
     return candidates[:candidate_limit]
 
 
-def render_worklist(*, candidates: Sequence[tuple[IssueIdentifier, dict[str, object]]]) -> str:
+def render_worklist(*, candidates: Sequence[tuple[int, dict[str, object]]]) -> str:
     """Render the candidate issues as the prompt's worklist."""
     sections = [
         render_issue_section(issue=issue, issue_number=issue_number)
@@ -386,36 +275,13 @@ def item_has_claim_label(*, item: dict[str, object]) -> bool:
     return CLAIM_LABEL_NAME in label_names
 
 
-def pull_request_is_recoverable(
-    *,
-    pull_request: dict[str, object],
-    milestone_numbers: set[int],
-    backing_issue: dict[str, object] | None,
-) -> bool:
-    """Tell whether a pull request is recoverable (ADR-0017 recovery path).
-
-    Recoverable means: not already claimed by another session, in the
-    requested milestones, on a ``feat/N`` or ``fix/N`` head branch, and
-    its backing issue #N carries ``night-claimed``.
-    """
-    if item_has_claim_label(item=pull_request):
-        return False
-    if not milestone_matches(item=pull_request, milestone_numbers=milestone_numbers):
-        return False
-    head = pull_request.get("head")
-    head_ref = head.get("ref") if isinstance(head, dict) else None
-    if parse_backing_issue_number(head_ref=head_ref) is None:
-        return False
-    return backing_issue is not None and item_has_claim_label(item=backing_issue)
-
-
 def fetch_candidate_pull_requests(
     *,
     http_client: httpx.Client,
     repository_slug: str,
     candidate_limit: int,
     milestone_numbers: set[int],
-) -> list[tuple[PullRequestIdentifier, dict[str, object]]]:
+) -> list[tuple[int, dict[str, object]]]:
     """Derive the recoverable pull requests (ADR-0017 recovery path).
 
     A pull request is recoverable when all of these hold: it is open,
@@ -424,33 +290,31 @@ def fetch_candidate_pull_requests(
     earlier unattended attempt), and the pull request itself is not
     already claimed by another recovery session.
     """
-    response = request_or_fail(
-        http_client=http_client,
-        method="GET",
-        url=f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/pulls",
+    response = http_client.get(
+        f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/pulls",
         params={
-            "state": OPEN_STATE_FILTER,
+            "state": "open",
             "base": DAILY_BRANCH_NAME,
-            "per_page": str(OPEN_PULL_REQUESTS_PAGE_SIZE),
+            "per_page": OPEN_PULL_REQUESTS_PAGE_SIZE,
         },
     )
     if not response.is_success:
         print(f"Warning: could not list open pull requests ({response.status_code}).")
         return []
-    try:
-        payload = response.json()
-    except ValueError:
-        print("Warning: the open-pull-requests payload is not valid JSON.")
-        return []
+    payload = response.json()
     if not isinstance(payload, list):
         print("Warning: the open-pull-requests payload is unexpected.")
         return []
-    candidates: list[tuple[PullRequestIdentifier, dict[str, object]]] = []
+    candidates: list[tuple[int, dict[str, object]]] = []
     for pull_request in payload:
         if not isinstance(pull_request, dict):
             continue
-        pull_request_number = pull_request.get("number")
-        if not isinstance(pull_request_number, int):
+        pr_number = pull_request.get("number")
+        if not isinstance(pr_number, int):
+            continue
+        if item_has_claim_label(item=pull_request):
+            continue
+        if not milestone_matches(item=pull_request, milestone_numbers=milestone_numbers):
             continue
         head = pull_request.get("head")
         head_ref = head.get("ref") if isinstance(head, dict) else None
@@ -460,15 +324,11 @@ def fetch_candidate_pull_requests(
         backing_issue = fetch_issue(
             http_client=http_client,
             repository_slug=repository_slug,
-            issue_number=IssueIdentifier(backing_issue_number),
+            issue_number=backing_issue_number,
         )
-        if not pull_request_is_recoverable(
-            pull_request=pull_request,
-            milestone_numbers=milestone_numbers,
-            backing_issue=backing_issue,
-        ):
+        if backing_issue is None or not item_has_claim_label(item=backing_issue):
             continue
-        candidates.append((PullRequestIdentifier(pull_request_number), pull_request))
+        candidates.append((pr_number, pull_request))
     candidates.sort(key=lambda candidate: candidate[0])
     return candidates[:candidate_limit]
 
@@ -476,13 +336,13 @@ def fetch_candidate_pull_requests(
 def render_pull_request_section(
     *,
     pull_request: dict[str, object],
-    pull_request_number: PullRequestIdentifier,
+    pr_number: int,
 ) -> str:
     """Render a recoverable pull request as the prompt's worklist section."""
     title = pull_request.get("title", "")
     title_text = title if isinstance(title, str) else ""
     head = pull_request.get("head")
-    head_ref = head.get("ref") if isinstance(head, dict) else UNKNOWN_HEAD_REF
+    head_ref = head.get("ref") if isinstance(head, dict) else "unknown"
     backing_issue_number = parse_backing_issue_number(head_ref=head_ref)
     backing_clause = (
         f", backing issue #{backing_issue_number}" if backing_issue_number is not None else ""
@@ -490,7 +350,7 @@ def render_pull_request_section(
     body = pull_request.get("body")
     body_text = body if isinstance(body, str) else ""
     return (
-        f"# Pull request #{pull_request_number}: {title_text}\n\n"
+        f"# Pull request #{pr_number}: {title_text}\n\n"
         f"An earlier session left this pull request open (branch `{head_ref}`"
         f"{backing_clause}, targeting `daily`) and never merged it. It is"
         " offered for recovery: check it out, find out where it stands, fix"
@@ -501,8 +361,8 @@ def render_pull_request_section(
 
 def render_auto_worklist(
     *,
-    issues: Sequence[tuple[IssueIdentifier, dict[str, object]]],
-    pull_requests: Sequence[tuple[PullRequestIdentifier, dict[str, object]]],
+    issues: Sequence[tuple[int, dict[str, object]]],
+    pull_requests: Sequence[tuple[int, dict[str, object]]],
 ) -> str:
     """Render the combined worklist: unclaimed issues, then recoverable PRs."""
     sections = [
@@ -510,37 +370,31 @@ def render_auto_worklist(
         for issue_number, issue in issues
     ]
     sections.extend(
-        render_pull_request_section(
-            pull_request=pull_request, pull_request_number=pull_request_number
-        )
-        for pull_request_number, pull_request in pull_requests
+        render_pull_request_section(pull_request=pull_request, pr_number=pr_number)
+        for pr_number, pull_request in pull_requests
     )
     return "\n\n---\n\n".join(sections)
 
 
 def auto_candidate_keys(
     *,
-    issues: Sequence[tuple[IssueIdentifier, dict[str, object]]],
-    pull_requests: Sequence[tuple[PullRequestIdentifier, dict[str, object]]],
+    issues: Sequence[tuple[int, dict[str, object]]],
+    pull_requests: Sequence[tuple[int, dict[str, object]]],
 ) -> set[tuple[str, int]]:
     """Build the anti-spin guard: one key per worklist item."""
     issue_keys = {("issue", issue_number) for issue_number, _ in issues}
-    pull_request_keys = {
-        ("pull request", pull_request_number) for pull_request_number, _ in pull_requests
-    }
+    pull_request_keys = {("pull request", pr_number) for pr_number, _ in pull_requests}
     return issue_keys | pull_request_keys
 
 
 def describe_auto_candidates(
     *,
-    issues: Sequence[tuple[IssueIdentifier, dict[str, object]]],
-    pull_requests: Sequence[tuple[PullRequestIdentifier, dict[str, object]]],
+    issues: Sequence[tuple[int, dict[str, object]]],
+    pull_requests: Sequence[tuple[int, dict[str, object]]],
 ) -> str:
     """Render the candidate list for the loop's own trace."""
     descriptions = [f"#{issue_number} (issue)" for issue_number, _ in issues]
-    descriptions.extend(
-        f"#{pull_request_number} (pull request)" for pull_request_number, _ in pull_requests
-    )
+    descriptions.extend(f"#{pr_number} (pull request)" for pr_number, _ in pull_requests)
     return ", ".join(descriptions)
 
 
@@ -632,25 +486,26 @@ class NightJournal:
         self.log(text=text)
 
 
-def parse_arguments(*, command_line_arguments: Sequence[str]) -> argparse.Namespace:
-    """Parse the script contract."""
-    argument_parser = argparse.ArgumentParser(
-        prog="night_loop",
+def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Register the night subcommand."""
+    subparser = subparsers.add_parser(
+        "night",
+        help="Run the unattended day loop, one session per issue (ADR-0017).",
         description="Run the unattended day loop, one session per issue (ADR-0017).",
     )
-    argument_parser.add_argument(
+    subparser.add_argument(
         "--issues",
         default="",
         help='Comma-separated issue numbers, e.g. "12,13,14". Omit it and each'
         " session picks one unclaimed open issue and claims it (auto-discovery).",
     )
-    argument_parser.add_argument(
+    subparser.add_argument(
         "--milestones",
         default="",
         help='Comma-separated milestone numbers, e.g. "3,4". Only issues and pull'
         " requests of these milestones are worked. Omit it for no filtering.",
     )
-    argument_parser.add_argument(
+    subparser.add_argument(
         "--max-turns",
         type=int,
         default=read_integer_setting(
@@ -659,7 +514,7 @@ def parse_arguments(*, command_line_arguments: Sequence[str]) -> argparse.Namesp
         ),
         help="Maximum assistant turns per session.",
     )
-    argument_parser.add_argument(
+    subparser.add_argument(
         "--time-limit",
         type=int,
         default=read_integer_setting(
@@ -668,7 +523,7 @@ def parse_arguments(*, command_line_arguments: Sequence[str]) -> argparse.Namesp
         ),
         help="Time limit per session, in seconds.",
     )
-    argument_parser.add_argument(
+    subparser.add_argument(
         "--max-sessions",
         type=int,
         default=read_integer_setting(
@@ -677,7 +532,7 @@ def parse_arguments(*, command_line_arguments: Sequence[str]) -> argparse.Namesp
         ),
         help="Auto-discovery only: maximum number of sessions (one issue each).",
     )
-    argument_parser.add_argument(
+    subparser.add_argument(
         "--candidates",
         type=int,
         default=read_integer_setting(
@@ -686,7 +541,7 @@ def parse_arguments(*, command_line_arguments: Sequence[str]) -> argparse.Namesp
         ),
         help="Auto-discovery only: issues listed in each session's worklist.",
     )
-    return argument_parser.parse_args(command_line_arguments)
+    subparser.set_defaults(runner=run)
 
 
 def run_explicit_directive(
@@ -694,7 +549,7 @@ def run_explicit_directive(
     http_client: httpx.Client,
     prompt_directory: Path,
     repository_slug: str,
-    issue_numbers: Sequence[IssueIdentifier],
+    issue_numbers: Sequence[int],
     milestone_numbers: set[int],
     prompt_template: str,
     arguments: argparse.Namespace,
@@ -876,10 +731,8 @@ def run_auto_discovered_sessions(
         )
 
 
-def main(*, command_line_arguments: Sequence[str]) -> int:
+def run(*, arguments: argparse.Namespace) -> int:
     """Entry point: night directive in (or auto-discovered), report out."""
-    load_environment_file()
-    arguments = parse_arguments(command_line_arguments=command_line_arguments)
     github_token = load_github_token()
     if shutil.which(DEVELOPER_CLI_COMMAND) is None:
         print(
@@ -900,13 +753,7 @@ def main(*, command_line_arguments: Sequence[str]) -> int:
         ),
     )
     with (
-        httpx.Client(
-            headers={
-                "Authorization": f"{AUTHORIZATION_SCHEME} {github_token}",
-                "Accept": GITHUB_ACCEPT_MEDIA_TYPE,
-            },
-            timeout=HTTP_TIMEOUT_SECONDS,
-        ) as http_client,
+        open_github_client(token=github_token) as http_client,
         tempfile.TemporaryDirectory(prefix="night-loop-") as prompt_directory,
     ):
         if arguments.issues:
@@ -941,7 +788,3 @@ def main(*, command_line_arguments: Sequence[str]) -> int:
         text=f"night loop finished: {len(journal.summary_lines)} result line(s) on stdout",
     )
     return EXIT_CODE_ALL_ISSUES_PROCESSED
-
-
-if __name__ == "__main__":
-    sys.exit(main(command_line_arguments=sys.argv[1:]))
