@@ -164,16 +164,22 @@ def claim_is_allowed(*, issue: dict[str, object], issue_number: IssueIdentifier)
         print(f"Error: #{issue_number} is a pull request, not an issue.", file=sys.stderr)
         raise SystemExit(EXIT_CODE_CRITERIA_UNMET)
     labels = issue.get("labels", [])
-    if isinstance(labels, list):
-        label_names = {entry.get("name", "") for entry in labels if isinstance(entry, dict)}
-        if CLAIM_LABEL_NAME in label_names:
-            print(
-                f"Error: issue #{issue_number} is already claimed"
-                f" ({CLAIM_LABEL_NAME}) - do not work it; the human decides"
-                " the retry.",
-                file=sys.stderr,
-            )
-            raise SystemExit(EXIT_CODE_CRITERIA_UNMET)
+    if not isinstance(labels, list):
+        print(
+            f"Error: issue #{issue_number} has a malformed labels payload -"
+            " do not work an unverified issue.",
+            file=sys.stderr,
+        )
+        raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
+    label_names = {entry.get("name", "") for entry in labels if isinstance(entry, dict)}
+    if CLAIM_LABEL_NAME in label_names:
+        print(
+            f"Error: issue #{issue_number} is already claimed"
+            f" ({CLAIM_LABEL_NAME}) - do not work it; the human decides"
+            " the retry.",
+            file=sys.stderr,
+        )
+        raise SystemExit(EXIT_CODE_CRITERIA_UNMET)
 
 
 def ensure_claim_label(*, http_client: httpx.Client, repository_slug: str) -> None:
