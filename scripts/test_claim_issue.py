@@ -1,5 +1,6 @@
 """Tests for the issue claim driver claim_issue.py (ADR-0017, template 3463aea)."""
 
+import subprocess
 from typing import TYPE_CHECKING
 
 import httpx
@@ -188,6 +189,40 @@ def test_request_or_fail_passes_json_payload() -> None:
     assert b"night-claimed" in requests_seen[-1].content
 
 
-def test_resolve_repository_slug_from_origin_remote() -> None:
-    """The origin remote of this repository parses to owner/repository."""
-    assert claim_issue.resolve_repository_slug() == "saucisson/petrichor"
+def completed_remote(url: str) -> subprocess.CompletedProcess[str]:
+    """Build the CompletedProcess returned by a mocked `git remote get-url`."""
+    return subprocess.CompletedProcess(
+        args=["git", "remote", "get-url", "origin"], returncode=0, stdout=url, stderr=""
+    )
+
+
+def test_resolve_repository_slug_parses_ssh_remote(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An SSH origin remote parses to owner/repository."""
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: completed_remote("git@github.com:acme/widgets.git\n"),
+    )
+    assert claim_issue.resolve_repository_slug() == "acme/widgets"
+
+
+def test_resolve_repository_slug_parses_https_remote(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An HTTPS origin remote parses to owner/repository."""
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: completed_remote("https://github.com/acme/widgets.git"),
+    )
+    assert claim_issue.resolve_repository_slug() == "acme/widgets"
+
+
+def test_resolve_repository_slug_rejects_non_github_remote(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A non-GitHub remote fails closed as a protocol failure."""
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: completed_remote("https://gitlab.com/acme/widgets.git"),
+    )
+    with pytest.raises(SystemExit) as excinfo:
+        claim_issue.resolve_repository_slug()
+    assert excinfo.value.code == claim_issue.EXIT_CODE_PROTOCOL_FAILURE
