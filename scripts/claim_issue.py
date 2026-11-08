@@ -29,7 +29,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, NewType
+from typing import TYPE_CHECKING, Literal, NewType
 
 import httpx
 
@@ -37,6 +37,8 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 ItemIdentifier = NewType("ItemIdentifier", int)
+
+ItemKind = Literal["issue", "pull_request"]
 
 GITHUB_API_BASE_URL = "https://api.github.com"
 GITHUB_DOMAIN_MARKER = "github.com"
@@ -169,7 +171,7 @@ def claim_is_allowed(
     *,
     issue: dict[str, object],
     item_number: ItemIdentifier,
-    expected_kind: str,
+    expected_kind: ItemKind,
 ) -> None:
     """Refuse a kind mismatch or an already-claimed item.
 
@@ -237,18 +239,18 @@ def add_claim_label(
     *,
     http_client: httpx.Client,
     repository_slug: str,
-    issue_number: int,
+    item_number: ItemIdentifier,
 ) -> None:
     """Add the claim label; a failure means no claim, no work."""
     response = request_or_fail(
         http_client=http_client,
         method="POST",
-        url=f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/issues/{issue_number}/labels",
+        url=f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/issues/{item_number}/labels",
         json_payload={"labels": [CLAIM_LABEL_NAME]},
     )
     if not response.is_success:
         print(
-            f"Error: could not claim #{issue_number}"
+            f"Error: could not claim #{item_number}"
             f" ({response.status_code}) - do not work an unclaimed item.",
             file=sys.stderr,
         )
@@ -283,10 +285,12 @@ def main(*, command_line_arguments: Sequence[str]) -> int:
     repository_slug = resolve_repository_slug()
     if arguments.issue is not None:
         item_number = ItemIdentifier(arguments.issue)
-        expected_kind, item_word = "issue", "Issue"
+        expected_kind: ItemKind = "issue"
+        item_word = "Issue"
     else:
         item_number = ItemIdentifier(arguments.pr)
-        expected_kind, item_word = "pull_request", "Pull request"
+        expected_kind = "pull_request"
+        item_word = "Pull request"
     with httpx.Client(
         headers={
             "Authorization": f"{AUTHORIZATION_SCHEME} {github_token}",
@@ -308,7 +312,7 @@ def main(*, command_line_arguments: Sequence[str]) -> int:
         add_claim_label(
             http_client=http_client,
             repository_slug=repository_slug,
-            issue_number=item_number,
+            item_number=item_number,
         )
     print(
         f"{item_word} #{item_number} claimed ({CLAIM_LABEL_NAME}):"

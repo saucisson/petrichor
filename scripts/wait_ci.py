@@ -29,7 +29,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, NewType
+from typing import TYPE_CHECKING, Literal, NewType
 
 import httpx
 
@@ -54,11 +54,13 @@ DEFAULT_POLL_INTERVAL_SECONDS = 20
 DEFAULT_TIMEOUT_SECONDS = 1800
 NOT_FOUND_STATUS_CODE = 404
 
-POLL_STATUS_FETCH_FAILED = "fetch-failed"
-POLL_STATUS_NO_CHECKS = "no-checks"
-POLL_STATUS_PENDING = "pending"
-POLL_STATUS_GREEN = "green"
-POLL_STATUS_FAILED = "failed"
+PollStatus = Literal["fetch-failed", "no-checks", "pending", "green", "failed"]
+
+POLL_STATUS_FETCH_FAILED: PollStatus = "fetch-failed"
+POLL_STATUS_NO_CHECKS: PollStatus = "no-checks"
+POLL_STATUS_PENDING: PollStatus = "pending"
+POLL_STATUS_GREEN: PollStatus = "green"
+POLL_STATUS_FAILED: PollStatus = "failed"
 
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 
@@ -209,7 +211,7 @@ def poll_once(
     http_client: httpx.Client,
     repository_slug: str,
     pull_request_number: PullRequestIdentifier,
-) -> tuple[str, str, str]:
+) -> tuple[PollStatus, str, str]:
     """One poll: (status, head_sha, progress detail)."""
     pull_request = try_fetch_pull_request(
         http_client=http_client,
@@ -245,7 +247,7 @@ def poll_once(
     )
 
 
-def interpret_status(*, status: str, detail: str) -> int | None:
+def interpret_status(*, status: PollStatus, detail: str) -> int | None:
     """Map one poll to an exit code; None means: keep waiting."""
     if status == POLL_STATUS_GREEN:
         print(f"CI is green on the head ({detail} check runs): the review can start.")

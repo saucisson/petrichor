@@ -86,7 +86,7 @@ OPEN_ISSUES_PAGE_SIZE = 100
 OPEN_STATE_FILTER = "open"
 OPEN_PULL_REQUESTS_PAGE_SIZE = 100
 DAILY_BRANCH_NAME = "daily"
-NIGHT_HEAD_BRANCH_PATTERN = re.compile(r"^(?:feat|fix)/(\d+)$")
+NIGHT_HEAD_BRANCH_PATTERN = re.compile(r"^(?:feat|fix)/([0-9]+)$")
 TRIAGE_SKIP_LABELS = ("blocked", "needs-human", "night-claimed")
 CLAIM_LABEL_NAME = "night-claimed"
 
@@ -162,6 +162,9 @@ def parse_issue_list(*, raw_issue_list: str) -> list[IssueIdentifier]:
         stripped_number = raw_number.strip()
         if not stripped_number:
             continue
+        if not stripped_number.isascii():
+            print(f"Error: not an issue number: {stripped_number}.", file=sys.stderr)
+            raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
         try:
             issue_numbers.append(IssueIdentifier(int(stripped_number)))
         except ValueError as error:
@@ -187,6 +190,9 @@ def parse_milestone_list(*, raw_milestone_list: str) -> set[int]:
         stripped_number = raw_number.strip()
         if not stripped_number:
             continue
+        if not stripped_number.isascii():
+            print(f"Error: not a milestone number: {stripped_number}.", file=sys.stderr)
+            raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
         try:
             milestone_numbers.add(int(stripped_number))
         except ValueError as error:
@@ -425,8 +431,8 @@ def fetch_candidate_pull_requests(
     for pull_request in payload:
         if not isinstance(pull_request, dict):
             continue
-        pr_number = pull_request.get("number")
-        if not isinstance(pr_number, int):
+        pull_request_number = pull_request.get("number")
+        if not isinstance(pull_request_number, int):
             continue
         head = pull_request.get("head")
         head_ref = head.get("ref") if isinstance(head, dict) else None
@@ -444,7 +450,7 @@ def fetch_candidate_pull_requests(
             backing_issue=backing_issue,
         ):
             continue
-        candidates.append((IssueIdentifier(pr_number), pull_request))
+        candidates.append((IssueIdentifier(pull_request_number), pull_request))
     candidates.sort(key=lambda candidate: candidate[0])
     return candidates[:candidate_limit]
 
@@ -452,7 +458,7 @@ def fetch_candidate_pull_requests(
 def render_pull_request_section(
     *,
     pull_request: dict[str, object],
-    pr_number: int,
+    pull_request_number: int,
 ) -> str:
     """Render a recoverable pull request as the prompt's worklist section."""
     title = pull_request.get("title", "")
@@ -466,7 +472,7 @@ def render_pull_request_section(
     body = pull_request.get("body")
     body_text = body if isinstance(body, str) else ""
     return (
-        f"# Pull request #{pr_number}: {title_text}\n\n"
+        f"# Pull request #{pull_request_number}: {title_text}\n\n"
         f"An earlier session left this pull request open (branch `{head_ref}`"
         f"{backing_clause}, targeting `daily`) and never merged it. It is"
         " offered for recovery: check it out, find out where it stands, fix"
@@ -486,8 +492,10 @@ def render_auto_worklist(
         for issue_number, issue in issues
     ]
     sections.extend(
-        render_pull_request_section(pull_request=pull_request, pr_number=pr_number)
-        for pr_number, pull_request in pull_requests
+        render_pull_request_section(
+            pull_request=pull_request, pull_request_number=pull_request_number
+        )
+        for pull_request_number, pull_request in pull_requests
     )
     return "\n\n---\n\n".join(sections)
 
@@ -499,7 +507,9 @@ def auto_candidate_keys(
 ) -> set[tuple[str, int]]:
     """Build the anti-spin guard: one key per worklist item."""
     issue_keys = {("issue", issue_number) for issue_number, _ in issues}
-    pull_request_keys = {("pull request", pr_number) for pr_number, _ in pull_requests}
+    pull_request_keys = {
+        ("pull request", pull_request_number) for pull_request_number, _ in pull_requests
+    }
     return issue_keys | pull_request_keys
 
 
@@ -510,7 +520,9 @@ def describe_auto_candidates(
 ) -> str:
     """Render the candidate list for the loop's own trace."""
     descriptions = [f"#{issue_number} (issue)" for issue_number, _ in issues]
-    descriptions.extend(f"#{pr_number} (pull request)" for pr_number, _ in pull_requests)
+    descriptions.extend(
+        f"#{pull_request_number} (pull request)" for pull_request_number, _ in pull_requests
+    )
     return ", ".join(descriptions)
 
 
