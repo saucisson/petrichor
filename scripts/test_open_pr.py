@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 import httpx
 import pytest
 
-import open_pr
+from scripts import open_pr
 
 if TYPE_CHECKING:
     from pathlib import Path

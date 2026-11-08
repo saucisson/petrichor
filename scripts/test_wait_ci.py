@@ -10,8 +10,8 @@ import httpx
 import pytest
 from hypothesis import given, strategies
 
-import wait_ci
-from wait_ci import PullRequestIdentifier
+from scripts import wait_ci
+from scripts.wait_ci import PullRequestIdentifier
 
 if TYPE_CHECKING:
     from collections.abc import Callable
