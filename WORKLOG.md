@@ -108,6 +108,14 @@ One entry per commit or pull request:
 - **Judgement calls**: constitutional files kept out of the agent PR per the repo precedent (PR #54 review round 1); the human directive covers the sync as a whole.
 - **Escalations**: none (human directive in session).
 
+## 2026-11-08 - P02: canonical `petri+json` v1.0 schema and canonical hashing (issue #2, PR pending)
+
+- **Issue**: #2 (P02 · Schéma canonique `petri+json` v1.0 et hachage canonique, spec §13).
+- **Done**: new `scripts/petri_canonical.py` — pydantic schema of the canonical document (places/transitions/arcs with stable ids, first-class layout/annotations, lineage fields, `color_domain`, metadata), deterministic canonical serialization (sorted keys, tight separators, element order preserved) with lossless round-trip, and the canonical content hash: sha256 over the semantic projection only (structure, initial marking, arc weights, formalism/color_domain), with ids resolved to element names so renaming an id cannot change it. Strict validation: `extra="forbid"`, hash format `sha256:<64 hex>`, unique ids/names, arc endpoints must exist, pt ⇒ `color_domain` null, and a stored `content_hash` must match the recomputed one; every rejection raises `InvalidCanonicalModelError` with an explicit message and preserved cause. Tests in `scripts/test_petri_canonical.py` (28, incl. 2 hypothesis property tests) pin all three acceptance criteria plus the structlog narration contract.
+- **Evidence**: `make check` green on the final state — ruff clean + format, mypy strict clean, import-linter clean, 205 tests passed (177 existing + 28 new), coverage 94.76% vs floor 90%. Not run: the reviewer session and CI (they run after the push, later in this session).
+- **Judgement calls**: the module lives in `scripts/` because the template's lint/type/test configuration is constitutional (reverted as such in P01 review round 3) and only covers `tools/notify` + `scripts`; `scripts/` is therefore the only location where new code is both mypy-checked and runner-collected. Product code in a dedicated `src/` would need a human-approved config change (escalation list). Arc endpoints are hashed via element *names* (ids are excluded per spec §13), which is why name uniqueness is enforced.
+- **Escalations**: none.
+
 ## 2026-11-08 - Restore missing night-session prompts .vibe/prompts/ (PR pending)
 
 - **Issue**: none (human-directed fix: `make night` failed with "the night-session prompt is missing: .vibe/prompts/night-auto.md").
