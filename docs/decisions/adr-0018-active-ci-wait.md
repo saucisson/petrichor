@@ -23,7 +23,7 @@ the human becomes the CI poller.
   session per issue and moves on; the state left behind is a pull
   request nobody reviews.
 - **Make the review driver wait internally.** Rejected:
-  `scripts/pr_review.py` preconditions must stay instant and mechanical
+  The `review` driver's preconditions must stay instant and mechanical
   (ADR-0010 - exit 3 means "not a verdict, not an attempt"); folding a
   poll loop into it couples the review budget to the CI budget and
   blurs what "preconditions unmet" means.
@@ -33,12 +33,12 @@ the human becomes the CI poller.
 
 ## Decision
 
-- `scripts/wait_ci.py` (`make wait-ci PR=N`) polls the head's CI check
+- `make wait-ci PR=N` polls the head's CI check
   runs every `WAIT_CI_INTERVAL_SECONDS` (default 20) up to
   `WAIT_CI_TIMEOUT_SECONDS` (default 1800). It judges the CURRENT
   head: a re-push while waiting switches the watch to the new head.
 - Exit 0: every check run concluded "success" - exactly the
-  precondition `pr_review.py` enforces, so the session chains
+  precondition the `review` subcommand enforces, so the session chains
   `make review PR=N` right after. Exit 1: CI failed on the head, or
   did not conclude within the timeout - the honest stop (fix, push,
   wait again; a timeout is an escalation, never an excuse to review

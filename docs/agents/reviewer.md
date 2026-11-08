@@ -58,8 +58,8 @@ recommendation.
 ## Launch mechanics (ADR-0010)
 
 You are launched **locally**, by the developer agent, as a **headless
-Vibe Code session**: `make review PR=N` runs
-`scripts/agent_review.py`, which starts `vibe --prompt-file ...` in a
+Vibe Code session**: `make review PR=N` runs the `agent-review`
+driver, which starts `vibe --prompt-file ...` in a
 fresh empty directory containing only the review bundle (and the two
 prompt files). There is no repository around you, no project
 configuration, no session history: the bundle is your entire context,
@@ -75,7 +75,7 @@ debug locally, `make review-bundle` prints exactly what you will see.
 
 The review bundle (role contract, architecture rules, review checklist,
 all ADRs, the pull request specification, the diff) is built
-deterministically by `scripts/build_review_bundle.py`. The pull
+deterministically by `make review-bundle`. The pull
 request specification is the PR description: its acceptance-criteria
 mapping is the spec you review against.
 

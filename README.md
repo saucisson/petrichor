@@ -45,10 +45,11 @@ uv run notify send --severity question --message "Need a decision on X." --issue
 | Agent protocol    | `AGENTS.md` + `docs/agents/` (ADR-0010) |
 | Reviewer launch   | local headless Vibe Code session - ADR-0010 |
 | Merge into daily  | `make review` then `make merge-pr` - ADR-0009 |
+| Sync daily with main | `make sync-daily` (rebase with lease) - ADR-0020 |
 | Branch model      | `docs/branching.md` (ADR-0009) |
 | Agent runtime     | `.vibe/` permissions profile - ADR-0015 |
 | Human contact     | the `notify` command in `tools/notify/` - ADR-0011, ADR-0014 |
-| Decisions         | `docs/decisions/` - 16 ADRs (0001-0099); project ADRs start at 0100 |
+| Decisions         | `docs/decisions/` - 21 ADRs (0001-0099); project ADRs start at 0100 |
 
 ## The repository layout
 
@@ -83,7 +84,8 @@ architecture and style rules (ADR-0014).
    (`git branch daily && git push -u origin daily`), then enable
    branch protections per `docs/branching.md` (`main` and
    `daily`, required `check` and `security` status checks, linear
-   history; no auto-merge, no reviewer check - ADR-0010, ADR-0009).
+   history, force pushes allowed on `daily` only - the sync driver,
+   ADR-0020; no auto-merge, no reviewer check - ADR-0010, ADR-0009).
 5. `uv run pre-commit install`.
 6. Enable Renovate and release-please on the repository.
 7. Replace `YOUR_GITHUB_USERNAME` in `.github/CODEOWNERS`.

@@ -33,13 +33,13 @@ same place, every night.
   pull request, and the checklist demands the proposal before the
   merge, not after a human wake-up.
 - **A dedicated driver, the only body-update path** (chosen):
-  `make update-pr PR=N BODY_FILE=...` (`scripts/update_pr.py`)
+  `make update-pr PR=N BODY_FILE=...`
   mirrors `make pr` for updates: same token as the other drivers,
   fail-closed guards, one purpose.
 
 ## Decision
 
-- `scripts/update_pr.py` (`make update-pr PR=N BODY_FILE=...`) is the
+- `make update-pr PR=N BODY_FILE=...` is the
   only path that updates a pull request body, attended or
   unattended. It REPLACES the whole body with the file's content -
   it never appends - so the caller composes the new body (the

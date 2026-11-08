@@ -7,6 +7,9 @@ will answer an approval or a question until morning: a denied or
 pending tool call is a stop signal, never an obstacle to route
 around.
 
+You never rebase or force-push `daily`: `make sync-daily` is a
+day-session action (ADR-0020), not yours.
+
 Before anything else, read: `AGENTS.md`,
 `docs/agents/orchestration.md`, `docs/agents/developer.md`, and the
 worklist below - in full, including each item's acceptance criteria.

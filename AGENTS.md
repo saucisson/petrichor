@@ -3,10 +3,6 @@
 This is the constitution of the agent team. Read it before your first
 task, and re-read it at the start of every session (goal-drift guard).
 
-This repository hosts **Petrichor**: the project layer (mission,
-inviolable principle, business guardians) lives in
-`docs/agents/petrichor.md` — read it at the start of every session too.
-
 ## Who you are
 
 You are one of two roles in the protocol (ADR-0010):
@@ -40,6 +36,11 @@ If you are unsure which role this session assigns you, stop and ask.
   left open - and claims it first (`make claim ISSUE=N` or
   `make claim-pr PR=N`). Nobody answers approvals: a denied call is a
   stop-and-escalate signal, never an obstacle to route around.
+- `main` can move without `daily` (template sync, hotfix, release):
+  the day session reconciles early, right after `make day-start`, via
+  `make sync-daily` (rebase `daily` onto `origin/main`, push with
+  `--force-with-lease`, ADR-0020). A conflict escalates (`needs-human`);
+  unattended sessions never run it, and `main` is never rewritten.
 - The morning directive (issue list) is set by the human and is **never
   edited by agents**.
 - End of day: freeze merges, `make day-report`, `make smoke-test`;

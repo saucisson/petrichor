@@ -16,7 +16,9 @@ Constitutional document (ADR-0009). Changing it requires a human decision.
 
 1. **Morning directive** - the human selects and prioritizes the day's
    issues, and runs `make day-start` (tags `daily-YYYY-MM-DD` as a restore
-   point).
+   point). If `origin/main` has commits `daily` lacks (template sync,
+   hotfix, release), the day session then runs `make sync-daily`
+   (ADR-0020) before any work starts.
 2. **Triage gate** - each issue must carry acceptance criteria (template
    `.github/ISSUE_TEMPLATE/task.md`). No criteria → the issue is labeled
    `blocked` and skipped.
@@ -38,6 +40,22 @@ Constitutional document (ADR-0009). Changing it requires a human decision.
 6. **Mutation testing** runs on `daily` at EOD (`make mutate`, workflow
    `mutation.yml`) - surviving mutants become issues (ADR-0012).
 
+## Integrating main into daily (ADR-0020)
+
+`main` moves without `daily` when the human syncs the template, hotfixes,
+or releases. The day session reconciles the branches itself, early in the
+day (right after `make day-start`, before opening pull requests):
+
+- `make sync-daily` rebases `daily` onto `origin/main` and pushes the
+  rewritten `daily` with `--force-with-lease` (ADR-0020). A strictly
+  behind `daily` is fast-forwarded instead - no rewrite, no force.
+- A rebase conflict aborts and escalates (`needs-human`): resolving a
+  conflict between accepted `main` content and accepted `daily` work
+  is a human decision, never an unattended merge.
+- `main` is never rewritten. Night sessions never run the sync: the
+  unattended loop derives its worklist from `daily` and nobody answers
+  a conflict at 3 a.m. (ADR-0017, ADR-0020).
+
 ## Protections to enable
 
 **GitHub** (`main` and `daily`):
@@ -48,6 +66,8 @@ Constitutional document (ADR-0009). Changing it requires a human decision.
   (ADR-0009).
 - Require linear history (the merge driver squash-merges, or
   rebase-merges when squash is disabled).
+- Allow force pushes on `daily` only (the sync driver pushes
+  `--force-with-lease`, ADR-0020); keep them forbidden on `main`.
 - Delete head branches on merge (the driver also deletes them).
 - `CODEOWNERS` reserves `docs/decisions/` and tool configuration for the
   human owner.
@@ -75,3 +95,6 @@ all merges stop until the human answers (see `docs/agents/escalation.md`).
 day. `main` exists so that a human always stands between "the agents
 believe it works" and "the product is updated". The merge criteria are
 codified - not vibes - so both agents can check them mechanically.
+The one sanctioned rewrite of `daily` (`make sync-daily`, ADR-0020)
+integrates already-accepted `main` content early in the day; it never
+touches `main` itself, so the human merge stays the only path in.
