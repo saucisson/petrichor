@@ -108,6 +108,14 @@ One entry per commit or pull request:
 - **Judgement calls**: constitutional files kept out of the agent PR per the repo precedent (PR #54 review round 1); the human directive covers the sync as a whole.
 - **Escalations**: none (human directive in session).
 
+## 2026-11-08 - Resumed PR #59 (P02 canonical petri+json): local gate red on the pushed head + review BLOCKING on PR size
+
+- **Issue**: #2 (P02), via recovery of pull request #59 left open by an earlier session (ADR-0017).
+- **Done**: claimed with `make claim-pr PR=59`. Diagnosis on head `44347f8`: CI green (2 check runs success) but the working tree carried the earlier session's uncommitted rework (payload-based `build_canonical_model`, `Element` base class) on top of which local `make check` was RED — 8 ruff E501 long lines in `scripts/test_petri_canonical.py`, and 5 rejection tests failing because they validated the minimal `sample_payload()` (missing the required `content_hash`/lineage/`color_domain` fields) instead of a complete canonical document, so model-level violations never reached their intended error. Fixes: wrapped the long lines (ruff format clean), added a `canonical_payload()` helper (sample model serialized back to a full document) used by the rejection test — no test weakened, the cases are now precise. The recovery commit therefore includes the uncommitted rework, completed and covered by the green gate. Also addressed the reviewer's BLOCKING finding (787 changed lines > ~500, no split proposed) with a PR-level split proposal in the PR body, the same resolution accepted on PR #57.
+- **Evidence**: `make check` green on the final state — ruff clean + format, mypy strict clean, import-linter clean, 205 tests passed (28 in test_petri_canonical.py), coverage 94.76% vs floor 90%. `make wait-ci PR=59` exit 0 on the previous head; re-run on the new head after push.
+- **Judgement calls**: the rejection tests now start from a complete canonical document because `validate_canonical_model` validates a full v1.0 document while `build_canonical_model` fills lineage/hash defaults for raw imports; the split stays at PR level (module + its tests ship together per the tests-ship-with-logic rule).
+- **Escalations**: none.
+
 ## 2026-11-08 - P02: canonical `petri+json` v1.0 schema and canonical hashing (issue #2, PR pending)
 
 - **Issue**: #2 (P02 · Schéma canonique `petri+json` v1.0 et hachage canonique, spec §13).

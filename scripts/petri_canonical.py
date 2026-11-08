@@ -61,27 +61,25 @@ class Layout(BaseModel):
     y: float
 
 
-class Place(BaseModel):
-    """One place of the net, with its stable id and initial marking."""
+class Element(BaseModel):
+    """A net element with a stable id, a semantic name and presentation data."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     id: ElementId
     name: ElementName
+    layout: Layout
+    annotations: dict[str, JsonValue]
+
+
+class Place(Element):
+    """One place of the net, with its initial marking."""
+
     initial_marking: int = Field(ge=0)
-    layout: Layout
-    annotations: dict[str, JsonValue]
 
 
-class Transition(BaseModel):
-    """One transition of the net, with its stable id."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    id: ElementId
-    name: ElementName
-    layout: Layout
-    annotations: dict[str, JsonValue]
+class Transition(Element):
+    """One transition of the net."""
 
 
 class Arc(BaseModel):
@@ -128,16 +126,11 @@ class CanonicalModel(BaseModel):
     @model_validator(mode="after")
     def check_semantic_integrity(self) -> CanonicalModel:
         """Enforce the invariants the canonical hash relies on."""
-        elements: tuple[Place | Transition | Arc, ...] = (
-            *self.places,
-            *self.transitions,
-            *self.arcs,
-        )
+        elements: tuple[Element | Arc, ...] = (*self.places, *self.transitions, *self.arcs)
         element_ids = [element.id for element in elements]
         if len(set(element_ids)) != len(element_ids):
             raise ValueError("Element ids must be unique across places, transitions and arcs.")
-        names = [place.name for place in self.places]
-        names += [transition.name for transition in self.transitions]
+        names = [element.name for element in (*self.places, *self.transitions)]
         if len(set(names)) != len(names):
             raise ValueError("Element names must be unique across places and transitions.")
         known_ids = set(element_ids)
@@ -157,7 +150,7 @@ def semantic_projection(*, model: CanonicalModel) -> dict[str, object]:
     Ids are resolved to element names, so renaming an id cannot change the
     projection; layout, annotations, lineage and metadata are dropped.
     """
-    elements: tuple[Place | Transition, ...] = (*model.places, *model.transitions)
+    elements: tuple[Element, ...] = (*model.places, *model.transitions)
     names_by_id = {element.id: element.name for element in elements}
     places: list[dict[str, JsonValue]] = [
         {"name": place.name, "initial_marking": place.initial_marking}
@@ -203,14 +196,9 @@ def compute_content_hash(*, model: CanonicalModel) -> ContentHash:
         transition_count=len(model.transitions),
         arc_count=len(model.arcs),
     )
-    serialized = canonical_json(payload=projection)
-    digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(canonical_json(payload=projection).encode("utf-8")).hexdigest()
     content_hash = ContentHash(f"{HASH_PREFIX}{digest}")
-    logger.debug(
-        "canonical_content_hash_computed",
-        model_id=model.id,
-        content_hash=content_hash,
-    )
+    logger.debug("canonical_content_hash_computed", model_id=model.id, content_hash=content_hash)
     return content_hash
 
 
@@ -240,11 +228,7 @@ def validate_canonical_model(*, payload: object) -> CanonicalModel:
         raise InvalidCanonicalModelError(
             f"content_hash mismatch: stored {model.content_hash}, recomputed {recomputed_hash}."
         )
-    logger.debug(
-        "canonical_model_validated",
-        model_id=model.id,
-        content_hash=model.content_hash,
-    )
+    logger.debug("canonical_model_validated", model_id=model.id, content_hash=model.content_hash)
     return model
 
 
@@ -258,32 +242,27 @@ def parse_canonical_json(*, text: str) -> CanonicalModel:
     return validate_canonical_model(payload=payload)
 
 
-def build_canonical_model(
-    *,
-    model_id: ModelId,
-    formalism: Formalism,
-    places: tuple[Place, ...],
-    transitions: tuple[Transition, ...],
-    arcs: tuple[Arc, ...],
-    color_domain: dict[str, JsonValue] | None = None,
-    metadata: dict[str, JsonValue] | None = None,
-) -> CanonicalModel:
-    """Assemble a canonical model and stamp it with its canonical content hash."""
-    draft = CanonicalModel(
-        id=model_id,
-        formalism=formalism,
-        content_hash=PLACEHOLDER_CONTENT_HASH,
-        parent=None,
-        children=(),
-        derivations=(),
-        certificates=(),
-        places=places,
-        transitions=transitions,
-        arcs=arcs,
-        color_domain=color_domain,
-        metadata=metadata if metadata is not None else {},
+LINEAGE_DEFAULTS: dict[str, object] = {
+    "parent": None,
+    "children": [],
+    "derivations": [],
+    "certificates": [],
+    "color_domain": None,
+    "metadata": {},
+}
+
+
+def build_canonical_model(*, payload: dict[str, object]) -> CanonicalModel:
+    """Assemble a canonical model from a raw document and stamp its content hash.
+
+    Lineage fields default to empty; the ``content_hash`` of the payload, if
+    any, is ignored and recomputed from the semantic part.
+    """
+    full_payload = {**LINEAGE_DEFAULTS, **payload}
+    draft = CanonicalModel.model_validate(
+        {**full_payload, "content_hash": PLACEHOLDER_CONTENT_HASH}
     )
     content_hash = compute_content_hash(model=draft)
     model = draft.model_copy(update={"content_hash": content_hash})
-    logger.debug("canonical_model_built", model_id=model_id, content_hash=content_hash)
+    logger.debug("canonical_model_built", model_id=draft.id, content_hash=content_hash)
     return model

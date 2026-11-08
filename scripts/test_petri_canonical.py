@@ -8,23 +8,16 @@ rejection of invalid input. Log narration is asserted too (ADR-0005).
 
 import json
 import re
+from typing import TYPE_CHECKING, cast
 
 import pytest
 import structlog.testing
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-import petri_canonical
 from petri_canonical import (
-    Arc,
     CanonicalModel,
-    ElementId,
-    ElementName,
     InvalidCanonicalModelError,
-    Layout,
-    ModelId,
-    Place,
-    Transition,
     build_canonical_model,
     compute_content_hash,
     parse_canonical_json,
@@ -32,355 +25,301 @@ from petri_canonical import (
     validate_canonical_model,
 )
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
 CONTENT_HASH_REGEX = re.compile(r"sha256:[0-9a-f]{64}")
 
-type NetTuple = tuple[tuple[Place, ...], tuple[Transition, ...], tuple[Arc, ...]]
-# A drawn net: places, transitions and arcs.
 
-
-def make_place(
-    *,
-    element_id: str = "pl_011",
-    name: str = "think_1",
-    marking: int = 1,
-    x: float = 320.0,
-    y: float = 78.0,
-    annotations: dict[str, petri_canonical.JsonValue] | None = None,
-) -> Place:
-    """Build a place with overridable id, name, marking, layout and annotations."""
-    return Place(
-        id=ElementId(element_id),
-        name=ElementName(name),
-        initial_marking=marking,
-        layout=Layout(x=x, y=y),
-        annotations=annotations if annotations is not None else {"role_hint": "automaton-state"},
-    )
-
-
-def make_transition(
-    *,
-    element_id: str = "tr_004",
-    name: str = "takeL_1",
-    x: float = 254.0,
-    y: float = 102.0,
-    annotations: dict[str, petri_canonical.JsonValue] | None = None,
-) -> Transition:
-    """Build a transition with overridable id, name, layout and annotations."""
-    return Transition(
-        id=ElementId(element_id),
-        name=ElementName(name),
-        layout=Layout(x=x, y=y),
-        annotations=annotations if annotations is not None else {"silent": False},
-    )
-
-
-def make_arc(
-    *,
-    element_id: str = "ar_031",
-    source: str = "pl_011",
-    target: str = "tr_004",
-    weight: int = 1,
-) -> Arc:
-    """Build an arc with overridable id, endpoints and weight."""
-    return Arc(
-        id=ElementId(element_id),
-        source=ElementId(source),
-        target=ElementId(target),
-        weight=weight,
-        annotations={},
-    )
-
-
-def sample_net() -> tuple[tuple[Place, ...], tuple[Transition, ...], tuple[Arc, ...]]:
-    """A two-place, one-transition net with two arcs (Philosophes fragment)."""
-    places = (
-        make_place(),
-        make_place(element_id="pl_012", name="eat_1", marking=0, x=400.0, y=200.0),
-    )
-    transitions = (make_transition(),)
-    arcs = (
-        make_arc(),
-        make_arc(element_id="ar_032", source="tr_004", target="pl_012", weight=1),
-    )
-    return places, transitions, arcs
-
-
-def sample_model(*, model_id: str = "mdl_8f3ac1") -> CanonicalModel:
-    """Build the canonical sample model, stamped with its content hash."""
-    places, transitions, arcs = sample_net()
-    return build_canonical_model(
-        model_id=ModelId(model_id),
-        formalism="pt",
-        places=places,
-        transitions=transitions,
-        arcs=arcs,
-        metadata={"source": "pnml", "imported_at": "2026-11-02T12:00:00Z"},
-    )
-
-
-def renamed_model(*, model_id: str = "mdl_8f3ac1", suffix: str = "_renamed") -> CanonicalModel:
-    """The sample net with every element id and the model id renamed."""
-    places, transitions, arcs = sample_net()
-    renamed_places = tuple(
-        place.model_copy(update={"id": ElementId(place.id + suffix)}) for place in places
-    )
-    renamed_transitions = tuple(
-        transition.model_copy(update={"id": ElementId(transition.id + suffix)})
-        for transition in transitions
-    )
-    renamed_arcs = tuple(
-        arc.model_copy(
-            update={
-                "id": ElementId(arc.id + suffix),
-                "source": ElementId(arc.source + suffix),
-                "target": ElementId(arc.target + suffix),
+def sample_payload() -> dict[str, object]:
+    """A two-place, one-transition net with two arcs, as a raw JSON document."""
+    return {
+        "id": "mdl_8f3ac1",
+        "formalism": "pt",
+        "places": [
+            {
+                "id": "pl_011",
+                "name": "think_1",
+                "initial_marking": 1,
+                "layout": {"x": 320, "y": 78},
+                "annotations": {"role_hint": "automaton-state"},
+            },
+            {
+                "id": "pl_012",
+                "name": "eat_1",
+                "initial_marking": 0,
+                "layout": {"x": 400, "y": 200},
+                "annotations": {},
+            },
+        ],
+        "transitions": [
+            {
+                "id": "tr_004",
+                "name": "takeL_1",
+                "layout": {"x": 254, "y": 102},
+                "annotations": {"silent": False},
             }
-        )
-        for arc in arcs
-    )
-    return build_canonical_model(
-        model_id=ModelId(model_id + suffix),
-        formalism="pt",
-        places=renamed_places,
-        transitions=renamed_transitions,
-        arcs=renamed_arcs,
-        metadata={"source": "pnml"},
-    )
+        ],
+        "arcs": [
+            {
+                "id": "ar_031",
+                "source": "pl_011",
+                "target": "tr_004",
+                "weight": 1,
+                "annotations": {},
+            },
+            {
+                "id": "ar_032",
+                "source": "tr_004",
+                "target": "pl_012",
+                "weight": 1,
+                "annotations": {},
+            },
+        ],
+        "metadata": {"source": "pnml", "imported_at": "2026-11-02T12:00:00Z"},
+    }
+
+
+def elements_of(*, payload: dict[str, object], section: str) -> list[dict[str, object]]:
+    """One element list of a raw payload, typed for mutation."""
+    return cast("list[dict[str, object]]", payload[section])
+
+
+def sample_model() -> CanonicalModel:
+    """The canonical sample model, stamped with its content hash."""
+    return build_canonical_model(payload=sample_payload())
+
+
+def variant_of(*, mutate: Callable[[dict[str, object]], None]) -> CanonicalModel:
+    """The sample model with one mutation applied to its raw payload."""
+    payload = sample_payload()
+    mutate(payload)
+    return build_canonical_model(payload=payload)
+
+
+def canonical_payload() -> dict[str, object]:
+    """The sample model serialized back to a complete canonical document."""
+    return cast("dict[str, object]", json.loads(serialize_model(model=sample_model())))
 
 
 class TestCanonicalSerialization:
     def test_round_trip_is_lossless(self) -> None:
         model = sample_model()
-
         text = serialize_model(model=model)
         parsed = parse_canonical_json(text=text)
-
         assert parsed == model
         assert serialize_model(model=parsed) == text
 
     def test_serialization_is_deterministic_with_sorted_keys(self) -> None:
-        model = sample_model()
-
-        first = serialize_model(model=model)
-        second = serialize_model(model=model)
-
-        assert first == second
-        assert json.dumps(json.loads(first), sort_keys=True, separators=(",", ":")) == first
+        text = serialize_model(model=sample_model())
+        assert serialize_model(model=sample_model()) == text
+        assert json.dumps(json.loads(text), sort_keys=True, separators=(",", ":")) == text
 
     def test_element_order_is_preserved_not_sorted(self) -> None:
-        places, transitions, arcs = sample_net()
-        reordered = build_canonical_model(
-            model_id=ModelId("mdl_order"),
-            formalism="pt",
-            places=tuple(reversed(places)),
-            transitions=transitions,
-            arcs=arcs,
-        )
-        text = serialize_model(model=reordered)
+        def reverse_places(payload: dict[str, object]) -> None:
+            elements_of(payload=payload, section="places").reverse()
+
+        text = serialize_model(model=variant_of(mutate=reverse_places))
         stored_ids = [place["id"] for place in json.loads(text)["places"]]
         assert stored_ids == ["pl_012", "pl_011"]
 
 
-class TestContentHash:
-    def test_hash_has_the_canonical_format(self) -> None:
-        model = sample_model()
-        assert CONTENT_HASH_REGEX.fullmatch(model.content_hash) is not None
-
-    def test_renaming_ids_does_not_change_the_hash(self) -> None:
-        model = sample_model()
-        renamed = renamed_model()
-
-        assert compute_content_hash(model=renamed) == model.content_hash
-
-    def test_layout_and_annotations_do_not_change_the_hash(self) -> None:
-        model = sample_model()
-        places, transitions, arcs = sample_net()
-        redecorated = build_canonical_model(
-            model_id=ModelId("mdl_8f3ac1"),
-            formalism="pt",
-            places=tuple(
-                place.model_copy(
-                    update={
-                        "layout": Layout(x=place.layout.x + 1000.0, y=place.layout.y - 500.0),
-                        "annotations": {"role_hint": "changed", "comments": ["edited"]},
-                    }
-                )
-                for place in places
-            ),
-            transitions=tuple(
-                transition.model_copy(
-                    update={
-                        "layout": Layout(x=0.0, y=0.0),
-                        "annotations": {"silent": True},
-                    }
-                )
-                for transition in transitions
-            ),
-            arcs=arcs,
-        )
-
-        assert compute_content_hash(model=redecorated) == model.content_hash
-
-    def test_metadata_does_not_change_the_hash(self) -> None:
-        places, transitions, arcs = sample_net()
-        other_metadata = build_canonical_model(
-            model_id=ModelId("mdl_8f3ac1"),
-            formalism="pt",
-            places=places,
-            transitions=transitions,
-            arcs=arcs,
-            metadata={"source": "hand-written"},
-        )
-
-        assert other_metadata.content_hash == sample_model().content_hash
-
-    def test_adding_an_arc_changes_the_hash(self) -> None:
-        model = sample_model()
-        places, transitions, arcs = sample_net()
-        extended = build_canonical_model(
-            model_id=ModelId("mdl_8f3ac1"),
-            formalism="pt",
-            places=places,
-            transitions=transitions,
-            arcs=(*arcs, make_arc(element_id="ar_033", source="pl_012", target="tr_004")),
-        )
-
-        assert extended.content_hash != model.content_hash
-
-    def test_removing_a_place_changes_the_hash(self) -> None:
-        model = sample_model()
-        places, transitions, arcs = sample_net()
-        reduced = build_canonical_model(
-            model_id=ModelId("mdl_8f3ac1"),
-            formalism="pt",
-            places=places[:1],
-            transitions=transitions,
-            arcs=(arcs[0],),
-        )
-
-        assert reduced.content_hash != model.content_hash
-
-    def test_initial_marking_change_changes_the_hash(self) -> None:
-        model = sample_model()
-        places, transitions, arcs = sample_net()
-        remarking = build_canonical_model(
-            model_id=ModelId("mdl_8f3ac1"),
-            formalism="pt",
-            places=(make_place(marking=0), places[1]),
-            transitions=transitions,
-            arcs=arcs,
-        )
-
-        assert remarking.content_hash != model.content_hash
-
-    def test_arc_weight_change_changes_the_hash(self) -> None:
-        model = sample_model()
-        places, transitions, arcs = sample_net()
-        reweighted = build_canonical_model(
-            model_id=ModelId("mdl_8f3ac1"),
-            formalism="pt",
-            places=places,
-            transitions=transitions,
-            arcs=(make_arc(weight=2), arcs[1]),
-        )
-
-        assert reweighted.content_hash != model.content_hash
-
-    def test_element_name_change_changes_the_hash(self) -> None:
-        model = sample_model()
-        places, transitions, arcs = sample_net()
-        renamed = build_canonical_model(
-            model_id=ModelId("mdl_8f3ac1"),
-            formalism="pt",
-            places=(make_place(name="ponder_1"), places[1]),
-            transitions=transitions,
-            arcs=arcs,
-        )
-
-        assert renamed.content_hash != model.content_hash
+def rename_ids(payload: dict[str, object], *, suffix: str = "_r") -> None:
+    """Rename every element id and the model id (names unchanged)."""
+    for section in ("places", "transitions", "arcs"):
+        for element in elements_of(payload=payload, section=section):
+            element["id"] = str(element["id"]) + suffix
+            for endpoint in ("source", "target"):
+                if endpoint in element:
+                    element[endpoint] = str(element[endpoint]) + suffix
+    payload["id"] = str(payload["id"]) + suffix
 
 
-class TestStrictValidation:
-    def test_malformed_json_is_rejected_with_an_explicit_error(self) -> None:
-        with pytest.raises(InvalidCanonicalModelError, match="Not valid JSON"):
-            parse_canonical_json(text="{not json")
+def set_field(
+    *, payload: dict[str, object], section: str, index: int, field: str, value: object
+) -> None:
+    """Replace one field of one element of a raw payload."""
+    elements_of(payload=payload, section=section)[index][field] = value
 
-    def test_non_object_document_is_rejected(self) -> None:
-        with pytest.raises(InvalidCanonicalModelError, match="must be a JSON object"):
-            parse_canonical_json(text="[]")
 
-    def test_unknown_arc_endpoint_is_rejected(self) -> None:
-        payload = json.loads(serialize_model(model=sample_model()))
-        payload["arcs"][0]["target"] = "tr_unknown"
+def set_root(*, payload: dict[str, object], field: str, value: object) -> None:
+    """Replace one top-level field of a raw payload."""
+    payload[field] = value
 
-        with pytest.raises(InvalidCanonicalModelError, match="unknown element id"):
-            validate_canonical_model(payload=payload)
 
-    def test_duplicate_element_ids_are_rejected(self) -> None:
-        payload = json.loads(serialize_model(model=sample_model()))
-        payload["transitions"][0]["id"] = payload["places"][0]["id"]
+def redecorate(payload: dict[str, object]) -> None:
+    """Move a node and rewrite annotations (layout/annotations are not hashed)."""
+    set_field(
+        payload=payload, section="places", index=0, field="layout", value={"x": 9999, "y": -1}
+    )
+    set_field(
+        payload=payload,
+        section="places",
+        index=0,
+        field="annotations",
+        value={"role_hint": "changed"},
+    )
+    set_field(
+        payload=payload, section="transitions", index=0, field="annotations", value={"silent": True}
+    )
 
-        with pytest.raises(InvalidCanonicalModelError, match="ids must be unique"):
-            validate_canonical_model(payload=payload)
 
-    def test_duplicate_element_names_are_rejected(self) -> None:
-        payload = json.loads(serialize_model(model=sample_model()))
-        payload["transitions"][0]["name"] = payload["places"][0]["name"]
+def drop_second_place(payload: dict[str, object]) -> None:
+    """Remove the second place and the second arc (structure change)."""
+    elements_of(payload=payload, section="places").pop()
+    elements_of(payload=payload, section="arcs").pop()
 
-        with pytest.raises(InvalidCanonicalModelError, match="names must be unique"):
-            validate_canonical_model(payload=payload)
 
-    def test_negative_initial_marking_is_rejected(self) -> None:
-        payload = json.loads(serialize_model(model=sample_model()))
-        payload["places"][0]["initial_marking"] = -1
+INVARIANCE_CASES: list[tuple[str, Callable[[dict[str, object]], None]]] = [
+    ("ids renamed", rename_ids),
+    ("layout and annotations changed", redecorate),
+    (
+        "metadata changed",
+        lambda payload: set_root(payload=payload, field="metadata", value={"source": "hand"}),
+    ),
+]
 
-        with pytest.raises(InvalidCanonicalModelError, match="greater than or equal to 0"):
-            validate_canonical_model(payload=payload)
 
-    def test_zero_arc_weight_is_rejected(self) -> None:
-        payload = json.loads(serialize_model(model=sample_model()))
-        payload["arcs"][0]["weight"] = 0
+@pytest.mark.parametrize(
+    ("case_name", "mutate"), INVARIANCE_CASES, ids=[case[0] for case in INVARIANCE_CASES]
+)
+def test_cosmetic_changes_do_not_change_the_hash(
+    case_name: str, mutate: Callable[[dict[str, object]], None]
+) -> None:
+    """Renaming ids, moving nodes or editing annotations/metadata keeps the hash."""
+    assert compute_content_hash(model=variant_of(mutate=mutate)) == sample_model().content_hash
 
-        with pytest.raises(InvalidCanonicalModelError, match="greater than or equal to 1"):
-            validate_canonical_model(payload=payload)
 
-    def test_unknown_field_is_rejected(self) -> None:
-        payload = json.loads(serialize_model(model=sample_model()))
-        payload["unexpected"] = True
+SENSITIVITY_CASES: list[tuple[str, Callable[[dict[str, object]], None]]] = [
+    (
+        "arc added",
+        lambda payload: elements_of(payload=payload, section="arcs").append(
+            {
+                "id": "ar_033",
+                "source": "pl_012",
+                "target": "tr_004",
+                "weight": 1,
+                "annotations": {},
+            }
+        ),
+    ),
+    ("place removed", drop_second_place),
+    (
+        "initial marking changed",
+        lambda payload: set_field(
+            payload=payload, section="places", index=0, field="initial_marking", value=0
+        ),
+    ),
+    (
+        "arc weight changed",
+        lambda payload: set_field(
+            payload=payload, section="arcs", index=0, field="weight", value=2
+        ),
+    ),
+    (
+        "element name changed",
+        lambda payload: set_field(
+            payload=payload, section="places", index=0, field="name", value="ponder_1"
+        ),
+    ),
+]
 
-        with pytest.raises(InvalidCanonicalModelError, match="unexpected"):
-            validate_canonical_model(payload=payload)
 
-    def test_malformed_content_hash_is_rejected(self) -> None:
-        payload = json.loads(serialize_model(model=sample_model()))
-        payload["content_hash"] = "sha256:not-hex"
+@pytest.mark.parametrize(
+    ("case_name", "mutate"), SENSITIVITY_CASES, ids=[case[0] for case in SENSITIVITY_CASES]
+)
+def test_semantic_changes_change_the_hash(
+    case_name: str, mutate: Callable[[dict[str, object]], None]
+) -> None:
+    """Structure, initial marking, arc weights and names are all hash-covered."""
+    assert variant_of(mutate=mutate).content_hash != sample_model().content_hash
 
-        with pytest.raises(InvalidCanonicalModelError, match="content_hash must be"):
-            validate_canonical_model(payload=payload)
 
-    def test_tampered_content_hash_is_rejected(self) -> None:
-        payload = json.loads(serialize_model(model=sample_model()))
-        payload["content_hash"] = "sha256:" + "a" * 64
+def test_hash_has_the_canonical_format() -> None:
+    assert CONTENT_HASH_REGEX.fullmatch(sample_model().content_hash) is not None
 
-        with pytest.raises(InvalidCanonicalModelError, match="content_hash mismatch"):
-            validate_canonical_model(payload=payload)
 
-    def test_pt_net_with_color_domain_is_rejected(self) -> None:
-        payload = json.loads(serialize_model(model=sample_model()))
-        payload["color_domain"] = {"philosopher": ["thinking", "eating"]}
+REJECTION_CASES: list[tuple[str, Callable[[dict[str, object]], None], str]] = [
+    (
+        "unknown arc endpoint",
+        lambda p: set_field(payload=p, section="arcs", index=0, field="target", value="tr_x"),
+        "unknown element id",
+    ),
+    (
+        "duplicate element ids",
+        lambda p: set_field(payload=p, section="transitions", index=0, field="id", value="pl_011"),
+        "ids must be unique",
+    ),
+    (
+        "duplicate element names",
+        lambda p: set_field(
+            payload=p, section="transitions", index=0, field="name", value="think_1"
+        ),
+        "names must be unique",
+    ),
+    (
+        "negative initial marking",
+        lambda p: set_field(
+            payload=p, section="places", index=0, field="initial_marking", value=-1
+        ),
+        "greater than or equal to 0",
+    ),
+    (
+        "zero arc weight",
+        lambda p: set_field(payload=p, section="arcs", index=0, field="weight", value=0),
+        "greater than or equal to 1",
+    ),
+    (
+        "unknown extra field",
+        lambda p: set_root(payload=p, field="unexpected", value=True),
+        "unexpected",
+    ),
+    (
+        "malformed content hash",
+        lambda p: set_root(payload=p, field="content_hash", value="sha256:not-hex"),
+        "content_hash must be",
+    ),
+    (
+        "tampered content hash",
+        lambda p: set_root(payload=p, field="content_hash", value="sha256:" + "a" * 64),
+        "content_hash mismatch",
+    ),
+    (
+        "pt net with color domain",
+        lambda p: set_root(payload=p, field="color_domain", value={"philosopher": ["thinking"]}),
+        "color_domain",
+    ),
+]
 
-        with pytest.raises(InvalidCanonicalModelError, match="color_domain"):
-            validate_canonical_model(payload=payload)
+
+@pytest.mark.parametrize(
+    ("case_name", "mutate", "match"), REJECTION_CASES, ids=[case[0] for case in REJECTION_CASES]
+)
+def test_invalid_input_is_rejected_with_an_explicit_error(
+    case_name: str, mutate: Callable[[dict[str, object]], None], match: str
+) -> None:
+    """Every schema violation raises InvalidCanonicalModelError with a message."""
+    payload = canonical_payload()
+    mutate(payload)
+    with pytest.raises(InvalidCanonicalModelError, match=match):
+        validate_canonical_model(payload=payload)
+
+
+def test_malformed_json_is_rejected_with_an_explicit_error() -> None:
+    with pytest.raises(InvalidCanonicalModelError, match="Not valid JSON"):
+        parse_canonical_json(text="{not json")
+
+
+def test_non_object_document_is_rejected() -> None:
+    with pytest.raises(InvalidCanonicalModelError, match="must be a JSON object"):
+        validate_canonical_model(payload=[])
 
 
 class TestLogNarration:
     def test_hash_computation_narrates_a_debug_event(self) -> None:
         with structlog.testing.capture_logs() as events:
             model = sample_model()
-
-        hash_events = [
-            event for event in events if event["event"] == "canonical_content_hash_computed"
-        ]
+        hash_events = [e for e in events if e["event"] == "canonical_content_hash_computed"]
         assert len(hash_events) == 1
         assert hash_events[0]["model_id"] == "mdl_8f3ac1"
         assert hash_events[0]["content_hash"] == model.content_hash
@@ -388,8 +327,7 @@ class TestLogNarration:
     def test_validation_narrates_a_debug_event(self) -> None:
         with structlog.testing.capture_logs() as events:
             parse_canonical_json(text=serialize_model(model=sample_model()))
-
-        assert any(event["event"] == "canonical_model_validated" for event in events)
+        assert any(e["event"] == "canonical_model_validated" for e in events)
 
     def test_rejection_narrates_a_warning(self) -> None:
         with (
@@ -397,94 +335,72 @@ class TestLogNarration:
             pytest.raises(InvalidCanonicalModelError),
         ):
             parse_canonical_json(text="{not json")
-
-        assert any(event["event"] == "canonical_model_rejected" for event in events)
+        assert any(e["event"] == "canonical_model_rejected" for e in events)
 
 
 @st.composite
-def random_net(draw: st.DrawFn) -> NetTuple:
-    """Draw a random small P/T net with unique ids and names."""
+def random_payload(draw: st.DrawFn) -> dict[str, object]:
+    """Draw a random small P/T net as a raw JSON document."""
     place_count = draw(st.integers(min_value=0, max_value=4))
     transition_count = draw(st.integers(min_value=0, max_value=3))
-    places = tuple(
-        make_place(
-            element_id=f"pl_{index}",
-            name=f"place_{index}",
-            marking=draw(st.integers(min_value=0, max_value=3)),
-        )
+    places = [
+        {
+            "id": f"pl_{index}",
+            "name": f"place_{index}",
+            "initial_marking": draw(st.integers(min_value=0, max_value=3)),
+            "layout": {"x": 0, "y": 0},
+            "annotations": {},
+        }
         for index in range(place_count)
-    )
-    transitions = tuple(
-        make_transition(element_id=f"tr_{index}", name=f"transition_{index}")
+    ]
+    transitions = [
+        {
+            "id": f"tr_{index}",
+            "name": f"transition_{index}",
+            "layout": {"x": 0, "y": 0},
+            "annotations": {},
+        }
         for index in range(transition_count)
-    )
-    element_ids = [place.id for place in places] + [transition.id for transition in transitions]
+    ]
+    element_ids = [place["id"] for place in places] + [t["id"] for t in transitions]
     arc_count = draw(st.integers(min_value=0, max_value=5)) if element_ids else 0
-    arcs = tuple(
-        make_arc(
-            element_id=f"ar_{index}",
-            source=element_ids[draw(st.integers(min_value=0, max_value=len(element_ids) - 1))],
-            target=element_ids[draw(st.integers(min_value=0, max_value=len(element_ids) - 1))],
-            weight=draw(st.integers(min_value=1, max_value=3)),
-        )
+    arcs = [
+        {
+            "id": f"ar_{index}",
+            "source": element_ids[draw(st.integers(min_value=0, max_value=len(element_ids) - 1))],
+            "target": element_ids[draw(st.integers(min_value=0, max_value=len(element_ids) - 1))],
+            "weight": draw(st.integers(min_value=1, max_value=3)),
+            "annotations": {},
+        }
         for index in range(arc_count)
-    )
-    return places, transitions, arcs
-
-
-def build_random_model(
-    *, places: tuple[Place, ...], transitions: tuple[Transition, ...], arcs: tuple[Arc, ...]
-) -> CanonicalModel:
-    """Build a canonical model from a drawn net."""
-    return build_canonical_model(
-        model_id=ModelId("mdl_property"),
-        formalism="pt",
-        places=places,
-        transitions=transitions,
-        arcs=arcs,
-    )
+    ]
+    return {
+        "id": "mdl_property",
+        "formalism": "pt",
+        "places": places,
+        "transitions": transitions,
+        "arcs": arcs,
+        "metadata": {},
+    }
 
 
 @pytest.mark.property
 @settings(deadline=None)
-@given(net=random_net())
-def test_property_round_trip_is_lossless(net: NetTuple) -> None:
+@given(payload=random_payload())
+def test_property_round_trip_is_lossless(payload: dict[str, object]) -> None:
     """Any valid net survives serialize → parse without loss."""
-    places, transitions, arcs = net
-    model = build_random_model(places=places, transitions=transitions, arcs=arcs)
-
-    parsed = parse_canonical_json(text=serialize_model(model=model))
-
-    assert parsed == model
+    model = build_canonical_model(payload=payload)
+    assert parse_canonical_json(text=serialize_model(model=model)) == model
 
 
 @pytest.mark.property
 @settings(deadline=None)
-@given(net=random_net(), suffix=st.text(alphabet="rstuvwxyz", min_size=1, max_size=4))
-def test_property_renaming_ids_never_changes_the_hash(net: NetTuple, suffix: str) -> None:
+@given(payload=random_payload(), suffix=st.text(alphabet="rstuvwxyz", min_size=1, max_size=4))
+def test_property_renaming_ids_never_changes_the_hash(
+    payload: dict[str, object], suffix: str
+) -> None:
     """Renaming every id (elements and model) never changes the content hash."""
-    places, transitions, arcs = net
-    model = build_random_model(places=places, transitions=transitions, arcs=arcs)
-    renamed = build_canonical_model(
-        model_id=ModelId("mdl_property" + suffix),
-        formalism="pt",
-        places=tuple(
-            place.model_copy(update={"id": ElementId(place.id + suffix)}) for place in places
-        ),
-        transitions=tuple(
-            transition.model_copy(update={"id": ElementId(transition.id + suffix)})
-            for transition in transitions
-        ),
-        arcs=tuple(
-            arc.model_copy(
-                update={
-                    "id": ElementId(arc.id + suffix),
-                    "source": ElementId(arc.source + suffix),
-                    "target": ElementId(arc.target + suffix),
-                }
-            )
-            for arc in arcs
-        ),
-    )
-
+    model = build_canonical_model(payload=payload)
+    rename_ids(payload, suffix=suffix)
+    renamed = build_canonical_model(payload=payload)
     assert compute_content_hash(model=renamed) == model.content_hash
