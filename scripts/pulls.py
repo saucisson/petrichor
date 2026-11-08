@@ -220,7 +220,11 @@ def fetch_issue(
             file=sys.stderr,
         )
         raise SystemExit(EXIT_CODE_CRITERIA_UNMET)
-    issue: object = response.json()
+    try:
+        issue: object = response.json()
+    except json.JSONDecodeError as decode_error:
+        print(f"Error: undecodable API response: {decode_error}", file=sys.stderr)
+        raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE) from decode_error
     if not isinstance(issue, dict):
         print("Error: the item payload is unexpected - do not update it.", file=sys.stderr)
         raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
