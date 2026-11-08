@@ -15,7 +15,7 @@ import structlog.testing
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from petri_canonical import (
+from petrichor.petri_canonical import (
     CanonicalModel,
     InvalidCanonicalModelError,
     build_canonical_model,
@@ -82,6 +82,8 @@ def sample_payload() -> dict[str, object]:
 
 def elements_of(*, payload: dict[str, object], section: str) -> list[dict[str, object]]:
     """One element list of a raw payload, typed for mutation."""
+    # ADR-0006 escape: the payload is built by this test module, the section
+    # is a list of dicts by construction.
     return cast("list[dict[str, object]]", payload[section])
 
 
@@ -99,6 +101,8 @@ def variant_of(*, mutate: Callable[[dict[str, object]], None]) -> CanonicalModel
 
 def canonical_payload() -> dict[str, object]:
     """The sample model serialized back to a complete canonical document."""
+    # ADR-0006 escape: json.loads returns Any; the serialized model is a
+    # JSON object by construction.
     return cast("dict[str, object]", json.loads(serialize_model(model=sample_model())))
 
 
@@ -242,51 +246,59 @@ def test_hash_has_the_canonical_format() -> None:
 REJECTION_CASES: list[tuple[str, Callable[[dict[str, object]], None], str]] = [
     (
         "unknown arc endpoint",
-        lambda p: set_field(payload=p, section="arcs", index=0, field="target", value="tr_x"),
+        lambda payload: set_field(
+            payload=payload, section="arcs", index=0, field="target", value="tr_x"
+        ),
         "unknown element id",
     ),
     (
         "duplicate element ids",
-        lambda p: set_field(payload=p, section="transitions", index=0, field="id", value="pl_011"),
+        lambda payload: set_field(
+            payload=payload, section="transitions", index=0, field="id", value="pl_011"
+        ),
         "ids must be unique",
     ),
     (
         "duplicate element names",
-        lambda p: set_field(
-            payload=p, section="transitions", index=0, field="name", value="think_1"
+        lambda payload: set_field(
+            payload=payload, section="transitions", index=0, field="name", value="think_1"
         ),
         "names must be unique",
     ),
     (
         "negative initial marking",
-        lambda p: set_field(
-            payload=p, section="places", index=0, field="initial_marking", value=-1
+        lambda payload: set_field(
+            payload=payload, section="places", index=0, field="initial_marking", value=-1
         ),
         "greater than or equal to 0",
     ),
     (
         "zero arc weight",
-        lambda p: set_field(payload=p, section="arcs", index=0, field="weight", value=0),
+        lambda payload: set_field(
+            payload=payload, section="arcs", index=0, field="weight", value=0
+        ),
         "greater than or equal to 1",
     ),
     (
         "unknown extra field",
-        lambda p: set_root(payload=p, field="unexpected", value=True),
+        lambda payload: set_root(payload=payload, field="unexpected", value=True),
         "unexpected",
     ),
     (
         "malformed content hash",
-        lambda p: set_root(payload=p, field="content_hash", value="sha256:not-hex"),
+        lambda payload: set_root(payload=payload, field="content_hash", value="sha256:not-hex"),
         "content_hash must be",
     ),
     (
         "tampered content hash",
-        lambda p: set_root(payload=p, field="content_hash", value="sha256:" + "a" * 64),
+        lambda payload: set_root(payload=payload, field="content_hash", value="sha256:" + "a" * 64),
         "content_hash mismatch",
     ),
     (
         "pt net with color domain",
-        lambda p: set_root(payload=p, field="color_domain", value={"philosopher": ["thinking"]}),
+        lambda payload: set_root(
+            payload=payload, field="color_domain", value={"philosopher": ["thinking"]}
+        ),
         "color_domain",
     ),
 ]
