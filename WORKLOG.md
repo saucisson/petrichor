@@ -44,12 +44,12 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
-## 2026-11-08 - template sync 2aa4d27, part 4a: day + session domains (day-report, sync-daily, agent-review; ADR-0020/0021)
+## 2026-11-08 - template sync 2aa4d27, part 4a of 4c: day domain (day-report + sync-daily, ADR-0020/0021)
 
 - **Issue**: none (human-directed template sync).
-- **Done**: `scripts/day.py` (day-report + sync-daily subcommands, ADR-0020) and `scripts/session.py` (agent-review) from template @ 2aa4d27 replace `day_report.py` and `agent_review.py`; `__main__.py` registers `(pulls, ci, claims, merge, day, session)`; Makefile `day-report` now calls `python -m scripts day-report` and gains the `sync-daily` target (`python -m scripts sync-daily`). No test files existed for the replaced modules; dispatcher smoke-tested via `python -m scripts --help`.
-- **Evidence**: run: `make check` green (ruff + format, mypy strict, import-linter, 219 tests, coverage 94.76%) and `python -m scripts --help` lists day-report/sync-daily/agent-review. Not run: CI/review until push; `make sync-daily` itself not run yet (needs part 4b merged first).
-- **Judgement calls**: docs/ references to `agent_review.py` are constitutional and stay on the `template/constitutional-2aa4d27` branch, not in this PR.
+- **Done**: `scripts/day.py` from template @ 2aa4d27 replaces `day_report.py`; it registers `day-report` and the new `sync-daily` subcommand (ADR-0020: rebase daily onto origin/main with verification and lease-push). `__main__.py` registers `(pulls, ci, claims, merge, day)`; Makefile `day-report` now calls `python -m scripts day-report` and gains the `sync-daily` target. New `scripts/test_day.py` pins the sync-daily behavior (preconditions, ff vs rebase paths, conflict abort, restore-on-failure, lease push) and the report rendering. `agent_review.py` is deliberately kept: `pr_review.py` still calls it until part 4b replaces the review domain.
+- **Evidence**: run: `make check` green (ruff + format, mypy strict, import-linter, 243 tests, coverage 94.76%). Not run: CI/review until push; `make sync-daily` itself not run yet (needs this PR merged first).
+- **Judgement calls**: session/review/night domains follow in parts 4b/4c to keep each PR near the ~500-line budget. docs/ references to `agent_review.py` are constitutional and stay on the `template/constitutional-2aa4d27` branch.
 - **Escalations**: none.
 
 ## 2026-11-08 - template sync 2aa4d27, part 3/4: ci + claims + merge domains (ADR-0021)
