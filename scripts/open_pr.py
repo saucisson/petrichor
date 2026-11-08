@@ -36,6 +36,8 @@ DEFAULT_BASE_BRANCH = "daily"
 DETACHED_HEAD_NAME = "HEAD"
 UNPROCESSABLE_ENTITY_STATUS_CODE = 422
 HTTP_TIMEOUT_SECONDS = 30.0
+AUTHORIZATION_SCHEME = "Bearer"
+GITHUB_ACCEPT_MEDIA_TYPE = "application/vnd.github.v3+json"
 
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 
@@ -94,14 +96,14 @@ def resolve_repository_slug() -> str:
         .removesuffix(GIT_REMOTE_SUFFIX)
         .strip(REMOTE_PATH_SEPARATOR)
     )
-    owner, separator, repository = slug.partition(REMOTE_PATH_SEPARATOR)
-    if not owner or not separator or not repository.strip(REMOTE_PATH_SEPARATOR):
+    owner, separator, repository = slug.partition("/")
+    if not owner or not separator or not repository.strip("/"):
         print(
             f"Error: cannot parse owner/repository from remote: {remote_url}",
             file=sys.stderr,
         )
         raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
-    return f"{owner}{REMOTE_PATH_SEPARATOR}{repository.strip(REMOTE_PATH_SEPARATOR)}"
+    return f"{owner}/{repository.strip('/')}"
 
 
 def run_git(*, arguments: Sequence[str]) -> str:
@@ -167,14 +169,18 @@ def open_pull_request(
             f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/pulls",
             json={"title": title, "head": head_branch, "base": base_branch, "body": body},
         )
-    except httpx.TransportError as error:
+    except httpx.RequestError as error:
         print(
             f"Error: could not reach the GitHub API: {error}",
             file=sys.stderr,
         )
         raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE) from error
     if response.is_success:
-        pull_request: object = response.json()
+        try:
+            pull_request: object = response.json()
+        except ValueError as error:
+            print("Error: the pull request payload is not valid JSON.", file=sys.stderr)
+            raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE) from error
         if not isinstance(pull_request, dict):
             raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
         return pull_request
@@ -231,8 +237,8 @@ def main(*, command_line_arguments: Sequence[str]) -> int:
     body = read_pull_request_body(body_file=arguments.body_file or None)
     with httpx.Client(
         headers={
-            "Authorization": f"Bearer {github_token}",
-            "Accept": "application/vnd.github.v3+json",
+            "Authorization": f"{AUTHORIZATION_SCHEME} {github_token}",
+            "Accept": GITHUB_ACCEPT_MEDIA_TYPE,
         },
         timeout=HTTP_TIMEOUT_SECONDS,
     ) as http_client:
