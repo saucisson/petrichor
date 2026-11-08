@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 import httpx
 import pytest
+from hypothesis import given, strategies
 
 import wait_ci
 from wait_ci import PullRequestIdentifier
@@ -453,3 +454,26 @@ def test_run_watch_times_out_as_protocol_failure_when_never_reachable(
         )
         == wait_ci.EXIT_CODE_PROTOCOL_FAILURE
     )
+
+
+@pytest.mark.property
+@given(
+    strategies.sampled_from(
+        [
+            wait_ci.POLL_STATUS_FETCH_FAILED,
+            wait_ci.POLL_STATUS_NO_CHECKS,
+            wait_ci.POLL_STATUS_PENDING,
+            wait_ci.POLL_STATUS_GREEN,
+            wait_ci.POLL_STATUS_FAILED,
+        ]
+    )
+)
+def test_interpret_status_property_covers_the_whole_closed_set(status: wait_ci.PollStatus) -> None:
+    """Property: every status of the closed set maps to its documented verdict."""
+    exit_code = wait_ci.interpret_status(status=status, detail="")
+    if status == wait_ci.POLL_STATUS_GREEN:
+        assert exit_code == wait_ci.EXIT_CODE_GREEN
+    elif status == wait_ci.POLL_STATUS_FAILED:
+        assert exit_code == wait_ci.EXIT_CODE_CI_FAILED
+    else:
+        assert exit_code is None
