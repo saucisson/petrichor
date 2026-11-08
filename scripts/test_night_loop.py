@@ -9,8 +9,8 @@ import httpx
 import pytest
 from hypothesis import given, strategies
 
-import night_loop
-from night_loop import IssueIdentifier, PullRequestIdentifier
+from scripts import night_loop
+from scripts.night_loop import IssueIdentifier, PullRequestIdentifier
 
 if TYPE_CHECKING:
     from collections.abc import Callable

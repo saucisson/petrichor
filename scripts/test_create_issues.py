@@ -11,8 +11,8 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-import create_issues
-from create_issues import (
+from scripts import create_issues
+from scripts.create_issues import (
     build_issue_body,
     compute_pending,
     expand_dependencies,
