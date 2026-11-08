@@ -130,7 +130,9 @@ def test_triage_skips_a_malformed_labels_payload() -> None:
 
 def test_render_issue_section_includes_title_and_body() -> None:
     """The prompt's issue section carries the issue number, title and body."""
-    section = night.render_issue_section(issue=issue_payload(number=7), issue_number=7)
+    section = night.render_issue_section(
+        issue=issue_payload(number=7), issue_number=night.IssueIdentifier(7)
+    )
     assert "# Issue #7: Issue 7" in section
     assert "acceptance criteria" in section
 
@@ -170,8 +172,8 @@ def test_fetch_candidate_issues_api_error_yields_empty_worklist() -> None:
 def test_render_worklist_joins_issue_sections() -> None:
     """The worklist renders one section per candidate, separated."""
     candidates = [
-        (1, issue_payload(number=1)),
-        (2, issue_payload(number=2)),
+        (night.IssueIdentifier(1), issue_payload(number=1)),
+        (night.IssueIdentifier(2), issue_payload(number=2)),
     ]
     worklist = night.render_worklist(candidates=candidates)
     assert "# Issue #1" in worklist and "# Issue #2" in worklist and "---" in worklist
@@ -274,7 +276,7 @@ def test_run_explicit_directive_runs_one_session_per_eligible_issue(
         http_client=client,
         prompt_directory=tmp_path,
         repository_slug="o/r",
-        issue_numbers=[12, 13],
+        issue_numbers=[night.IssueIdentifier(12), night.IssueIdentifier(13)],
         milestone_numbers=set(),
         prompt_template="T {{issue}}",
         arguments=arguments,
@@ -309,7 +311,7 @@ def test_run_explicit_directive_skips_triaged_issues(
         http_client=client,
         prompt_directory=tmp_path,
         repository_slug="o/r",
-        issue_numbers=[12],
+        issue_numbers=[night.IssueIdentifier(12)],
         milestone_numbers=set(),
         prompt_template="T {{issue}}",
         arguments=arguments,
@@ -328,7 +330,7 @@ def test_run_auto_discovered_sessions_stops_when_nothing_is_claimed(
     def fake_candidates(**kwargs: object) -> list[tuple[int, dict[str, object]]]:
         nonlocal derivations
         derivations += 1
-        return [(1, issue_payload(number=1))]
+        return [(night.IssueIdentifier(1), issue_payload(number=1))]
 
     monkeypatch.setattr(night, "fetch_candidate_issues", fake_candidates)
     monkeypatch.setattr(night, "run_developer_session", lambda **kwargs: (0, 3))
@@ -572,7 +574,7 @@ def test_fetch_candidate_pull_requests_recovers_claimed_backing_issues(
         candidate_limit=10,
         milestone_numbers=set(),
     )
-    assert [number for number, _ in candidates] == [53]
+    assert [number for number, _ in candidates] == [_shared.PullRequestIdentifier(53)]
 
 
 def test_fetch_candidate_pull_requests_skips_unrecoverable_prs(
@@ -604,7 +606,7 @@ def test_fetch_candidate_pull_requests_skips_unrecoverable_prs(
         candidate_limit=10,
         milestone_numbers=set(),
     )
-    assert [number for number, _ in candidates] == [4]
+    assert [number for number, _ in candidates] == [_shared.PullRequestIdentifier(4)]
 
 
 def test_fetch_candidate_pull_requests_applies_the_milestone_filter(
@@ -629,7 +631,7 @@ def test_fetch_candidate_pull_requests_applies_the_milestone_filter(
         candidate_limit=10,
         milestone_numbers={4},
     )
-    assert [number for number, _ in candidates] == [2]
+    assert [number for number, _ in candidates] == [_shared.PullRequestIdentifier(2)]
 
 
 def test_fetch_candidate_pull_requests_api_error_yields_empty_worklist() -> None:
@@ -650,7 +652,7 @@ def test_render_pull_request_section_mentions_the_backing_issue() -> None:
     """The recovery section names the PR, its branch and its backing issue."""
     section = night.render_pull_request_section(
         pull_request=pull_request_payload(number=53, head_ref="feat/12"),
-        pr_number=53,
+        pull_request_number=_shared.PullRequestIdentifier(53),
     )
     assert "# Pull request #53" in section
     assert "`feat/12`" in section
@@ -660,8 +662,8 @@ def test_render_pull_request_section_mentions_the_backing_issue() -> None:
 def test_render_auto_worklist_combines_issues_and_pull_requests() -> None:
     """The auto worklist renders issues first, then recoverable PRs."""
     worklist = night.render_auto_worklist(
-        issues=[(1, issue_payload(number=1))],
-        pull_requests=[(53, pull_request_payload(number=53))],
+        issues=[(night.IssueIdentifier(1), issue_payload(number=1))],
+        pull_requests=[(_shared.PullRequestIdentifier(53), pull_request_payload(number=53))],
     )
     assert "# Issue #1" in worklist
     assert "# Pull request #53" in worklist
@@ -671,8 +673,8 @@ def test_render_auto_worklist_combines_issues_and_pull_requests() -> None:
 def test_auto_candidate_keys_covers_both_kinds() -> None:
     """The anti-spin guard keys issues and pull requests distinctly."""
     keys = night.auto_candidate_keys(
-        issues=[(1, issue_payload(number=1))],
-        pull_requests=[(53, pull_request_payload(number=53))],
+        issues=[(night.IssueIdentifier(1), issue_payload(number=1))],
+        pull_requests=[(_shared.PullRequestIdentifier(53), pull_request_payload(number=53))],
     )
     assert keys == {("issue", 1), ("pull request", 53)}
 
@@ -680,8 +682,8 @@ def test_auto_candidate_keys_covers_both_kinds() -> None:
 def test_describe_auto_candidates_lists_both_kinds() -> None:
     """The trace line describes each candidate with its kind."""
     description = night.describe_auto_candidates(
-        issues=[(1, issue_payload(number=1))],
-        pull_requests=[(53, pull_request_payload(number=53))],
+        issues=[(night.IssueIdentifier(1), issue_payload(number=1))],
+        pull_requests=[(_shared.PullRequestIdentifier(53), pull_request_payload(number=53))],
     )
     assert description == "#1 (issue), #53 (pull request)"
 
@@ -785,7 +787,7 @@ def test_run_explicit_directive_skips_issues_outside_the_milestones(
         http_client=client_with(handler),
         prompt_directory=tmp_path,
         repository_slug="o/r",
-        issue_numbers=[12, 13],
+        issue_numbers=[night.IssueIdentifier(12), night.IssueIdentifier(13)],
         milestone_numbers={4},
         prompt_template="T {{issue}}",
         arguments=arguments,
