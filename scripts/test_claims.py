@@ -40,7 +40,7 @@ def test_claim_is_allowed_on_a_plain_open_issue() -> None:
     """An open issue without the claim label can be claimed."""
     claims.claim_is_allowed(
         issue=issue_payload([{"name": "enhancement"}]),
-        item_number=12,
+        item_number=claims.ItemIdentifier(12),
         expected_kind="issue",
     )
 
@@ -50,7 +50,7 @@ def test_claim_refuses_a_pull_request() -> None:
     with pytest.raises(SystemExit) as excinfo:
         claims.claim_is_allowed(
             issue=issue_payload([], is_pull_request=True),
-            item_number=12,
+            item_number=claims.ItemIdentifier(12),
             expected_kind="issue",
         )
     assert excinfo.value.code == _shared.EXIT_CODE_CRITERIA_UNMET
@@ -61,7 +61,7 @@ def test_claim_refuses_an_already_claimed_issue() -> None:
     with pytest.raises(SystemExit) as excinfo:
         claims.claim_is_allowed(
             issue=issue_payload([{"name": _shared.CLAIM_LABEL_NAME}]),
-            item_number=12,
+            item_number=claims.ItemIdentifier(12),
             expected_kind="issue",
         )
     assert excinfo.value.code == _shared.EXIT_CODE_CRITERIA_UNMET
@@ -72,7 +72,9 @@ def test_claim_refuses_a_malformed_labels_payload() -> None:
     payload = issue_payload([])
     payload["labels"] = "night-claimed"
     with pytest.raises(SystemExit) as excinfo:
-        claims.claim_is_allowed(issue=payload, item_number=12, expected_kind="issue")
+        claims.claim_is_allowed(
+            issue=payload, item_number=claims.ItemIdentifier(12), expected_kind="issue"
+        )
     assert excinfo.value.code == _shared.EXIT_CODE_PROTOCOL_FAILURE
 
 
@@ -81,14 +83,18 @@ def test_claim_refuses_non_dict_label_entries() -> None:
     payload = issue_payload([])
     payload["labels"] = ["night-claimed"]
     with pytest.raises(SystemExit) as excinfo:
-        claims.claim_is_allowed(issue=payload, item_number=12, expected_kind="issue")
+        claims.claim_is_allowed(
+            issue=payload, item_number=claims.ItemIdentifier(12), expected_kind="issue"
+        )
     assert excinfo.value.code == _shared.EXIT_CODE_PROTOCOL_FAILURE
 
 
 def test_fetch_issue_returns_payload_on_success() -> None:
     """A 2xx issue fetch returns the issue dict."""
     client = client_with(lambda request: httpx.Response(200, json=issue_payload([])))
-    issue = claims.fetch_issue(http_client=client, repository_slug="o/r", item_number=12)
+    issue = claims.fetch_issue(
+        http_client=client, repository_slug="o/r", item_number=claims.ItemIdentifier(12)
+    )
     assert issue["number"] == 12
 
 
@@ -96,7 +102,9 @@ def test_fetch_issue_api_error_is_criteria_unmet() -> None:
     """A failed fetch means no claim, no work: criteria-unmet, not a crash."""
     client = client_with(lambda request: httpx.Response(404, json={}))
     with pytest.raises(SystemExit) as excinfo:
-        claims.fetch_issue(http_client=client, repository_slug="o/r", item_number=12)
+        claims.fetch_issue(
+            http_client=client, repository_slug="o/r", item_number=claims.ItemIdentifier(12)
+        )
     assert excinfo.value.code == _shared.EXIT_CODE_CRITERIA_UNMET
 
 
@@ -104,7 +112,9 @@ def test_fetch_issue_malformed_json_is_protocol_failure() -> None:
     """A 2xx with an undecodable body fails closed with exit 2, not a traceback."""
     client = client_with(lambda request: httpx.Response(200, content=b"not json{"))
     with pytest.raises(SystemExit) as excinfo:
-        claims.fetch_issue(http_client=client, repository_slug="o/r", item_number=12)
+        claims.fetch_issue(
+            http_client=client, repository_slug="o/r", item_number=claims.ItemIdentifier(12)
+        )
     assert excinfo.value.code == _shared.EXIT_CODE_PROTOCOL_FAILURE
 
 
@@ -153,7 +163,11 @@ def test_add_claim_label_posts_the_label() -> None:
         requests_seen.append(request)
         return httpx.Response(200, json=[{"name": "night-claimed"}])
 
-    claims.add_claim_label(http_client=client_with(handler), repository_slug="o/r", issue_number=12)
+    claims.add_claim_label(
+        http_client=client_with(handler),
+        repository_slug="o/r",
+        issue_number=claims.ItemIdentifier(12),
+    )
     assert requests_seen[-1].url.path.endswith("/issues/12/labels")
 
 
@@ -161,7 +175,9 @@ def test_add_claim_label_failure_is_protocol_failure() -> None:
     """A failed label post means no claim, no work: protocol failure."""
     client = client_with(lambda request: httpx.Response(500, json={}))
     with pytest.raises(SystemExit) as excinfo:
-        claims.add_claim_label(http_client=client, repository_slug="o/r", issue_number=12)
+        claims.add_claim_label(
+            http_client=client, repository_slug="o/r", issue_number=claims.ItemIdentifier(12)
+        )
     assert excinfo.value.code == _shared.EXIT_CODE_PROTOCOL_FAILURE
 
 
@@ -180,7 +196,7 @@ def test_claim_refuses_kind_mismatch_for_pr() -> None:
     with pytest.raises(SystemExit) as excinfo:
         claims.claim_is_allowed(
             issue=issue_payload([]),
-            item_number=12,
+            item_number=claims.ItemIdentifier(12),
             expected_kind="pull_request",
         )
     assert excinfo.value.code == _shared.EXIT_CODE_CRITERIA_UNMET

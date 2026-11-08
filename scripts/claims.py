@@ -21,7 +21,7 @@ claim, no work.
 
 import json
 import sys
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal, NewType
 
 from scripts._github import open_github_client, request_or_fail
 from scripts._shared import (
@@ -43,12 +43,18 @@ CLAIM_LABEL_COLOR = "d4c5f9"
 CLAIM_LABEL_DESCRIPTION = "Claimed by an unattended night session (ADR-0017)"
 EXIT_CODE_CLAIMED = EXIT_CODE_SUCCESS  # a subcommand-local alias, same protocol code
 
+ItemIdentifier = NewType("ItemIdentifier", int)
+"""An issue or pull request number (the issues endpoint serves both)."""
+
+ItemKind = Literal["issue", "pull_request"]
+"""The closed set of claimable item kinds (ADR-0006)."""
+
 
 def fetch_issue(
     *,
     http_client: httpx.Client,
     repository_slug: str,
-    item_number: int,
+    item_number: ItemIdentifier,
 ) -> dict[str, object]:
     """Fetch the issue or pull request, or fail closed: no item, no claim."""
     response = request_or_fail(
@@ -77,8 +83,8 @@ def fetch_issue(
 def claim_is_allowed(
     *,
     issue: dict[str, object],
-    item_number: int,
-    expected_kind: str,
+    item_number: ItemIdentifier,
+    expected_kind: ItemKind,
 ) -> None:
     """Refuse a kind mismatch or an already-claimed item.
 
@@ -152,7 +158,7 @@ def add_claim_label(
     *,
     http_client: httpx.Client,
     repository_slug: str,
-    issue_number: int,
+    issue_number: ItemIdentifier,
 ) -> None:
     """Add the claim label; a failure means no claim, no work."""
     response = request_or_fail(
@@ -196,9 +202,13 @@ def run(*, arguments: argparse.Namespace) -> int:
     github_token = load_github_token()
     repository_slug = resolve_repository_slug()
     if arguments.issue is not None:
-        item_number, expected_kind, item_word = arguments.issue, "issue", "Issue"
+        item_number = ItemIdentifier(arguments.issue)
+        expected_kind: ItemKind = "issue"
+        item_word = "Issue"
     else:
-        item_number, expected_kind, item_word = arguments.pr, "pull_request", "Pull request"
+        item_number = ItemIdentifier(arguments.pr)
+        expected_kind = "pull_request"
+        item_word = "Pull request"
     with open_github_client(token=github_token) as http_client:
         issue = fetch_issue(
             http_client=http_client,
