@@ -133,10 +133,14 @@ class CanonicalModel(BaseModel):
         names = [element.name for element in (*self.places, *self.transitions)]
         if len(set(names)) != len(names):
             raise ValueError("Element names must be unique across places and transitions.")
-        known_ids = set(element_ids)
+        # Arc endpoints must be places or transitions - never another arc
+        # (semantic_projection resolves endpoints through places/transitions
+        # only, so an arc-to-arc endpoint would crash the hash with a raw
+        # KeyError instead of failing validation here).
+        endpoint_ids = {element.id for element in (*self.places, *self.transitions)}
         for arc in self.arcs:
-            if arc.source not in known_ids or arc.target not in known_ids:
-                raise ValueError(f"Arc {arc.id} references an unknown element id.")
+            if arc.source not in endpoint_ids or arc.target not in endpoint_ids:
+                raise ValueError(f"Arc {arc.id} references an unknown place or transition id.")
         if self.formalism == "pt" and self.color_domain is not None:
             raise ValueError("A pt net must have color_domain set to null.")
         if self.formalism == "symmetric" and self.color_domain is None:

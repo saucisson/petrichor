@@ -249,7 +249,14 @@ REJECTION_CASES: list[tuple[str, Callable[[dict[str, object]], None], str]] = [
         lambda payload: set_field(
             payload=payload, section="arcs", index=0, field="target", value="tr_x"
         ),
-        "unknown element id",
+        "unknown place or transition id",
+    ),
+    (
+        "arc endpoint referencing another arc",
+        lambda payload: set_field(
+            payload=payload, section="arcs", index=0, field="target", value="ar_032"
+        ),
+        "unknown place or transition id",
     ),
     (
         "duplicate element ids",
