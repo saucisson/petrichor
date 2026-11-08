@@ -263,7 +263,7 @@ def test_run_explicit_directive_runs_one_session_per_eligible_issue(
     monkeypatch.setattr(night_loop, "run_developer_session", fake_session)
     client = client_with(lambda request: httpx.Response(200, json=issue_payload(number=12)))
     arguments = night_loop.parse_arguments(command_line_arguments=[])
-    results: list[str] = []
+    journal = night_loop.NightJournal(log_file=tmp_path / "night.log")
     night_loop.run_explicit_directive(
         http_client=client,
         prompt_directory=tmp_path,
@@ -272,11 +272,11 @@ def test_run_explicit_directive_runs_one_session_per_eligible_issue(
         milestone_numbers=set(),
         prompt_template="T {{issue}}",
         arguments=arguments,
-        results=results,
+        journal=journal,
     )
     assert len(sessions) == 2
     assert "# Issue #12" in sessions[0].read_text(encoding="utf-8")
-    assert any("Issue #13" in result for result in results)
+    assert any("Issue #13" in result for result in journal.summary_lines)
 
 
 def test_run_explicit_directive_skips_triaged_issues(
@@ -298,7 +298,7 @@ def test_run_explicit_directive_skips_triaged_issues(
         )
     )
     arguments = night_loop.parse_arguments(command_line_arguments=[])
-    results: list[str] = []
+    journal = night_loop.NightJournal(log_file=tmp_path / "night.log")
     night_loop.run_explicit_directive(
         http_client=client,
         prompt_directory=tmp_path,
@@ -307,10 +307,10 @@ def test_run_explicit_directive_skips_triaged_issues(
         milestone_numbers=set(),
         prompt_template="T {{issue}}",
         arguments=arguments,
-        results=results,
+        journal=journal,
     )
     assert sessions == []
-    assert any("skipped" in result for result in results)
+    assert any("skipped" in result for result in journal.summary_lines)
 
 
 def test_run_auto_discovered_sessions_stops_when_nothing_is_claimed(
@@ -327,7 +327,7 @@ def test_run_auto_discovered_sessions_stops_when_nothing_is_claimed(
     monkeypatch.setattr(night_loop, "fetch_candidate_issues", fake_candidates)
     monkeypatch.setattr(night_loop, "run_developer_session", lambda **kwargs: (0, 3))
     arguments = night_loop.parse_arguments(command_line_arguments=["--max-sessions", "5"])
-    results: list[str] = []
+    journal = night_loop.NightJournal(log_file=tmp_path / "night.log")
     night_loop.run_auto_discovered_sessions(
         http_client=client_with(lambda request: httpx.Response(200, json=[])),
         prompt_directory=tmp_path,
@@ -335,10 +335,10 @@ def test_run_auto_discovered_sessions_stops_when_nothing_is_claimed(
         milestone_numbers=set(),
         prompt_template="W {{worklist}}",
         arguments=arguments,
-        results=results,
+        journal=journal,
     )
     assert derivations == 2
-    assert any("no candidate was claimed" in result.lower() for result in results)
+    assert any("no candidate was claimed" in result.lower() for result in journal.summary_lines)
 
 
 def test_run_auto_discovered_sessions_stops_when_worklist_is_empty(
@@ -356,7 +356,7 @@ def test_run_auto_discovered_sessions_stops_when_worklist_is_empty(
 
     monkeypatch.setattr(night_loop, "run_developer_session", fake_session)
     arguments = night_loop.parse_arguments(command_line_arguments=["--max-sessions", "5"])
-    results: list[str] = []
+    journal = night_loop.NightJournal(log_file=tmp_path / "night.log")
     night_loop.run_auto_discovered_sessions(
         http_client=client_with(lambda request: httpx.Response(200, json=[])),
         prompt_directory=tmp_path,
@@ -364,10 +364,10 @@ def test_run_auto_discovered_sessions_stops_when_worklist_is_empty(
         milestone_numbers=set(),
         prompt_template="W {{worklist}}",
         arguments=arguments,
-        results=results,
+        journal=journal,
     )
     assert sessions == []
-    assert results == []
+    assert journal.summary_lines == []
 
 
 def test_parse_issue_list_rejects_unicode_digits(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -497,6 +497,44 @@ def test_parse_backing_issue_number_reads_feat_and_fix_branches() -> None:
     assert night_loop.parse_backing_issue_number(head_ref="daily") is None
     assert night_loop.parse_backing_issue_number(head_ref="feat/abc") is None
     assert night_loop.parse_backing_issue_number(head_ref=None) is None
+
+
+def test_parse_backing_issue_number_tolerates_descriptive_suffix() -> None:
+    """feat/2-canonical-petri-json backs issue #2: the number alone decides."""
+    assert night_loop.parse_backing_issue_number(head_ref="feat/2-canonical-petri-json") == 2
+    assert night_loop.parse_backing_issue_number(head_ref="fix/34-hotfix") == 34
+    assert night_loop.parse_backing_issue_number(head_ref="feat/12abc") is None
+    assert night_loop.parse_backing_issue_number(head_ref="feat/١٢") is None
+
+
+def test_resolve_log_file_path_defaults_to_the_night_trace() -> None:
+    """Without NIGHT_LOG_FILE, the verbose trace lands in .night/night-loop.log."""
+    assert night_loop.resolve_log_file_path() == (
+        night_loop.REPOSITORY_ROOT / night_loop.DEFAULT_NIGHT_LOG_FILE_NAME
+    )
+
+
+def test_resolve_log_file_path_honors_the_environment_override(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """NIGHT_LOG_FILE overrides the trace location; absolute paths pass through."""
+    monkeypatch.setenv(night_loop.NIGHT_LOG_FILE_VARIABLE, "logs/custom.log")
+    assert night_loop.resolve_log_file_path() == night_loop.REPOSITORY_ROOT / "logs/custom.log"
+    absolute = tmp_path / "trace.log"
+    monkeypatch.setenv(night_loop.NIGHT_LOG_FILE_VARIABLE, str(absolute))
+    assert night_loop.resolve_log_file_path() == absolute
+
+
+def test_night_journal_record_pairs_stdout_line_with_log_entry(tmp_path: Path) -> None:
+    """record() appends the summary line and writes the verbose trace entry."""
+    log_file = tmp_path / "night.log"
+    journal = night_loop.NightJournal(log_file=log_file)
+    journal.record(line="Issue #12: session exit 0 (00:05)", text="issue #12: exit 0")
+    journal.log(text="verbose only")
+    assert journal.summary_lines == ["Issue #12: session exit 0 (00:05)"]
+    trace = log_file.read_text(encoding="utf-8")
+    assert "issue #12: exit 0" in trace
+    assert "verbose only" in trace
 
 
 def test_item_has_claim_label_detects_the_claim() -> None:
@@ -736,7 +774,7 @@ def test_run_explicit_directive_skips_issues_outside_the_milestones(
         return httpx.Response(200, json=out_of_milestone)
 
     arguments = night_loop.parse_arguments(command_line_arguments=[])
-    results: list[str] = []
+    journal = night_loop.NightJournal(log_file=tmp_path / "night.log")
     night_loop.run_explicit_directive(
         http_client=client_with(handler),
         prompt_directory=tmp_path,
@@ -745,7 +783,7 @@ def test_run_explicit_directive_skips_issues_outside_the_milestones(
         milestone_numbers={4},
         prompt_template="T {{issue}}",
         arguments=arguments,
-        results=results,
+        journal=journal,
     )
     assert len(sessions) == 1
-    assert any("not in the requested milestones" in result for result in results)
+    assert any("not in the requested milestones" in result for result in journal.summary_lines)
