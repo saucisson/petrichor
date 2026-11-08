@@ -477,3 +477,26 @@ def test_interpret_status_property_covers_the_whole_closed_set(status: wait_ci.P
         assert exit_code == wait_ci.EXIT_CODE_CI_FAILED
     else:
         assert exit_code is None
+
+
+def test_poll_once_skipped_and_neutral_conclusions_are_not_failures() -> None:
+    """Completed with 'skipped'/'neutral' is not a failure: the status stays green."""
+    client = watch_client(
+        check_runs_response=httpx.Response(
+            200,
+            json=check_runs_payload(
+                check_runs=[
+                    {"name": "ci", "status": "completed", "conclusion": "success"},
+                    {"name": "optional", "status": "completed", "conclusion": "skipped"},
+                    {"name": "info", "status": "completed", "conclusion": "neutral"},
+                ]
+            ),
+        )
+    )
+    status, _, detail = wait_ci.poll_once(
+        http_client=client,
+        repository_slug="o/r",
+        pull_request_number=PullRequestIdentifier(53),
+    )
+    assert status == wait_ci.POLL_STATUS_GREEN
+    assert detail == "3"
