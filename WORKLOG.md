@@ -44,6 +44,14 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-08 - template sync 2aa4d27, part 4b of 4c: session + review domains (agent-review, review, review-bundle; ADR-0010/0021)
+
+- **Issue**: none (human-directed template sync).
+- **Done**: `scripts/session.py` (agent-review) and `scripts/review.py` (review + review-bundle) from template @ 2aa4d27 replace `agent_review.py`, `pr_review.py`, `build_review_bundle.py`; `__main__.py` registers `(pulls, ci, claims, merge, day, review, session)`; Makefile `review`/`review-bundle` now call `python -m scripts ...`. New `test_session.py` (report parsing, answer narrowing, fail-closed severity, launch failure = exit 2) and `test_review.py` (precondition gate, context writing, bundle rendering, exit-3 path). Hardening on the template version: a missing reviewer CLI (`OSError` on launch) now fails closed with exit 2 instead of a traceback.
+- **Evidence**: run: `make check` green (ruff + format, mypy strict, import-linter, 261 tests, coverage 94.76%) and `python -m scripts --help` lists review/review-bundle/agent-review. Not run: CI/review until push.
+- **Judgement calls**: night domain follows as part 4c. docs/ references to the old script names are constitutional and stay on the `template/constitutional-2aa4d27` branch.
+- **Escalations**: none.
+
 ## 2026-11-08 - template sync 2aa4d27, part 4a of 4c: day domain (day-report + sync-daily, ADR-0020/0021)
 
 - **Issue**: none (human-directed template sync).
