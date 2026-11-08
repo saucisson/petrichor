@@ -9,7 +9,6 @@ import argparse
 import sys
 from typing import TYPE_CHECKING, Protocol
 
-from scripts import _shared  # noqa: F401 - base only; domains register in later PRs
 from scripts._shared import load_environment_file
 
 if TYPE_CHECKING:
