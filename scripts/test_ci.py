@@ -471,7 +471,7 @@ def test_run_watch_times_out_as_protocol_failure_when_never_reachable(
         ]
     )
 )
-def test_interpret_status_property_covers_the_whole_closed_set(status: str) -> None:
+def test_interpret_status_property_covers_the_whole_closed_set(status: ci.PollStatus) -> None:
     """Property: every status of the closed set maps to its documented verdict."""
     exit_code = ci.interpret_status(status=status, detail="")
     if status == ci.POLL_STATUS_GREEN:
