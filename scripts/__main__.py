@@ -15,14 +15,23 @@ from scripts import pulls
 from scripts._shared import load_environment_file
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Sequence
 
-    class CommandModule(Protocol):
-        """A driver domain module: one register() wiring its subcommands."""
 
-        def register(self, subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-            """Wire this domain's subcommands into the parser."""
-            ...
+class Runner(Protocol):
+    """A subcommand entry point: keyword-only arguments in, exit code out."""
+
+    def __call__(self, *, arguments: argparse.Namespace) -> int:
+        """Run the subcommand."""
+        ...
+
+
+class CommandModule(Protocol):
+    """A driver domain module: one register() wiring its subcommands."""
+
+    def register(self, subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+        """Wire this domain's subcommands into the parser."""
+        ...
 
 
 COMMAND_MODULES: tuple[CommandModule, ...] = (pulls,)  # grown by each domain PR (ADR-0021)
@@ -46,8 +55,8 @@ def main(*, command_line_arguments: Sequence[str]) -> int:
     arguments = build_argument_parser().parse_args(command_line_arguments)
     # ADR-0006 escape: argparse stores the runner default as Any on the
     # Namespace; every registered subcommand sets it via set_defaults.
-    runner: Callable[[argparse.Namespace], int] = arguments.runner
-    return runner(arguments)
+    runner: Runner = arguments.runner
+    return runner(arguments=arguments)
 
 
 if __name__ == "__main__":
