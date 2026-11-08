@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 import httpx
 import pytest
+from hypothesis import given, strategies
 
 import night_loop
 from night_loop import IssueIdentifier
@@ -605,7 +606,7 @@ def test_render_pull_request_section_mentions_the_backing_issue() -> None:
     """The recovery section names the PR, its branch and its backing issue."""
     section = night_loop.render_pull_request_section(
         pull_request=pull_request_payload(number=53, head_ref="feat/12"),
-        pr_number=53,
+        pull_request_number=53,
     )
     assert "# Pull request #53" in section
     assert "`feat/12`" in section
@@ -639,3 +640,42 @@ def test_describe_auto_candidates_lists_both_kinds() -> None:
         pull_requests=[(53, pull_request_payload(number=53))],
     )
     assert description == "#1 (issue), #53 (pull request)"
+
+
+def test_parse_milestone_list_rejects_unicode_decimal_digits() -> None:
+    """'٣' is a decimal digit int() accepts: the ASCII guard must fail closed."""
+    with pytest.raises(SystemExit) as excinfo:
+        night_loop.parse_milestone_list(raw_milestone_list="٣")
+    assert excinfo.value.code == night_loop.EXIT_CODE_PROTOCOL_FAILURE
+
+
+def test_parse_issue_list_rejects_unicode_decimal_digits() -> None:
+    """'١٢' parses as 12 with int() alone: the ASCII guard must fail closed."""
+    with pytest.raises(SystemExit) as excinfo:
+        night_loop.parse_issue_list(raw_issue_list="١٢")
+    assert excinfo.value.code == night_loop.EXIT_CODE_PROTOCOL_FAILURE
+
+
+@pytest.mark.property
+@given(strategies.text())
+def test_parse_milestone_list_property_round_trips(raw_milestone_list: str) -> None:
+    """Property: an accepted milestone list is a set of ASCII-parsed ints."""
+    try:
+        milestone_numbers = night_loop.parse_milestone_list(raw_milestone_list=raw_milestone_list)
+    except SystemExit:
+        return
+    assert all(isinstance(number, int) for number in milestone_numbers)
+    rejoined = ",".join(str(number) for number in sorted(milestone_numbers))
+    assert night_loop.parse_milestone_list(raw_milestone_list=rejoined) == milestone_numbers
+
+
+@pytest.mark.property
+@given(strategies.text())
+def test_parse_backing_issue_number_property(head_ref: str) -> None:
+    """Property: a parsed backing issue number is always a positive int."""
+    backing_issue_number = night_loop.parse_backing_issue_number(head_ref=head_ref)
+    assert backing_issue_number is None or backing_issue_number > 0
+    if head_ref.startswith(("feat/", "fix/")) and head_ref.split("/", 1)[1].isascii():
+        digits = head_ref.split("/", 1)[1]
+        if digits.isdigit():
+            assert backing_issue_number == int(digits)
