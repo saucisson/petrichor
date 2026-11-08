@@ -9,7 +9,7 @@ DAY_TAG := daily-$(shell date +%F)
 
 .DEFAULT_GOAL := help
 .PHONY: help install lint format typecheck imports test check security build \
-        day-start day-report smoke-test mutate notify review merge-pr pr claim \
+        day-start day-report smoke-test mutate notify review merge-pr pr claim night \
         review-bundle clean
 
 help: ## List available targets with their description.
@@ -72,6 +72,9 @@ pr: ## Open the pull request from the current branch: TITLE=... [BODY_FILE=...] 
 
 claim: ## Claim an issue before working it (auto-discovered night sessions): ISSUE=N (ADR-0017).
 	$(PYTHON) scripts/claim_issue.py --issue "$(ISSUE)"
+
+night: ## Run the unattended loop: ISSUES="12,13,14" or auto-discovery when empty (ADR-0017).
+	$(PYTHON) scripts/night_loop.py --issues "$(ISSUES)"
 
 review-bundle: ## Print the reviewer bundle against origin/daily (ADR-0010).
 	$(PYTHON) scripts/build_review_bundle.py --base-ref origin/daily

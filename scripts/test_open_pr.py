@@ -1,5 +1,6 @@
 """Tests for the pull request driver open_pr.py (ADR-0017, template 3463aea)."""
 
+import subprocess
 from typing import TYPE_CHECKING
 
 import httpx
@@ -52,6 +53,25 @@ def test_open_pull_request_422_means_criteria_unmet() -> None:
 def test_open_pull_request_api_error_is_protocol_failure() -> None:
     """Any other non-2xx response fails closed as a protocol failure."""
     client = client_returning({}, status_code=500)
+    with pytest.raises(SystemExit) as excinfo:
+        open_pr.open_pull_request(
+            http_client=client,
+            repository_slug="o/r",
+            title="feat: x",
+            head_branch="feat/x",
+            base_branch="daily",
+            body="body",
+        )
+    assert excinfo.value.code == open_pr.EXIT_CODE_PROTOCOL_FAILURE
+
+
+def test_open_pull_request_malformed_json_is_protocol_failure() -> None:
+    """A 2xx with an undecodable body fails closed with exit 2, not a traceback."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"not json{")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
     with pytest.raises(SystemExit) as excinfo:
         open_pr.open_pull_request(
             http_client=client,
@@ -121,6 +141,40 @@ def test_parse_arguments_contract() -> None:
     assert arguments.base == open_pr.DEFAULT_BASE_BRANCH
 
 
-def test_resolve_repository_slug_from_origin_remote() -> None:
-    """The origin remote of this repository parses to owner/repository."""
-    assert open_pr.resolve_repository_slug() == "saucisson/petrichor"
+def completed_remote(url: str) -> subprocess.CompletedProcess[str]:
+    """Build the CompletedProcess returned by a mocked `git remote get-url`."""
+    return subprocess.CompletedProcess(
+        args=["git", "remote", "get-url", "origin"], returncode=0, stdout=url, stderr=""
+    )
+
+
+def test_resolve_repository_slug_parses_ssh_remote(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An SSH origin remote parses to owner/repository."""
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: completed_remote("git@github.com:acme/widgets.git\n"),
+    )
+    assert open_pr.resolve_repository_slug() == "acme/widgets"
+
+
+def test_resolve_repository_slug_parses_https_remote(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An HTTPS origin remote parses to owner/repository."""
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: completed_remote("https://github.com/acme/widgets.git"),
+    )
+    assert open_pr.resolve_repository_slug() == "acme/widgets"
+
+
+def test_resolve_repository_slug_rejects_non_github_remote(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A non-GitHub remote fails closed as a protocol failure."""
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: completed_remote("https://gitlab.com/acme/widgets.git"),
+    )
+    with pytest.raises(SystemExit) as excinfo:
+        open_pr.resolve_repository_slug()
+    assert excinfo.value.code == open_pr.EXIT_CODE_PROTOCOL_FAILURE
