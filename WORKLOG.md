@@ -44,6 +44,14 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-09 - PR #70 (P08) blocked at the review gate: reviewer session model unknown - needs-human already raised on PR #69, session stopped
+
+- **Issue**: #8 (P08). PR #70 (feat/8-mock-llm-golden, head ed910a3) is complete and green: `make check` 309 tests / coverage 96.78%, `make wait-ci PR=70` exit 0 (CI green on the head).
+- **Done**: `make review PR=70` exits 2 (protocol failure, not a verdict): the reviewer session cannot start — `Error: Unknown model: mistral-large-4. Available: fast-cli, glm-5-3, large-4, medium-cli, mistral-large-4-0-3, mistral-medium-3.5, zai-glm-5-3-flash`. This is the same infrastructure blocker already escalated as needs-human on PR #69 (see the 2026-11-09 PR #69 entry on the feat/5 branch): the `.vibe/` runtime profile (ADR-0015) is on the escalation list, so it was not modified; per the developer contract an exit-2 is reported, not retried. Merge criteria require a zero-BLOCKING review report, so PR #70 cannot merge tonight.
+- **Evidence**: run: `make review PR=70` (exit 2, error above), `make wait-ci PR=70` (exit 0), `make check` (green, see previous entry). Not run: the review itself — it never started. Escalation attempts this session: `make notify severity=question ... issue-identifier=8` denied by the unattended allowlist; raw `issue_write` label update (`needs-human` on #8) denied by smart-approve — both denials are the stop signal, not routed around. The structured question for the human is unchanged from the PR #69 escalation: which model should the reviewer session use (e.g. switch the `.vibe/` profile to `mistral-large-4-0-3`), or is the model registry the thing to fix?
+- **Judgement calls**: none — the blocker is infrastructural, not a code decision.
+- **Escalations**: needs-human on the review infrastructure (reviewer model `mistral-large-4` unknown to the runtime), already raised on PR #69 and still unanswered. PR #70 stays open, CI green, awaiting a working `make review`.
+
 ## 2026-11-09 - P08 mock LLM déterministe et golden files Philosophes-3 (issue #8, branch feat/8-mock-llm-golden)
 
 - **Issue**: #8 (P08 · Mock LLM déterministe et golden files, spec §15–16). Picked because its only dependency (#2) is merged on daily and it is pure computation on existing dependencies (pydantic, structlog): no new dependency, no Docker, no HTTP layer, fully verifiable with `make check` unattended. #3/#4 need an HTTP layer or Docker; #6/#7/#9/#10 are blocked by open issues.
