@@ -44,6 +44,14 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-09 - PR #69 (P05) blocked at the review gate: reviewer session model unknown - needs-human, session stopped
+
+- **Issue**: #5 (P05). PR #69 (feat/5-mini-moteur-statique, head e27031f) is complete and green: `make check` 318 tests / coverage 96.64%, `make wait-ci PR=69` exit 0 (2/2 checks green).
+- **Done**: `make review PR=69` exits 2 (protocol failure, not a verdict): the reviewer session cannot start — `Error: Unknown model: mistral-large-4. Available: fast-cli, glm-5-3, large-4, medium-cli, mistral-large-4-0-3, mistral-medium-3.5, zai-glm-5-3-flash`. The `.vibe/` runtime profile (ADR-0015) is on the escalation list, so it was not modified; per the developer contract an exit-2 is reported, not retried.
+- **Evidence**: run: `make review PR=69` (exit 2, error above), `make wait-ci PR=69` (exit 0), `make check` (green, see previous entry). Not run: the review itself — it never started. Escalation attempts: raw issue/PR comment denied by the unattended allowlist, `make notify severity=question` denied — both denials are the stop signal, not routed around. The structured question for the human: which model should the reviewer session use (e.g. switch the `.vibe/` profile to `mistral-large-4-0-3`), or is the model registry the thing to fix?
+- **Judgement calls**: none — the blocker is infrastructural, not a code decision.
+- **Escalations**: needs-human on the review infrastructure (reviewer model `mistral-large-4` unknown to the runtime). PR #69 stays open, CI green, awaiting a working `make review`.
+
 ## 2026-11-09 - P05 mini-moteur statique embarqué (issue #5, branch feat/5-mini-moteur-statique)
 
 - **Issue**: #5 (P05 · Mini-moteur statique embarqué, spec §18.1/§14/§19.4). Picked because its only dependency (#2) is merged on daily and it is pure computation: no new dependency, no Docker, no HTTP layer, fully verifiable with `make check` unattended.
