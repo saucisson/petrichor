@@ -1,4 +1,4 @@
-"""Check domain: families, patterns, questions and the runner port (spec §5, §12.1).
+"""Check domain: families, patterns, questions and the runner port (spec §5, §12.1, §12.4-5).
 
 One endpoint per check family, never polymorphic: the ``kind`` pattern of a
 request must belong to the family of the endpoint, otherwise the request is
@@ -37,6 +37,9 @@ RunKey = NewType("RunKey", str)
 
 KindPattern = NewType("KindPattern", str)
 """A check pattern kind, e.g. ``safety.invariant``; validated against FAMILY_PATTERNS."""
+
+ToolVersion = NewType("ToolVersion", str)
+"""The pinned version of the tool that executed a run, e.g. ``0.1.0`` (spec §12.5)."""
 
 RUN_ID_PREFIX = "run_"
 RUN_ID_HEX_DIGITS = 6
@@ -82,6 +85,8 @@ class CheckCompleted(BaseModel):
 
     outcome: Literal["completed"] = "completed"
     output: dict[str, JsonValue]
+    command: list[str]
+    """The tool command that produced this output, archived with the run (spec §12.5)."""
 
 
 class CheckFailed(BaseModel):
@@ -92,6 +97,8 @@ class CheckFailed(BaseModel):
     outcome: Literal["failed"] = "failed"
     kind: RunErrorKind
     detail: str = Field(min_length=1)
+    command: list[str]
+    """The tool command that was attempted, archived with the run (spec §12.5)."""
 
 
 type CheckOutcome = CheckCompleted | CheckFailed
@@ -103,7 +110,12 @@ class CheckRunner(Protocol):
 
     Implementations never return a default verdict on failure - a failure is
     always a `CheckFailed` with an explicit kind (issue #6, spec §14.2).
+    The ``tool_version`` attribute is archived with every run the runner
+    executes (spec §12.5, issue #7).
     """
+
+    tool_version: ToolVersion
+    """The pinned version of the tool behind this runner."""
 
     def run(self, *, question: CheckQuestion, timeout_seconds: int) -> CheckOutcome:
         """Execute one check question within the timeout."""

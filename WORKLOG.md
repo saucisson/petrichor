@@ -44,6 +44,14 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-09 - P07: integral run archive + session budget cap (issue #7, branch feat/7-run-archive-session-budget)
+
+- **Issue**: #7 (P07 · Archivage intégral des runs et budget de session).
+- **Done**: every run is archived in full - `StoredRun` gains `timeout_seconds`, `tool_version`, `command` and `measured_seconds` next to the existing `input_hash` (spec §12.5); the runner outcomes carry the executed `command` and the `CheckRunner` protocol exposes `tool_version`; the cost is the wall-clock tool time measured with `time.monotonic()` around the runner call, never estimated (spec §12.4). No delete path exists: the store classes expose none (AST guard test) and `DELETE /v1/runs/{rid}` is 405 with the run surviving. The session budget cap is configurable (`PETRICHOR_SESSION_BUDGET_SECONDS`, default 3600 s per spec §20.2); a new run whose worst-case tool time (timeout + watchdog grace) does not fit the remaining budget is refused with an explicit 429 `session_budget_exceeded` carrying `remaining_budget_seconds` (plus cap/consumed/timeout) - no carry-over; idempotent replay of a known (model, question) bypasses the check. `openapi.yaml` updated with the new Run fields and the 429 response.
+- **Evidence**: run: `make check` green on the final state - ruff, mypy strict (69 files), import-linter, 462 tests passed, coverage 97.41% >= 90%. Not run yet: CI (`make wait-ci`) and the reviewer session - they run after push.
+- **Judgement calls**: 429 for the budget refusal (quota semantics, typed problem+json per ADR-0016); admission reserves the run's worst-case tool time (timeout + watchdog grace, the bound the watchdog enforces) so the cumulative measured cost never exceeds the cap ("jamais débordé", spec §20.2) while the archived cost stays measured; `tool_version` on the runner protocol (known even when a runner crashes, which archives `command=[]`); default cap 3600 s per spec §20.2. Diff is 745 changed lines (> ~500): a PR-level split proposal is in the pull request body (ADR-0019).
+- **Escalations**: none.
+
 ## 2026-11-09 - issue #74 resolved by human: manual rebase of daily onto origin/main + force-with-lease push
 
 - **Issue**: #74 (needs-human, sync-daily count-guard refusal) - closed.
