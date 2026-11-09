@@ -1,6 +1,6 @@
 [project]
 name = "notify"
-version = "0.1.0"
+version = "0.2.0"
 description = "Opinionated Python project template for AI-agent-driven development."
 readme = "README.md"
 license = "MIT"
