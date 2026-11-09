@@ -71,11 +71,62 @@ class StoredRun(BaseModel):
     error: RunError | None = None
 
 
+class RunAdmission(BaseModel):
+    """The record of one run admission request (spec §5, §12.4-5).
+
+    Groups the related fields of a run creation so the store's ``admit``
+    takes one record instead of a growing parameter list (ADR-0003).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    key: RunKey
+    family: CheckFamilyName
+    kind: KindPattern
+    formula: str
+    model_id: ModelId
+    timeout_seconds: int = Field(gt=0)
+    tool_version: ToolVersion
+    session_budget_seconds: float = Field(gt=0)
+    """The session budget cap in tool seconds (spec §12.4); no carry-over."""
+
+
+class RunAdmitted(BaseModel):
+    """A run accepted by the session budget: the run plus its replay flag."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    run: StoredRun
+    created: bool
+
+
+class BudgetRefused(BaseModel):
+    """The explicit refusal of a run that does not fit the session budget."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    remaining_budget_seconds: float
+    session_budget_seconds: float
+    consumed_seconds: float
+    reserved_seconds: float
+    timeout_seconds: int
+
+
+type AdmissionResult = RunAdmitted | BudgetRefused
+"""Discriminated union of the admission outcomes (narrow with isinstance)."""
+
+
 class RunStore:
     """Stores runs by id, indexed by idempotence key, guarded by a lock.
 
     Append-only by construction: the class exposes no delete, remove, purge
     or clear path (spec §12.5, issue #7 pins that with a guard test).
+
+    The session budget is enforced atomically at admission: an in-flight run
+    reserves its worst-case tool time (its timeout plus the watchdog grace)
+    against the cap, and the reservation is replaced by the measured cost
+    when the run reaches a terminal state - so the cumulative measured cost
+    never exceeds the cap, even under concurrent requests (spec §20.2).
     """
 
     def __init__(self) -> None:
@@ -83,66 +134,87 @@ class RunStore:
         self._lock = threading.Lock()
         self._by_id: dict[RunId, StoredRun] = {}
         self._by_key: dict[RunKey, RunId] = {}
+        self._reservations: dict[RunId, float] = {}
 
-    def create_or_get(
-        self,
-        *,
-        key: RunKey,
-        family: CheckFamilyName,
-        kind: KindPattern,
-        formula: str,
-        model_id: ModelId,
-        timeout_seconds: int,
-        tool_version: ToolVersion,
-    ) -> tuple[StoredRun, bool]:
-        """Create a running run, or return the existing one for a known key."""
+    def admit(self, *, admission: RunAdmission, reservation_seconds: float) -> AdmissionResult:
+        """Check the session budget and create the run under one lock.
+
+        A known idempotence key replays the existing run without touching
+        the budget. Otherwise the run is admitted only if its reservation
+        fits in the remaining budget (cap minus measured cost minus in-flight
+        reservations); when it does not fit, the refusal is explicit and
+        carries the remaining budget.
+        """
         with self._lock:
-            existing_id = self._by_key.get(key)
+            existing_id = self._by_key.get(admission.key)
             if existing_id is not None:
-                logger.debug("run_store_key_hit", run_key=key, run_id=existing_id)
-                return self._by_id[existing_id], False
+                logger.debug("run_store_key_hit", run_key=admission.key, run_id=existing_id)
+                return RunAdmitted(run=self._by_id[existing_id], created=False)
+            consumed_seconds = self._consumed_seconds_locked()
+            reserved_seconds = sum(self._reservations.values())
+            remaining_budget_seconds = (
+                admission.session_budget_seconds - consumed_seconds - reserved_seconds
+            )
+            if remaining_budget_seconds < reservation_seconds:
+                logger.warning(
+                    "run_store_budget_refused",
+                    remaining_budget_seconds=remaining_budget_seconds,
+                    session_budget_seconds=admission.session_budget_seconds,
+                    consumed_seconds=consumed_seconds,
+                    reserved_seconds=reserved_seconds,
+                    timeout_seconds=admission.timeout_seconds,
+                )
+                return BudgetRefused(
+                    remaining_budget_seconds=remaining_budget_seconds,
+                    session_budget_seconds=admission.session_budget_seconds,
+                    consumed_seconds=consumed_seconds,
+                    reserved_seconds=reserved_seconds,
+                    timeout_seconds=admission.timeout_seconds,
+                )
             run_id = new_run_id(random_hex=uuid4().hex)
             while run_id in self._by_id:
                 run_id = new_run_id(random_hex=uuid4().hex)
             run = StoredRun(
                 run_id=run_id,
                 status="running",
-                family=family,
-                kind=kind,
-                formula=formula,
-                model_id=model_id,
-                input_hash=key,
-                timeout_seconds=timeout_seconds,
-                tool_version=tool_version,
+                family=admission.family,
+                kind=admission.kind,
+                formula=admission.formula,
+                model_id=admission.model_id,
+                input_hash=admission.key,
+                timeout_seconds=admission.timeout_seconds,
+                tool_version=admission.tool_version,
             )
             self._by_id[run.run_id] = run
-            self._by_key[key] = run.run_id
-            logger.debug("run_store_created", run_id=run.run_id, run_key=key)
-            return run, True
+            self._by_key[admission.key] = run.run_id
+            self._reservations[run.run_id] = reservation_seconds
+            logger.debug("run_store_created", run_id=run.run_id, run_key=admission.key)
+            return RunAdmitted(run=run, created=True)
 
     def get(self, *, run_id: RunId) -> StoredRun | None:
         """Return the stored run for an id, or None."""
         with self._lock:
             return self._by_id.get(run_id)
 
-    def get_by_key(self, *, key: RunKey) -> StoredRun | None:
-        """Return the stored run for an idempotence key, or None."""
-        with self._lock:
-            run_id = self._by_key.get(key)
-            return self._by_id.get(run_id) if run_id is not None else None
-
     def consumed_seconds(self) -> float:
-        """The cumulative measured tool time of the session (spec §12.4).
+        """The cumulative measured tool time of terminal runs (spec §12.4).
 
         Only terminal runs contribute: a running run has no measured cost
-        yet - the cost is measured, never estimated.
+        yet - the cost is measured, never estimated. In-flight runs are
+        accounted separately as reservations at admission time.
         """
         with self._lock:
-            return sum(
-                run.measured_seconds
-                for run in self._by_id.values()
-                if run.measured_seconds is not None
-            )
+            return self._consumed_seconds_locked()
+
+    def _consumed_seconds_locked(self) -> float:
+        """The measured cost of terminal runs; the caller holds the lock."""
+        return sum(
+            run.measured_seconds for run in self._by_id.values() if run.measured_seconds is not None
+        )
+
+    def _release_reservation_locked(self, *, run_id: RunId) -> None:
+        """Drop the admission reservation of a run reaching a terminal state."""
+        self._reservations.pop(run_id, None)
 
     def mark_done(
         self,
@@ -158,6 +230,7 @@ class RunStore:
             if run.status != "running":
                 logger.warning("run_store_terminal_state_kept", run_id=run_id, status=run.status)
                 return
+            self._release_reservation_locked(run_id=run_id)
             self._by_id[run_id] = run.model_copy(
                 update={
                     "status": "done",
@@ -185,6 +258,7 @@ class RunStore:
             if run.status != "running":
                 logger.warning("run_store_terminal_state_kept", run_id=run_id, status=run.status)
                 return
+            self._release_reservation_locked(run_id=run_id)
             self._by_id[run_id] = run.model_copy(
                 update={
                     "status": "error",
