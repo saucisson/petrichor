@@ -27,7 +27,7 @@ class ProfileEntry(BaseModel):
     id: str
     elements: str
     role: str
-    conf: float = Field(ge=0.0, le=1.0)
+    confidence: float = Field(ge=0.0, le=1.0, validation_alias="conf", serialization_alias="conf")
     evidence: str
     options: tuple[str, ...] = ()
     wrong: bool = False

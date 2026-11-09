@@ -44,6 +44,14 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-09 - PR #70 review round on the rebased head: narration pinned, typed primitives, conf renamed, property tier (PR #70)
+
+- **Issue**: #8 (P08).
+- **Done**: addressed the reviewer report (2 BLOCKING / 2 TO-FIX / 1 SUGGESTION). BLOCKING narration: new `TestSessionLogNarration` pins `llm_session_step` (one per request, indices 0..n-1) and `llm_session_completed` (steps == journal length) around `run_session`. BLOCKING size (~740 lines vs ~500 budget): split proposal written into the PR body via `make update-pr` (checklist section 7 / ADR-0019). TO-FIX abbreviations: `ProfileEntry.conf` renamed to `confidence` with `validation_alias="conf"` + `serialization_alias="conf"`, so the verbatim maquette corpus still parses and serializes unchanged. TO-FIX bare strings at the port: new `FormulaText` / `HumanMessage` NewTypes on `LLMProvider.reading` / `.clarification` and on `SessionRequest`, exported from `petrichor.llm`. SUGGESTION: added `test_property_any_session_is_deterministic_across_two_runs` (property tier, hypothesis) generalizing the determinism invariant to random sessions.
+- **Evidence**: run: `make check` green (ruff, mypy strict, import-linter, 358 tests passed incl. the new narration + property tests, coverage 96.59% >= 90%). Not run: CI until push.
+- **Judgement calls**: serialization_alias keeps the golden JSON key "conf" verbatim on dump, so no golden file was edited; the property test builds its own provider (hypothesis forbids function-scoped fixtures).
+- **Escalations**: none.
+
 ## 2026-11-09 - PR #70 rebased onto daily (now including PR #69 / P05) (PR #70)
 
 - **Issue**: #8 (P08).
