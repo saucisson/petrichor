@@ -44,6 +44,14 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-09 - PR #70 rebased onto daily (now including PR #69 / P05) (PR #70)
+
+- **Issue**: #8 (P08).
+- **Done**: rebased `feat/8-mock-llm-golden` onto `origin/daily` after PR #69 merged; only `WORKLOG.md` conflicted (both sides kept, newest entry on top). No code interaction between the LLM mock package and the engines package.
+- **Evidence**: run: `make check` green on the rebased head (ruff, mypy strict, import-linter, 356 tests passed, coverage 96.58% >= 90%). Not run: CI until push.
+- **Judgement calls**: none.
+- **Escalations**: none.
+
 ## 2026-11-09 - PR #70 (P08) blocked at the review gate: reviewer session model unknown - needs-human already raised on PR #69, session stopped
 
 - **Issue**: #8 (P08). PR #70 (feat/8-mock-llm-golden, head ed910a3) is complete and green: `make check` 309 tests / coverage 96.78%, `make wait-ci PR=70` exit 0 (CI green on the head).
