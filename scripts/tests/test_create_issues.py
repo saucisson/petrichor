@@ -20,7 +20,7 @@ from scripts.create_issues import (
     parse_backlog,
 )
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 IDENTIFIER_PATTERN = re.compile(r"P\d+")
 EXPECTED_MILESTONES = (
     "P0 — socle",
