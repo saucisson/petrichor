@@ -25,6 +25,7 @@ from petrichor.main import build_server, main
 from petrichor.model_store import ModelStore
 from petrichor.petri_canonical import ModelId
 from petrichor.pnml_import import import_pnml
+from petrichor.run_store import RunStore
 
 if TYPE_CHECKING:
     from wsgiref.types import WSGIEnvironment
@@ -51,7 +52,7 @@ def philosophes3_symmetric_pnml() -> str:
 def client() -> httpx.Client:
     """An HTTP client wired to the WSGI app with a known API key."""
     settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
-    app = create_app(settings=settings, store=ModelStore())
+    app = create_app(settings=settings, store=ModelStore(), run_store=RunStore(), runner=None)
     return httpx.Client(transport=httpx.WSGITransport(app=app), base_url="http://testserver")
 
 
@@ -272,7 +273,7 @@ def call_app(
 def app() -> WSGIApp:
     """The WSGI app with a known API key and a fresh store."""
     settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
-    return create_app(settings=settings, store=ModelStore())
+    return create_app(settings=settings, store=ModelStore(), run_store=RunStore(), runner=None)
 
 
 class TestEdgeBranches:
@@ -318,7 +319,7 @@ class TestEdgeBranches:
 class TestCompositionRoot:
     def test_build_server_wires_the_app(self) -> None:
         settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
-        server = build_server(settings=settings, store=ModelStore())
+        server = build_server(settings=settings, store=ModelStore(), run_store=RunStore())
         assert isinstance(server.application, Callable)
         assert server.server_port == 8080
         server.server_close()

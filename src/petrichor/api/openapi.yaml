@@ -8,7 +8,10 @@ info:
   version: 1.0.0
   description: >-
     Gérer service: PNML import into the canonical petri+json v1.0 form and
-    model read (spec §4.1, §5, §13). Symmetric nets are stored non-unfolded.
+    model read (spec §4.1, §5, §13), plus asynchronous checks: POST
+    /checks/{family} answers 202 + Location and is idempotent by hash of
+    (model, question); GET /runs/{run_id} polls running | done | error
+    (spec §5, §12.1). Symmetric nets are stored non-unfolded.
 servers:
   - url: /v1
 security:
@@ -80,6 +83,93 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+  /checks/{family}:
+    post:
+      summary: Accept a check question asynchronously (one endpoint per family)
+      description: >-
+        Answers 202 Accepted with Location: /v1/runs/{run_id}; the run is
+        executed in the background and polled on GET /v1/runs/{run_id}
+        (spec §5). Idempotent: the same (model, question) hash returns the
+        existing run without re-executing it. The kind pattern must belong
+        to the family of the endpoint - a pattern outside the family is
+        422 and is never reinterpreted (garde anti-polymorphisme, spec
+        §12.1). Engine errors and timeouts surface as the explicit error
+        state of the run, never as a default verdict.
+      parameters:
+        - name: family
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [reachability, safety, liveness, recovery, deadlock]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CheckRequest"
+      responses:
+        "202":
+          description: Check accepted; Location header points at the run resource.
+          headers:
+            Location:
+              schema:
+                type: string
+              description: /v1/runs/{run_id}
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Unknown check family or unknown model.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          description: Malformed body, or kind pattern outside the family (never reinterpreted).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: No check runner wired into this server yet (real engines: P09+).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /runs/{run_id}:
+    get:
+      summary: Poll one asynchronous run
+      description: >-
+        The run states are running, done (with the normalized engine output
+        served verbatim) and error (explicit kind: engine_error or timeout -
+        never a default verdict).
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The current state of the run.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Run"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
 components:
   securitySchemes:
     apiKey:
@@ -147,6 +237,62 @@ components:
           nullable: true
         metadata:
           type: object
+    CheckRequest:
+      type: object
+      description: The body of POST /checks/{family} (spec §12.1).
+      required: [model_id, kind, formula]
+      additionalProperties: false
+      properties:
+        model_id:
+          type: string
+        kind:
+          type: string
+          description: The pattern within the family, e.g. safety.invariant or deadlock.
+        formula:
+          type: string
+          minLength: 1
+        parameters:
+          type: object
+          default: {}
+    Run:
+      type: object
+      description: One asynchronous run (spec §5, §6); output is the normalized engine output served verbatim.
+      required: [run_id, status, family, kind, formula, model_id, input_hash, output, error]
+      properties:
+        run_id:
+          type: string
+        status:
+          type: string
+          enum: [running, done, error]
+        family:
+          type: string
+          enum: [reachability, safety, liveness, recovery, deadlock]
+        kind:
+          type: string
+        formula:
+          type: string
+        model_id:
+          type: string
+        input_hash:
+          type: string
+          pattern: "^sha256:[0-9a-f]{64}$"
+          description: Idempotence key - hash of (model, question).
+        output:
+          nullable: true
+          description: The normalized engine output when done, null otherwise.
+        error:
+          nullable: true
+          $ref: "#/components/schemas/RunError"
+    RunError:
+      type: object
+      description: The explicit failure of a run - never a default verdict.
+      required: [kind, detail]
+      properties:
+        kind:
+          type: string
+          enum: [engine_error, timeout]
+        detail:
+          type: string
   responses:
     Unauthorized:
       description: Missing or invalid X-API-Key.
@@ -161,7 +307,13 @@ components:
           schema:
             $ref: "#/components/schemas/Problem"
     UnsupportedMediaType:
-      description: The request body media type is not application/pnml+xml.
+      description: The request body media type is not supported by the endpoint.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    MethodNotAllowed:
+      description: The HTTP method is not supported on this resource.
       content:
         application/problem+json:
           schema:
