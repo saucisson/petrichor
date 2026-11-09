@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING, TypeGuard
 from wsgiref.types import StartResponse, WSGIEnvironment
 
 import structlog
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from petrichor.checks import (
     FAMILY_PATTERNS,
@@ -48,11 +48,11 @@ from petrichor.checks import (
 )
 from petrichor.petri_canonical import InvalidCanonicalModelError, ModelId, serialize_model
 from petrichor.pnml_import import PnmlImportError, import_pnml
+from petrichor.run_store import BudgetRefused, RunAdmission, RunStore
 
 if TYPE_CHECKING:
     from petrichor.api.settings import ApiSettings
     from petrichor.model_store import ModelStore
-    from petrichor.run_store import RunStore
 
 logger = structlog.get_logger(__name__)
 
@@ -100,24 +100,43 @@ def _accepts_petri_json(*, accept_header: str | None) -> bool:
     return False
 
 
-def _problem_body(
+class ProblemPayload(BaseModel):
+    """One RFC 7807 problem+json document (ADR-0016): the typed error record.
+
+    A record instead of a growing parameter list (ADR-0003): every error of
+    the API is one of these, serialized with a stable shape.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    status: HTTPStatus
+    reason: str = Field(min_length=1)
+    detail: str = Field(min_length=1)
+    instance: str = ""
+    extensions: dict[str, float | int] = Field(default_factory=dict)
+
+    def body(self) -> bytes:
+        """Serialize the payload as problem+json with a stable shape."""
+        payload = {
+            "type": f"{PROBLEM_TYPE_BASE_URL}{self.reason}",
+            "title": self.status.phrase,
+            "status": self.status.value,
+            "detail": self.detail,
+            "instance": self.instance,
+            "extensions": {"reason": self.reason, **self.extensions},
+        }
+        return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _problem(
     *,
-    instance: str,
     status: HTTPStatus,
     reason: str,
     detail: str,
-    extra_extensions: dict[str, float | int] | None = None,
-) -> bytes:
-    """Serialize an RFC 7807 problem+json payload with a stable shape."""
-    payload = {
-        "type": f"{PROBLEM_TYPE_BASE_URL}{reason}",
-        "title": status.phrase,
-        "status": status.value,
-        "detail": detail,
-        "instance": instance,
-        "extensions": {"reason": reason, **(extra_extensions or {})},
-    }
-    return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    extensions: dict[str, float | int] | None = None,
+) -> ProblemPayload:
+    """Build one problem payload; the instance is filled at response time."""
+    return ProblemPayload(status=status, reason=reason, detail=detail, extensions=extensions or {})
 
 
 def _respond(
@@ -142,22 +161,13 @@ def _problem_response(
     *,
     start_response: StartResponse,
     environ: WSGIEnvironment,
-    status: HTTPStatus,
-    reason: str,
-    detail: str,
-    extra_extensions: dict[str, float | int] | None = None,
+    payload: ProblemPayload,
 ) -> Iterable[bytes]:
     """Respond with the documented problem+json error payload."""
-    body = _problem_body(
-        instance=environ.get("PATH_INFO", "/"),
-        status=status,
-        reason=reason,
-        detail=detail,
-        extra_extensions=extra_extensions,
-    )
+    body = payload.model_copy(update={"instance": environ.get("PATH_INFO", "/")}).body()
     return _respond(
         start_response=start_response,
-        status=status,
+        status=payload.status,
         content_type=CONTENT_TYPE_PROBLEM_JSON,
         body=body,
     )
@@ -172,11 +182,13 @@ def _post_models(
         return _problem_response(
             start_response=start_response,
             environ=environ,
-            status=HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
-            reason="unsupported_media_type",
-            detail=(
-                f"POST {MODELS_PATH} expects Content-Type {CONTENT_TYPE_PNML},"
-                f" got {content_type or 'none'}."
+            payload=_problem(
+                status=HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+                reason="unsupported_media_type",
+                detail=(
+                    f"POST {MODELS_PATH} expects Content-Type {CONTENT_TYPE_PNML},"
+                    f" got {content_type or 'none'}."
+                ),
             ),
         )
     try:
@@ -185,9 +197,11 @@ def _post_models(
         return _problem_response(
             start_response=start_response,
             environ=environ,
-            status=HTTPStatus.BAD_REQUEST,
-            reason="invalid_content_length",
-            detail="The Content-Length header is not an integer.",
+            payload=_problem(
+                status=HTTPStatus.BAD_REQUEST,
+                reason="invalid_content_length",
+                detail="The Content-Length header is not an integer.",
+            ),
         )
     body = environ["wsgi.input"].read(length)
     try:
@@ -196,9 +210,11 @@ def _post_models(
         return _problem_response(
             start_response=start_response,
             environ=environ,
-            status=HTTPStatus.UNPROCESSABLE_ENTITY,
-            reason="invalid_pnml",
-            detail=f"The body is not valid UTF-8: {error}",
+            payload=_problem(
+                status=HTTPStatus.UNPROCESSABLE_ENTITY,
+                reason="invalid_pnml",
+                detail=f"The body is not valid UTF-8: {error}",
+            ),
         )
     try:
         model = import_pnml(text=text)
@@ -207,9 +223,9 @@ def _post_models(
         return _problem_response(
             start_response=start_response,
             environ=environ,
-            status=HTTPStatus.UNPROCESSABLE_ENTITY,
-            reason="invalid_pnml",
-            detail=str(error),
+            payload=_problem(
+                status=HTTPStatus.UNPROCESSABLE_ENTITY, reason="invalid_pnml", detail=str(error)
+            ),
         )
     stored, created = store.save(model=model)
     status = HTTPStatus.CREATED if created else HTTPStatus.OK
@@ -242,11 +258,13 @@ def _get_model(
         return _problem_response(
             start_response=start_response,
             environ=environ,
-            status=HTTPStatus.NOT_ACCEPTABLE,
-            reason="not_acceptable",
-            detail=(
-                f"This endpoint serves {CONTENT_TYPE_PETRI_JSON};"
-                " PNML re-export is not supported yet."
+            payload=_problem(
+                status=HTTPStatus.NOT_ACCEPTABLE,
+                reason="not_acceptable",
+                detail=(
+                    f"This endpoint serves {CONTENT_TYPE_PETRI_JSON};"
+                    " PNML re-export is not supported yet."
+                ),
             ),
         )
     model = store.get(model_id=ModelId(model_id))
@@ -254,9 +272,11 @@ def _get_model(
         return _problem_response(
             start_response=start_response,
             environ=environ,
-            status=HTTPStatus.NOT_FOUND,
-            reason="model_not_found",
-            detail=f"No model with id {model_id!r}.",
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="model_not_found",
+                detail=f"No model with id {model_id!r}.",
+            ),
         )
     logger.debug("api_model_read", model_id=model.id, content_hash=model.content_hash)
     return _respond(
@@ -270,19 +290,9 @@ def _get_model(
 class _ProblemPayloadError(Exception):
     """An internal early-exit carrying an RFC 7807 payload to the caller."""
 
-    def __init__(
-        self,
-        *,
-        status: HTTPStatus,
-        reason: str,
-        detail: str,
-        extensions: dict[str, float | int] | None = None,
-    ) -> None:
-        super().__init__(detail)
-        self.status = status
-        self.reason = reason
-        self.detail = detail
-        self.extensions = extensions
+    def __init__(self, *, payload: ProblemPayload) -> None:
+        super().__init__(payload.detail)
+        self.payload = payload
 
 
 def _is_check_family(value: str) -> TypeGuard[CheckFamilyName]:
@@ -295,35 +305,43 @@ def _parse_check_request(*, environ: WSGIEnvironment) -> CheckRequest:
     content_type = _media_type(header_value=environ.get("CONTENT_TYPE"))
     if content_type != CONTENT_TYPE_JSON:
         raise _ProblemPayloadError(
-            status=HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
-            reason="unsupported_media_type",
-            detail=f"POST {CHECKS_PATH_PREFIX}{{family}} expects Content-Type {CONTENT_TYPE_JSON},"
-            f" got {content_type or 'none'}.",
+            payload=_problem(
+                status=HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+                reason="unsupported_media_type",
+                detail=f"POST {CHECKS_PATH_PREFIX}{{family}} expects Content-Type"
+                f" {CONTENT_TYPE_JSON}, got {content_type or 'none'}.",
+            )
         )
     try:
         length = int(environ.get("CONTENT_LENGTH", "") or 0)
     except ValueError:
         raise _ProblemPayloadError(
-            status=HTTPStatus.BAD_REQUEST,
-            reason="invalid_content_length",
-            detail="The Content-Length header is not an integer.",
+            payload=_problem(
+                status=HTTPStatus.BAD_REQUEST,
+                reason="invalid_content_length",
+                detail="The Content-Length header is not an integer.",
+            )
         ) from None
     body = environ["wsgi.input"].read(length)
     try:
         payload = json.loads(body.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise _ProblemPayloadError(
-            status=HTTPStatus.UNPROCESSABLE_ENTITY,
-            reason="invalid_json",
-            detail=f"The body is not valid JSON: {error}",
+            payload=_problem(
+                status=HTTPStatus.UNPROCESSABLE_ENTITY,
+                reason="invalid_json",
+                detail=f"The body is not valid JSON: {error}",
+            )
         ) from None
     try:
         return CheckRequest.model_validate(payload)
     except ValidationError as error:
         raise _ProblemPayloadError(
-            status=HTTPStatus.UNPROCESSABLE_ENTITY,
-            reason="invalid_check_request",
-            detail=f"The check request does not conform to the contract: {error}",
+            payload=_problem(
+                status=HTTPStatus.UNPROCESSABLE_ENTITY,
+                reason="invalid_check_request",
+                detail=f"The check request does not conform to the contract: {error}",
+            )
         ) from None
 
 
@@ -401,46 +419,6 @@ def _watchdog(
         )
 
 
-def _session_budget_refusal(
-    *, run_store: RunStore, settings: ApiSettings, timeout_seconds: int
-) -> _ProblemPayloadError | None:
-    """Admission control of the session budget cap (spec §12.4, issue #7).
-
-    A new run is refused when its worst-case tool time - bounded by its
-    timeout plus the watchdog grace, since the watchdog ends any run - does
-    not fit in the remaining budget, so the cumulative measured cost never
-    exceeds the cap. The refusal is explicit and carries the remaining
-    budget; there is no carry-over between sessions.
-    """
-    consumed_seconds = run_store.consumed_seconds()
-    remaining_budget_seconds = settings.session_budget_seconds - consumed_seconds
-    reservation_seconds = timeout_seconds + WATCHDOG_GRACE_SECONDS
-    if remaining_budget_seconds >= reservation_seconds:
-        return None
-    logger.warning(
-        "api_check_budget_refused",
-        remaining_budget_seconds=remaining_budget_seconds,
-        session_budget_seconds=settings.session_budget_seconds,
-        consumed_seconds=consumed_seconds,
-        timeout_seconds=timeout_seconds,
-    )
-    return _ProblemPayloadError(
-        status=HTTPStatus.TOO_MANY_REQUESTS,
-        reason="session_budget_exceeded",
-        detail=(
-            f"Session budget exceeded: {remaining_budget_seconds:.3f}s of tool time remain"
-            f" (cap {settings.session_budget_seconds}s, consumed {consumed_seconds:.3f}s),"
-            f" but one run can consume up to {reservation_seconds}s (timeout + watchdog grace)."
-        ),
-        extensions={
-            "remaining_budget_seconds": remaining_budget_seconds,
-            "session_budget_seconds": settings.session_budget_seconds,
-            "consumed_seconds": consumed_seconds,
-            "timeout_seconds": timeout_seconds,
-        },
-    )
-
-
 def _post_check(
     *,
     environ: WSGIEnvironment,
@@ -451,66 +429,96 @@ def _post_check(
     family: CheckFamilyName,
     settings: ApiSettings,
 ) -> Iterable[bytes]:
-    """Accept a check question: 202 + Location, idempotent by (model, question) hash."""
+    """Accept a check question: 202 + Location, idempotent by (model, question) hash.
+
+    Admission is atomic in the store (spec §12.4): the session budget check
+    and the run creation happen under one lock, with in-flight reservations,
+    so the cumulative measured cost never exceeds the cap - a run that does
+    not fit is refused with an explicit 429 carrying the remaining budget.
+    """
     timeout_seconds = settings.check_timeout_seconds
     try:
         request = _parse_check_request(environ=environ)
         if request.kind not in FAMILY_PATTERNS[family]:
             raise _ProblemPayloadError(
-                status=HTTPStatus.UNPROCESSABLE_ENTITY,
-                reason="pattern_not_in_family",
-                detail=(
-                    f"Pattern {request.kind!r} does not belong to family {family!r};"
-                    " it is rejected, never reinterpreted (spec §12.1)."
-                ),
+                payload=_problem(
+                    status=HTTPStatus.UNPROCESSABLE_ENTITY,
+                    reason="pattern_not_in_family",
+                    detail=(
+                        f"Pattern {request.kind!r} does not belong to family {family!r};"
+                        " it is rejected, never reinterpreted (spec §12.1)."
+                    ),
+                )
             )
         if store.get(model_id=request.model_id) is None:
             raise _ProblemPayloadError(
-                status=HTTPStatus.NOT_FOUND,
-                reason="model_not_found",
-                detail=f"No model with id {request.model_id!r}.",
+                payload=_problem(
+                    status=HTTPStatus.NOT_FOUND,
+                    reason="model_not_found",
+                    detail=f"No model with id {request.model_id!r}.",
+                )
             )
         if runner is None:
             raise _ProblemPayloadError(
-                status=HTTPStatus.SERVICE_UNAVAILABLE,
-                reason="runner_not_configured",
-                detail="No check runner is wired into this server yet (real engines: P09+).",
+                payload=_problem(
+                    status=HTTPStatus.SERVICE_UNAVAILABLE,
+                    reason="runner_not_configured",
+                    detail="No check runner is wired into this server yet (real engines: P09+).",
+                )
             )
     except _ProblemPayloadError as problem:
         return _problem_response(
-            start_response=start_response,
-            environ=environ,
-            status=problem.status,
-            reason=problem.reason,
-            detail=problem.detail,
-            extra_extensions=problem.extensions,
+            start_response=start_response, environ=environ, payload=problem.payload
         )
     question = CheckQuestion(
         family=family, kind=request.kind, formula=request.formula, parameters=request.parameters
     )
-    key = run_key(model_id=request.model_id, question=question)
-    if run_store.get_by_key(key=key) is None:
-        budget_problem = _session_budget_refusal(
-            run_store=run_store, settings=settings, timeout_seconds=timeout_seconds
-        )
-        if budget_problem is not None:
-            return _problem_response(
-                start_response=start_response,
-                environ=environ,
-                status=budget_problem.status,
-                reason=budget_problem.reason,
-                detail=budget_problem.detail,
-                extra_extensions=budget_problem.extensions,
-            )
-    run, created = run_store.create_or_get(
-        key=key,
+    admission = RunAdmission(
+        key=run_key(model_id=request.model_id, question=question),
         family=family,
         kind=request.kind,
         formula=request.formula,
         model_id=request.model_id,
         timeout_seconds=timeout_seconds,
         tool_version=runner.tool_version,
+        session_budget_seconds=settings.session_budget_seconds,
     )
+    result = run_store.admit(
+        admission=admission,
+        reservation_seconds=timeout_seconds + WATCHDOG_GRACE_SECONDS,
+    )
+    if isinstance(result, BudgetRefused):
+        logger.warning(
+            "api_check_budget_refused",
+            remaining_budget_seconds=result.remaining_budget_seconds,
+            session_budget_seconds=result.session_budget_seconds,
+            consumed_seconds=result.consumed_seconds,
+            reserved_seconds=result.reserved_seconds,
+            timeout_seconds=result.timeout_seconds,
+        )
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.TOO_MANY_REQUESTS,
+                reason="session_budget_exceeded",
+                detail=(
+                    f"Session budget exceeded: {result.remaining_budget_seconds:.3f}s of tool time"
+                    f" remain (cap {result.session_budget_seconds}s,"
+                    f" consumed {result.consumed_seconds:.3f}s,"
+                    f" reserved {result.reserved_seconds:.3f}s), but one run can consume up to"
+                    f" {timeout_seconds + WATCHDOG_GRACE_SECONDS}s (timeout + watchdog grace)."
+                ),
+                extensions={
+                    "remaining_budget_seconds": result.remaining_budget_seconds,
+                    "session_budget_seconds": result.session_budget_seconds,
+                    "consumed_seconds": result.consumed_seconds,
+                    "reserved_seconds": result.reserved_seconds,
+                    "timeout_seconds": result.timeout_seconds,
+                },
+            ),
+        )
+    run, created = result.run, result.created
     if created:
         started_monotonic = time.monotonic()
         thread = threading.Thread(
@@ -570,9 +578,11 @@ def _get_run(
         return _problem_response(
             start_response=start_response,
             environ=environ,
-            status=HTTPStatus.NOT_FOUND,
-            reason="run_not_found",
-            detail=f"No run with id {run_id!r}.",
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="run_not_found",
+                detail=f"No run with id {run_id!r}.",
+            ),
         )
     logger.debug("api_run_read", run_id=run.run_id, status=run.status)
     body = json.dumps(run.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
@@ -599,9 +609,11 @@ def _dispatch_models(
         return _problem_response(
             start_response=start_response,
             environ=environ,
-            status=HTTPStatus.METHOD_NOT_ALLOWED,
-            reason="method_not_allowed",
-            detail=f"{method} is not supported on {MODELS_PATH}.",
+            payload=_problem(
+                status=HTTPStatus.METHOD_NOT_ALLOWED,
+                reason="method_not_allowed",
+                detail=f"{method} is not supported on {MODELS_PATH}.",
+            ),
         )
     if path.startswith(MODEL_PATH_PREFIX):
         model_id = path.removeprefix(MODEL_PATH_PREFIX)
@@ -615,9 +627,11 @@ def _dispatch_models(
         return _problem_response(
             start_response=start_response,
             environ=environ,
-            status=HTTPStatus.METHOD_NOT_ALLOWED if method != "GET" else HTTPStatus.NOT_FOUND,
-            reason="method_not_allowed" if method != "GET" else "model_not_found",
-            detail=f"No resource at {path}.",
+            payload=_problem(
+                status=HTTPStatus.METHOD_NOT_ALLOWED if method != "GET" else HTTPStatus.NOT_FOUND,
+                reason="method_not_allowed" if method != "GET" else "model_not_found",
+                detail=f"No resource at {path}.",
+            ),
         )
     return None
 
@@ -649,9 +663,11 @@ def _dispatch_checks_and_runs(
         return _problem_response(
             start_response=start_response,
             environ=environ,
-            status=HTTPStatus.METHOD_NOT_ALLOWED if method != "POST" else HTTPStatus.NOT_FOUND,
-            reason="method_not_allowed" if method != "POST" else "check_family_not_found",
-            detail=f"No check family at {path}.",
+            payload=_problem(
+                status=HTTPStatus.METHOD_NOT_ALLOWED if method != "POST" else HTTPStatus.NOT_FOUND,
+                reason="method_not_allowed" if method != "POST" else "check_family_not_found",
+                detail=f"No check family at {path}.",
+            ),
         )
     if path.startswith(RUNS_PATH_PREFIX):
         run_id = path.removeprefix(RUNS_PATH_PREFIX)
@@ -665,9 +681,11 @@ def _dispatch_checks_and_runs(
         return _problem_response(
             start_response=start_response,
             environ=environ,
-            status=HTTPStatus.METHOD_NOT_ALLOWED if method != "GET" else HTTPStatus.NOT_FOUND,
-            reason="method_not_allowed" if method != "GET" else "run_not_found",
-            detail=f"No resource at {path}.",
+            payload=_problem(
+                status=HTTPStatus.METHOD_NOT_ALLOWED if method != "GET" else HTTPStatus.NOT_FOUND,
+                reason="method_not_allowed" if method != "GET" else "run_not_found",
+                detail=f"No resource at {path}.",
+            ),
         )
     return None
 
@@ -690,9 +708,11 @@ def create_app(
             return _problem_response(
                 start_response=start_response,
                 environ=environ,
-                status=HTTPStatus.UNAUTHORIZED,
-                reason="missing_or_invalid_api_key",
-                detail=f"Provide a valid {HEADER_API_KEY} header.",
+                payload=_problem(
+                    status=HTTPStatus.UNAUTHORIZED,
+                    reason="missing_or_invalid_api_key",
+                    detail=f"Provide a valid {HEADER_API_KEY} header.",
+                ),
             )
         routed = _dispatch_models(
             environ=environ, start_response=start_response, method=method, path=path, store=store
@@ -713,9 +733,9 @@ def create_app(
         return _problem_response(
             start_response=start_response,
             environ=environ,
-            status=HTTPStatus.NOT_FOUND,
-            reason="not_found",
-            detail=f"No resource at {path}.",
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND, reason="not_found", detail=f"No resource at {path}."
+            ),
         )
 
     return app
