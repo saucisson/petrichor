@@ -25,6 +25,7 @@ from petrichor.checks import (
     CheckFailed,
     CheckOutcome,
     CheckQuestion,
+    CheckRunner,
     ToolVersion,
     run_key,
 )
@@ -32,7 +33,7 @@ from petrichor.engines.archive import RunArchive
 from petrichor.model_store import ModelStore
 from petrichor.petri_canonical import ModelId
 from petrichor.pnml_import import import_pnml
-from petrichor.run_store import RunStore
+from petrichor.run_store import BudgetRefused, RunAdmission, RunAdmitted, RunStore
 
 if TYPE_CHECKING:
     import pytest
@@ -107,23 +108,26 @@ class BlockingRunner:
 
 
 def build_client(
-    runner: object,
+    runner: CheckRunner | None,
     *,
     timeout_seconds: int = 30,
     session_budget_seconds: float | None = None,
 ) -> tuple[httpx.Client, str, RunStore]:
     """Wire the WSGI app with a known key, the Philosophes-3 model and a runner."""
-    settings_kwargs: dict[str, object] = {
-        "api_key": SecretStr(TEST_API_KEY),
-        "check_timeout_seconds": timeout_seconds,
-    }
-    if session_budget_seconds is not None:
-        settings_kwargs["session_budget_seconds"] = session_budget_seconds
-    settings = ApiSettings(**settings_kwargs)  # type: ignore[arg-type]
+    if session_budget_seconds is None:
+        settings = ApiSettings(
+            api_key=SecretStr(TEST_API_KEY), check_timeout_seconds=timeout_seconds
+        )
+    else:
+        settings = ApiSettings(
+            api_key=SecretStr(TEST_API_KEY),
+            check_timeout_seconds=timeout_seconds,
+            session_budget_seconds=session_budget_seconds,
+        )
     store = ModelStore()
     model, _ = store.save(model=import_pnml(text=philosophes3_pnml()))
     run_store = RunStore()
-    app = create_app(settings=settings, store=store, run_store=run_store, runner=runner)  # type: ignore[arg-type]
+    app = create_app(settings=settings, store=store, run_store=run_store, runner=runner)
     client = httpx.Client(transport=httpx.WSGITransport(app=app), base_url="http://testserver")
     return client, str(model.id), run_store
 
@@ -299,6 +303,48 @@ class TestSessionBudget:
         assert 0.0 < extensions["remaining_budget_seconds"] < 6.0
         assert len(run_store) == 1
 
+    def test_concurrent_posts_cannot_both_be_admitted_over_the_cap(self) -> None:
+        """The review counterexample: cap 6s, reservation 6s, two concurrent POSTs.
+
+        Admission is atomic in the store, so exactly one POST gets 202 and the
+        other gets an explicit 429 carrying the remaining budget - the
+        cumulative measured cost never exceeds the cap (spec §20.2).
+        """
+        runner = BlockingRunner()
+        client, model_id, run_store = build_client(
+            runner, timeout_seconds=1, session_budget_seconds=6.0
+        )
+        payloads = [
+            check_payload(model_id),
+            check_payload(model_id, formula="EF DEADLOCK and EF (fork_1)"),
+        ]
+        responses: list[httpx.Response | None] = [None, None]
+
+        def post_at(index: int, payload: dict[str, object]) -> None:
+            responses[index] = post_check(client, "deadlock", payload)
+
+        threads = [
+            threading.Thread(target=post_at, args=(index, payload))
+            for index, payload in enumerate(payloads)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        assert all(response is not None for response in responses)
+        completed = [response for response in responses if response is not None]
+        statuses = sorted(response.status_code for response in completed)
+        assert statuses == [202, 429]
+        refused = next(r for r in completed if r.status_code == 429)
+        extensions = refused.json()["extensions"]
+        assert extensions["reason"] == "session_budget_exceeded"
+        assert extensions["remaining_budget_seconds"] == 0.0
+        assert extensions["reserved_seconds"] == 6.0
+        assert len(run_store) == 1
+        runner.gate.set()
+        accepted = next(r for r in completed if r.status_code == 202)
+        wait_terminal(client, accepted.json()["run_id"])
+
     def test_idempotent_replay_is_not_refused_by_the_budget(self) -> None:
         runner = SleepingRunner(delay_seconds=0.05)
         client, model_id, run_store = build_client(runner)
@@ -340,20 +386,27 @@ class TestSessionBudget:
         assert "remaining_budget_seconds" in refused[0]
 
 
+def admission_for(formula: str, *, session_budget_seconds: float = 3600.0) -> RunAdmission:
+    """One admission record for a deadlock question on a fixed model."""
+    question = CheckQuestion(family="deadlock", kind="deadlock", formula=formula)
+    return RunAdmission(
+        key=run_key(model_id=ModelId("mdl_x"), question=question),
+        family="deadlock",
+        kind="deadlock",
+        formula=formula,
+        model_id=ModelId("mdl_x"),
+        timeout_seconds=30,
+        tool_version=SLEEP_TOOL_VERSION,
+        session_budget_seconds=session_budget_seconds,
+    )
+
+
 class TestRunStoreAccounting:
     def test_consumed_seconds_sums_only_measured_terminal_runs(self) -> None:
         run_store = RunStore()
-        question = CheckQuestion(family="deadlock", kind="deadlock", formula="EF DEADLOCK")
-        key = run_key(model_id=ModelId("mdl_x"), question=question)
-        run, _ = run_store.create_or_get(
-            key=key,
-            family="deadlock",
-            kind="deadlock",
-            formula="EF DEADLOCK",
-            model_id=ModelId("mdl_x"),
-            timeout_seconds=30,
-            tool_version=SLEEP_TOOL_VERSION,
-        )
+        admitted = run_store.admit(admission=admission_for("EF DEADLOCK"), reservation_seconds=35.0)
+        assert not isinstance(admitted, BudgetRefused)
+        run = admitted.run
         assert run_store.consumed_seconds() == 0.0
         run_store.mark_done(
             run_id=run.run_id,
@@ -362,22 +415,11 @@ class TestRunStoreAccounting:
             measured_seconds=1.5,
         )
         assert run_store.consumed_seconds() == 1.5
-        other_key = run_key(
-            model_id=ModelId("mdl_x"),
-            question=CheckQuestion(family="deadlock", kind="deadlock", formula="EF (fork_1)"),
-        )
-        other, _ = run_store.create_or_get(
-            key=other_key,
-            family="deadlock",
-            kind="deadlock",
-            formula="EF (fork_1)",
-            model_id=ModelId("mdl_x"),
-            timeout_seconds=30,
-            tool_version=SLEEP_TOOL_VERSION,
-        )
+        other = run_store.admit(admission=admission_for("EF (fork_1)"), reservation_seconds=35.0)
+        assert not isinstance(other, BudgetRefused)
         assert run_store.consumed_seconds() == 1.5
         run_store.mark_error(
-            run_id=other.run_id,
+            run_id=other.run.run_id,
             kind="timeout",
             detail="watchdog",
             command=[],
@@ -388,3 +430,36 @@ class TestRunStoreAccounting:
         assert stored is not None
         assert stored.measured_seconds == 1.5
         assert stored.command == SLEEP_COMMAND
+
+    def test_concurrent_admissions_never_exceed_the_cap(self) -> None:
+        """Two concurrent 6s reservations under a 6s cap: exactly one is admitted.
+
+        The budget check and the run creation happen under one store lock, so
+        the second admission sees the first one's in-flight reservation and is
+        refused - the cumulative cost can never exceed the cap (spec §20.2).
+        """
+        run_store = RunStore()
+        formulas = ("EF DEADLOCK", "EF (fork_1)")
+        results: list[object] = [None, None]
+
+        def admit_at(index: int, formula: str) -> None:
+            results[index] = run_store.admit(
+                admission=admission_for(formula, session_budget_seconds=6.0),
+                reservation_seconds=6.0,
+            )
+
+        threads = [
+            threading.Thread(target=admit_at, args=(index, formula))
+            for index, formula in enumerate(formulas)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        admitted = [r for r in results if isinstance(r, RunAdmitted)]
+        refused = [r for r in results if isinstance(r, BudgetRefused)]
+        assert len(admitted) == 1
+        assert len(refused) == 1
+        assert refused[0].remaining_budget_seconds == 0.0
+        assert refused[0].reserved_seconds == 6.0
+        assert len(run_store) == 1

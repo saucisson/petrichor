@@ -35,7 +35,7 @@ from petrichor.checks import (
 from petrichor.model_store import ModelStore
 from petrichor.petri_canonical import ModelId
 from petrichor.pnml_import import import_pnml
-from petrichor.run_store import RunStore
+from petrichor.run_store import BudgetRefused, RunAdmission, RunStore
 
 if TYPE_CHECKING:
     from wsgiref.types import WSGIEnvironment
@@ -365,15 +365,21 @@ class TestRunStates:
         run_store = RunStore()
         question = CheckQuestion(family="deadlock", kind="deadlock", formula="EF DEADLOCK")
         key = run_key(model_id=ModelId("mdl_x"), question=question)
-        run, _ = run_store.create_or_get(
-            key=key,
-            family="deadlock",
-            kind="deadlock",
-            formula="EF DEADLOCK",
-            model_id=ModelId("mdl_x"),
-            timeout_seconds=30,
-            tool_version=FAKE_TOOL_VERSION,
+        admitted = run_store.admit(
+            admission=RunAdmission(
+                key=key,
+                family="deadlock",
+                kind="deadlock",
+                formula="EF DEADLOCK",
+                model_id=ModelId("mdl_x"),
+                timeout_seconds=30,
+                tool_version=FAKE_TOOL_VERSION,
+                session_budget_seconds=3600.0,
+            ),
+            reservation_seconds=35.0,
         )
+        assert not isinstance(admitted, BudgetRefused)
+        run = admitted.run
         run_store.mark_done(
             run_id=run.run_id,
             output=DONE_OUTPUT,
@@ -507,7 +513,7 @@ class TestRunKeyProperty:
         question = CheckQuestion(family="safety", kind="safety.invariant", formula=formula)
         key = run_key(model_id=ModelId(model_id), question=question)
         run_store = RunStore()
-        first, created_first = run_store.create_or_get(
+        admission = RunAdmission(
             key=key,
             family="safety",
             kind="safety.invariant",
@@ -515,19 +521,15 @@ class TestRunKeyProperty:
             model_id=ModelId(model_id),
             timeout_seconds=30,
             tool_version=FAKE_TOOL_VERSION,
+            session_budget_seconds=3600.0,
         )
-        second, created_second = run_store.create_or_get(
-            key=key,
-            family="safety",
-            kind="safety.invariant",
-            formula=formula,
-            model_id=ModelId(model_id),
-            timeout_seconds=30,
-            tool_version=FAKE_TOOL_VERSION,
-        )
-        assert created_first is True
-        assert created_second is False
-        assert second.run_id == first.run_id
+        first = run_store.admit(admission=admission, reservation_seconds=35.0)
+        second = run_store.admit(admission=admission, reservation_seconds=35.0)
+        assert not isinstance(first, BudgetRefused)
+        assert not isinstance(second, BudgetRefused)
+        assert first.created is True
+        assert second.created is False
+        assert second.run.run_id == first.run.run_id
         assert len(run_store) == 1
 
 

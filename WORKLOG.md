@@ -44,6 +44,14 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-10 - resumed pull request #76 left open by an earlier session: review round fixes for P07 (issue #7, branch feat/7-run-archive-session-budget)
+
+- **Issue**: #7 (P07 · Archivage intégral des runs et budget de session), via recovery of open PR #76 (claimed with `make claim-pr PR=76`).
+- **Done**: resumed PR #76 where the earlier session stopped: its working tree held uncommitted fixes for the latest review report (0 BLOCKING, 2 TO-FIX) but was left broken. Completed them: (1) ADR-0003 TO-FIX - `_problem_body`/`_problem_response`/`_ProblemPayloadError` now take one frozen `ProblemPayload` record instead of a growing parameter list, all call sites converted (and a syntax error in `_parse_check_request` fixed); (2) atomic-admission TO-FIX - `RunStore.admit` takes a `RunAdmission` record and checks the session budget plus creates the run under one lock, with in-flight reservations (timeout + watchdog grace) released at the terminal state, so concurrent POSTs cannot both be admitted over the cap; `_post_check` uses it and the 429 carries remaining/cap/consumed/reserved/timeout. Tests: `TestRunStoreAccounting` ported to `admit`, plus two new tests pinning the fix - a store-level concurrent-admission test (two 6s reservations under a 6s cap: exactly one admitted, one refused with remaining 0.0) and the API-level review counterexample (two concurrent POSTs, cap 6s, timeout 1s: exactly one 202 and one 429). The bare `# type: ignore[arg-type]` suppressions in `build_client` are gone - the settings are now built with typed keyword arguments.
+- **Evidence**: run: `make check` green on the final state - ruff, mypy strict, import-linter, 464 tests passed, coverage 97.43% >= 90%. `make wait-ci PR=76` exit 0 on the previous head 8f3ea7c (2 check runs green). Not run yet: CI and the re-review on the new head - they run after push.
+- **Judgement calls**: the reservation model (in-flight worst-case tool time counted against the cap, replaced by the measured cost at the terminal state) was already the PR's stated guarantee (spec §20.2 "jamais débordé"); this change makes it atomic under concurrency, which is what the review demanded. Store-level and API-level concurrency tests both added because the review's counterexample was API-level while the invariant lives in the store.
+- **Escalations**: none.
+
 ## 2026-11-09 - P07: integral run archive + session budget cap (issue #7, branch feat/7-run-archive-session-budget)
 
 - **Issue**: #7 (P07 · Archivage intégral des runs et budget de session).
