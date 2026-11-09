@@ -44,6 +44,14 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-09 - feat(P04) stopped at the review gate: reviewer model unknown to the runtime (PR #72 open, CI green, needs-human)
+
+- **Issue**: #4 (P04), claimed via `make claim ISSUE=4`; PR #72 (feat/4-compose-dummy-driver).
+- **Done**: implementation complete on head 3b33e87 (compose `dummy` service per §19.4, engines package with the normalized driver contract, append-only run archive, @engine test in the real container). `make check` green (305 tests, coverage 94.29%); `make wait-ci PR=72` exit 0 (CI green, 2/2 check runs). Then `make review PR=72` exited 2 (protocol failure): the reviewer session cannot start because the environment sets `REVIEWER_MODEL=mistral-large-4`, which this runtime does not provide ("Unknown model: mistral-large-4. Available: fast-cli, glm-5-3, large-4, medium-cli, mistral-large-4-0-3, mistral-medium-3.5, zai-glm-5-3-flash"). Per the developer contract, exit 2 is reported, not retried.
+- **Evidence**: run: `make check` green; `make wait-ci PR=72` green; `make review PR=72` exit 2 with the model error above. Not run: the review itself (never started), the merge (merge driver requires a zero-BLOCKING report).
+- **Judgement calls**: the escalation channels were attempted and denied by the unattended approval mechanism - GitHub issue comment on #4, `needs-human` label via issue update, and `make notify severity=question` were all denied; per ADR-0015/ADR-0017 a denied call is a stop signal, not routed around. This WORKLOG entry is therefore the escalation record. The `.vibe` runtime profile / `REVIEWER_MODEL` is constitutional (ADR-0015) and was not touched.
+- **Escalations**: needs-human, carried here: which model should the reviewer session use - point `REVIEWER_MODEL`/the .vibe profile at an available name (e.g. `mistral-large-4-0-3`) or fix the runtime to provide `mistral-large-4`? Morning path once answered: `make review PR=72` then `make merge-pr PR=72`.
+
 ## 2026-11-09 - feat(P04): compose moteurs, driver `dummy` et contrat de sortie normalisée (issue #4, PR pending)
 
 - **Issue**: #4 (P04). Picked in auto-discovery: the only worklist item whose `blocked-by` is satisfied (#1 closed); #6/#7/#9/#10 all depend on unmerged work (#3 PR #71 open, #4, #6, #8 PR #70 open, #9). Claimed via `make claim ISSUE=4`.
