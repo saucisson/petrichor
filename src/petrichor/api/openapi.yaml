@@ -1,0 +1,174 @@
+# OpenAPI contract of the Petrichor HTTP API (ADR-0016) - kept with the code.
+# Versioning is explicit in the URL prefix (/v1). Errors are RFC 7807
+# problem+json everywhere. Authentication is the X-API-Key header, checked
+# before any body is parsed.
+openapi: 3.1.0
+info:
+  title: Petrichor API
+  version: 1.0.0
+  description: >-
+    Gérer service: PNML import into the canonical petri+json v1.0 form and
+    model read (spec §4.1, §5, §13). Symmetric nets are stored non-unfolded.
+servers:
+  - url: /v1
+security:
+  - apiKey: []
+paths:
+  /models:
+    post:
+      summary: Import a PNML document into the canonical form
+      description: >-
+        201 when the content hash is new, 200 when the same net was already
+        imported (idempotent by content hash, spec §13). Invalid or
+        unsupported PNML is rejected with 422 - never silently unfolded.
+      requestBody:
+        required: true
+        content:
+          application/pnml+xml:
+            schema:
+              type: string
+              format: xml
+      responses:
+        "201":
+          description: Model created; Location header points at the resource.
+          headers:
+            Location:
+              schema:
+                type: string
+              description: /v1/models/{model_id}
+          content:
+            application/petri+json; version=1.0:
+              schema:
+                $ref: "#/components/schemas/CanonicalModel"
+        "200":
+          description: The content hash was already known; the existing model is returned.
+          content:
+            application/petri+json; version=1.0:
+              schema:
+                $ref: "#/components/schemas/CanonicalModel"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "415":
+          $ref: "#/components/responses/UnsupportedMediaType"
+        "422":
+          $ref: "#/components/responses/InvalidPnml"
+  /models/{model_id}:
+    get:
+      summary: Read a model in its canonical form
+      parameters:
+        - name: model_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The canonical petri+json document, content hash included.
+          content:
+            application/petri+json; version=1.0:
+              schema:
+                $ref: "#/components/schemas/CanonicalModel"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "406":
+          description: >-
+            The Accept header admits no supported representation. PNML
+            re-export is not supported yet.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+components:
+  securitySchemes:
+    apiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+  schemas:
+    Problem:
+      type: object
+      required: [type, title, status, detail, instance]
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
+        extensions:
+          type: object
+          additionalProperties: true
+    CanonicalModel:
+      type: object
+      description: The petri+json v1.0 document (spec §13); see src/petrichor/petri_canonical.py.
+      required: [id, formalism, content_hash, places, transitions, arcs]
+      properties:
+        id:
+          type: string
+        formalism:
+          type: string
+          enum: [pt, symmetric]
+        content_hash:
+          type: string
+          pattern: "^sha256:[0-9a-f]{64}$"
+        parent:
+          type: string
+          nullable: true
+        children:
+          type: array
+          items:
+            type: string
+        derivations:
+          type: array
+          items: {}
+        certificates:
+          type: array
+          items: {}
+        places:
+          type: array
+          items:
+            type: object
+        transitions:
+          type: array
+          items:
+            type: object
+        arcs:
+          type: array
+          items:
+            type: object
+        color_domain:
+          nullable: true
+        metadata:
+          type: object
+  responses:
+    Unauthorized:
+      description: Missing or invalid X-API-Key.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    NotFound:
+      description: Unknown resource.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    UnsupportedMediaType:
+      description: The request body media type is not application/pnml+xml.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    InvalidPnml:
+      description: The PNML document is malformed or uses an unsupported dialect.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
