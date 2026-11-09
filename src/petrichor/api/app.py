@@ -62,6 +62,8 @@ CONTENT_TYPE_PETRI_JSON = "application/petri+json; version=1.0"
 CONTENT_TYPE_PROBLEM_JSON = "application/problem+json"
 HEADER_API_KEY = "X-API-Key"
 PROBLEM_TYPE_BASE_URL = "https://petrichor.dev/problems/"
+WATCHDOG_GRACE_SECONDS = 5
+"""Extra seconds the watchdog waits past the run timeout before forcing the error state."""
 ACCEPTABLE_MEDIA_TYPES = frozenset(
     {"*/*", "application/*", "application/petri+json", "application/json"}
 )
@@ -323,6 +325,18 @@ def _execute_run(
         logger.debug("check_run_finished", run_id=run_id, status="error", error_kind=outcome.kind)
 
 
+def _watchdog(*, run_store: RunStore, run_id: RunId, timeout_seconds: int) -> None:
+    """Backstop: a runner that ignores its timeout still ends in an explicit error state."""
+    run = run_store.get(run_id=run_id)
+    if run is not None and run.status == "running":
+        logger.warning("check_run_watchdog_fired", run_id=run_id, timeout_seconds=timeout_seconds)
+        run_store.mark_error(
+            run_id=run_id,
+            kind="timeout",
+            detail=f"runner did not answer within {timeout_seconds}s (watchdog backstop)",
+        )
+
+
 def _post_check(
     *,
     environ: WSGIEnvironment,
@@ -389,6 +403,17 @@ def _post_check(
             daemon=True,
         )
         thread.start()
+        watchdog = threading.Timer(
+            timeout_seconds + WATCHDOG_GRACE_SECONDS,
+            _watchdog,
+            kwargs={
+                "run_store": run_store,
+                "run_id": run.run_id,
+                "timeout_seconds": timeout_seconds,
+            },
+        )
+        watchdog.daemon = True
+        watchdog.start()
     logger.debug(
         "api_check_accepted",
         run_id=run.run_id,

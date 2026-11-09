@@ -93,6 +93,15 @@ class BlockingRunner:
         return CheckCompleted(output=DONE_OUTPUT)
 
 
+class NeverRunner:
+    """A runner that ignores its timeout on purpose, to exercise the watchdog."""
+
+    def run(self, *, question: CheckQuestion, timeout_seconds: int) -> CheckCompleted:
+        """Block far past the timeout, then complete (the watchdog must win)."""
+        threading.Event().wait(timeout=60)
+        return CheckCompleted(output=DONE_OUTPUT)
+
+
 def build_client(
     runner: CheckRunner | None, *, timeout_seconds: int | None = None
 ) -> tuple[httpx.Client, str, RunStore]:
@@ -127,9 +136,11 @@ def check_payload(model_id: str, **overrides: object) -> dict[str, object]:
     return payload
 
 
-def wait_terminal(client: httpx.Client, run_id: str) -> dict[str, object]:
+def wait_terminal(
+    client: httpx.Client, run_id: str, timeout: float = TERMINAL_POLL_SECONDS
+) -> dict[str, object]:
     """Poll GET /v1/runs/{rid} until the run leaves the running state."""
-    deadline = time.monotonic() + TERMINAL_POLL_SECONDS
+    deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         response = client.get(f"/v1/runs/{run_id}", headers=AUTH_HEADERS)
         run = response.json()
@@ -322,6 +333,34 @@ class TestRunStates:
         assert run["status"] == "error"
         assert run["error"]["kind"] == "engine_error"
         assert "runner exploded" in run["error"]["detail"]
+
+    def test_watchdog_forces_timeout_when_runner_ignores_it(self) -> None:
+        client, model_id, _ = build_client(NeverRunner(), timeout_seconds=1)
+        response = post_check(client, "deadlock", check_payload(model_id))
+        run = wait_terminal(client, response.json()["run_id"], timeout=15.0)
+        assert run["status"] == "error"
+        assert run["error"]["kind"] == "timeout"
+        assert "watchdog" in run["error"]["detail"]
+        assert run["output"] is None
+
+    def test_terminal_state_is_final(self) -> None:
+        run_store = RunStore()
+        question = CheckQuestion(family="deadlock", kind="deadlock", formula="EF DEADLOCK")
+        key = run_key(model_id=ModelId("mdl_x"), question=question)
+        run, _ = run_store.create_or_get(
+            key=key,
+            family="deadlock",
+            kind="deadlock",
+            formula="EF DEADLOCK",
+            model_id=ModelId("mdl_x"),
+        )
+        run_store.mark_done(run_id=run.run_id, output=DONE_OUTPUT)
+        run_store.mark_error(run_id=run.run_id, kind="timeout", detail="late watchdog")
+        final = run_store.get(run_id=run.run_id)
+        assert final is not None
+        assert final.status == "done"
+        assert final.output == DONE_OUTPUT
+        assert final.error is None
 
     def test_get_unknown_run_returns_404(self) -> None:
         client, _, _ = build_client(FakeRunner())
