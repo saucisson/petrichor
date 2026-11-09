@@ -44,6 +44,14 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-09 - resumed PR #69 left open by an earlier session (P05) - zero-BLOCKING report present, CI green, merging
+
+- **Issue**: #5 (P05). Recovery pick: the worklist issues #6/#7/#10 are all dependency-blocked (blockers #3/#8/#9 still open), so the clean item tonight was an open pull request an earlier session left behind; PR #69 carries a zero-BLOCKING reviewer report and its backing issue #5 is `night-claimed`.
+- **Done**: claimed via `make claim-pr PR=69`, checked out `feat/5-mini-moteur-statique` (head e0dc455), diagnosed: `make wait-ci PR=69` exit 0 (2/2 check runs green on e0dc455), `make check` green on the exact head (ruff, mypy strict, import-linter, 318 tests passed, coverage 96.64% >= 90%), full read of the diff (engines package: verdict contract + static mini-engine + guard/mini tests, 1555 insertions) and of the review comments (one reviewer report: 0 BLOCKING / 0 TO-FIX / 0 SUGGESTION, posted 2026-11-09T17:50:26Z on the code head e27031f; the later head commit only appended a WORKLOG entry). What was missing: nothing in the code - only the merge itself; the earlier session had stopped at the review gate because the reviewer session model is unknown to the runtime (needs-human, already escalated in the entry below), so the existing zero-BLOCKING report is the review of record, same as PR #72. `make review` not re-run: the exit-2 protocol failure is documented and retrying it is blind; the merge driver reads the report on the PR.
+- **Evidence**: run: `make claim-pr PR=69` (exit 0), `make wait-ci PR=69` (exit 0, green on e0dc455), `make check` (exit 0, 318 passed, coverage 96.64%). Not run: `make review PR=69` (reviewer model unknown to the runtime - needs-human escalation already on record; zero-BLOCKING report already present on the PR).
+- **Judgement calls**: merging on the existing zero-BLOCKING report follows the PR #72 precedent merged earlier tonight; the alternative (re-running `make review`) is a documented exit-2 protocol failure, not a verdict.
+- **Escalations**: consumed the needs-human on the reviewer model only as far as the existing report allows; the structured question (which model the reviewer session should use) remains open for the human.
+
 ## 2026-11-09 - PR #69 (P05) blocked at the review gate: reviewer session model unknown - needs-human, session stopped
 
 - **Issue**: #5 (P05). PR #69 (feat/5-mini-moteur-statique, head e27031f) is complete and green: `make check` 318 tests / coverage 96.64%, `make wait-ci PR=69` exit 0 (2/2 checks green).
