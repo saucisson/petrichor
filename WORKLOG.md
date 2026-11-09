@@ -44,6 +44,14 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-09 - daily rebased onto main @ b2436ea (PR #68 merged); driver tests moved to scripts/tests/
+
+- **Issue**: none (human-directed: "C'est mergé. Met à jour daily par rebase").
+- **Done**: `daily` rebased onto `origin/main` b2436ea (template @ 2aa4d27 constitutional sync, PR #68). 49 commits replayed; only WORKLOG.md conflicted (entries merged, both sides kept); constitutional files identical to main. Follow-up required by the new pyproject: its testpaths expect driver tests in `scripts/tests/` (ADR-0021 layout), but daily still had them at `scripts/test_*.py`, so the gate collected only 62 of 290 tests. Moved all 16 driver test files to `scripts/tests/` (with `__init__.py` so pytest resolves the repo root and `from scripts import ...` keeps working) and fixed the one `Path(__file__).parents[1]` -> `parents[2]` in test_create_issues.py. Pushed with --force-with-lease.
+- **Evidence**: run: `make check` green on the rebased daily - ruff + format, mypy strict (incl. src), import-linter, 290 tests passed, coverage 95.96% >= 90%. Rebase verified: origin/main is ancestor of HEAD; AGENTS.md, pyproject.toml, .pre-commit-config.yaml, docs/ identical to main.
+- **Judgement calls**: moving the tests (code layout on daily, not a constitutional file) follows the layout the merged pyproject declares; the alternative (editing pyproject on daily) would diverge from main.
+- **Escalations**: none.
+
 ## 2026-11-08 - PR #59 merged into daily; mypy scope aligned with src/
 
 - **Issue**: #2 (P02).
