@@ -287,7 +287,8 @@ class TestPostCheck:
         client, model_id, _ = build_client(runner)
         with structlog.testing.capture_logs() as events:
             response = post_check(client, "deadlock", check_payload(model_id))
-        run_id = response.json()["run_id"]
+            run_id = response.json()["run_id"]
+            wait_terminal(client, run_id)
         accepted = [e for e in events if e["event"] == "api_check_accepted"]
         assert len(accepted) == 1
         assert accepted[0]["run_id"] == run_id
