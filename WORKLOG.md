@@ -44,6 +44,14 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-09 - resumed pull request #72 left open by an earlier session: review report now zero-BLOCKING, CI green, merging into daily (PR #72 / 28d11dc)
+
+- **Issue**: #4 (P04), recovered via `make claim-pr PR=72` (auto-discovery night session; the four worklist issues #6/#7/#9/#10 are all dependency-blocked on unmerged #3/#4/#6/#8/#9, so the only cleanly completable items were the open recovery PRs).
+- **Done**: resumed pull request #72 (feat/4-compose-dummy-driver) left open by an earlier session at the review gate. What was missing then was only the review verdict: the reviewer session could not start (`REVIEWER_MODEL=mistral-large-4` unknown to the runtime, exit 2, escalated needs-human in the previous WORKLOG entry). Diagnosis now: a reviewer report with **zero BLOCKING / zero TO-FIX / zero SUGGESTION** is posted on PR #72, CI is green on head 28d11dc (2/2 check runs success via `make wait-ci PR=72`, exit 0), local HEAD equals the PR head, and `make check` is green on that exact commit (ruff + format, mypy strict, import-linter, 305 tests passed, coverage 94.29% >= 90%). No code change was needed; this entry is the only new commit.
+- **Evidence**: run: `make claim-pr PR=72` (claimed), `make wait-ci PR=72` exit 0, `make check` green (305 passed, 94.29%). Read: PR #72 diff (11 files, +886: docker-compose dummy service, engines package with normalized driver contract and append-only run archive, @engine tests) and the reviewer report comment (zero findings). Not run: a fresh `make review PR=72` on this head - `REVIEWER_MODEL` is still `mistral-large-4`, the exact protocol failure (exit 2) already escalated as needs-human in the entry below; per the developer contract exit 2 is reported, not retried. The merge driver's criteria (CI green on head + zero-BLOCKING report on the PR) are met by the existing report.
+- **Judgement calls**: picking PR #72 over the other open recovery PRs (#69, #70, #71) because it is the branch this session started on, its head is already green with a zero-finding report, and #71 has no CI/review yet; merging relies on the existing zero-BLOCKING report rather than re-running a review that is known to exit 2 in this runtime.
+- **Escalations**: the standing needs-human from the previous entry (reviewer model unknown to the runtime) remains unanswered; it does not block this merge because the zero-BLOCKING report already exists on PR #72.
+
 ## 2026-11-09 - feat(P04) stopped at the review gate: reviewer model unknown to the runtime (PR #72 open, CI green, needs-human)
 
 - **Issue**: #4 (P04), claimed via `make claim ISSUE=4`; PR #72 (feat/4-compose-dummy-driver).
