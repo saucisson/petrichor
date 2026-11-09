@@ -120,6 +120,15 @@ convention = "google"
     "D",        # docstrings optional in tests
     "PLR2004",  # magic values are fine in test scenarios
 ]
+# Kept until the scripts/tests/ layout lands on main via daily (the code
+# sync is on daily, this branch is constitutional-only): main still has
+# driver tests at scripts/test_*.py, and dropping this block now would
+# turn main's lint red.
+"scripts/test_*.py" = [
+    "S101",     # asserts are the point of tests
+    "D",        # docstrings optional in tests
+    "PLR2004",  # magic values are fine in test scenarios
+]
 "tools/notify/tests/*" = [
     "S101",     # asserts are the point of tests
     "D",        # docstrings optional in tests
