@@ -29,6 +29,7 @@ from petrichor.checks import (
     CheckOutcome,
     CheckQuestion,
     CheckRunner,
+    ToolVersion,
     run_key,
 )
 from petrichor.model_store import ModelStore
@@ -53,6 +54,8 @@ DONE_OUTPUT = {
     "cost": {"tool_seconds": 0.1, "states_explored": 4},
     "technique": "dummy",
 }
+FAKE_TOOL_VERSION = ToolVersion("1.0.0-fake")
+FAKE_COMMAND = ["fake-tool", "check", "--question", "EF DEADLOCK"]
 
 
 def philosophes3_pnml() -> str:
@@ -63,6 +66,8 @@ def philosophes3_pnml() -> str:
 class FakeRunner:
     """A controllable runner: serves queued outcomes, records every question."""
 
+    tool_version = FAKE_TOOL_VERSION
+
     def __init__(self, outcomes: list[object] | None = None) -> None:
         self.outcomes = list(outcomes or [])
         self.calls: list[tuple[CheckQuestion, int]] = []
@@ -71,7 +76,7 @@ class FakeRunner:
         """Record the call and serve the next queued outcome (or a default done)."""
         self.calls.append((question, timeout_seconds))
         if not self.outcomes:
-            return CheckCompleted(output=DONE_OUTPUT)
+            return CheckCompleted(output=DONE_OUTPUT, command=FAKE_COMMAND)
         outcome = self.outcomes.pop(0)
         if isinstance(outcome, Exception):
             raise outcome
@@ -82,6 +87,8 @@ class FakeRunner:
 class BlockingRunner:
     """A runner that blocks on a gate, to observe the ``running`` state."""
 
+    tool_version = FAKE_TOOL_VERSION
+
     def __init__(self) -> None:
         self.gate = threading.Event()
         self.calls: list[CheckQuestion] = []
@@ -90,16 +97,18 @@ class BlockingRunner:
         """Wait for the gate, then complete."""
         self.calls.append(question)
         self.gate.wait(timeout=TERMINAL_POLL_SECONDS)
-        return CheckCompleted(output=DONE_OUTPUT)
+        return CheckCompleted(output=DONE_OUTPUT, command=FAKE_COMMAND)
 
 
 class NeverRunner:
     """A runner that ignores its timeout on purpose, to exercise the watchdog."""
 
+    tool_version = FAKE_TOOL_VERSION
+
     def run(self, *, question: CheckQuestion, timeout_seconds: int) -> CheckCompleted:
         """Block far past the timeout, then complete (the watchdog must win)."""
         threading.Event().wait(timeout=60)
-        return CheckCompleted(output=DONE_OUTPUT)
+        return CheckCompleted(output=DONE_OUTPUT, command=FAKE_COMMAND)
 
 
 def build_client(
@@ -312,7 +321,9 @@ class TestPostCheck:
 
 class TestRunStates:
     def test_engine_error_is_an_explicit_error_state_never_a_verdict(self) -> None:
-        runner = FakeRunner([CheckFailed(kind="engine_error", detail="engine answered 500")])
+        runner = FakeRunner(
+            [CheckFailed(kind="engine_error", detail="engine answered 500", command=FAKE_COMMAND)]
+        )
         client, model_id, _ = build_client(runner)
         response = post_check(client, "deadlock", check_payload(model_id))
         run = wait_terminal(client, response.json()["run_id"])
@@ -322,7 +333,9 @@ class TestRunStates:
         assert "verdict" not in json.dumps(run)
 
     def test_timeout_is_an_explicit_error_state_never_a_verdict(self) -> None:
-        runner = FakeRunner([CheckFailed(kind="timeout", detail="no answer within 30s")])
+        runner = FakeRunner(
+            [CheckFailed(kind="timeout", detail="no answer within 30s", command=FAKE_COMMAND)]
+        )
         client, model_id, _ = build_client(runner)
         response = post_check(client, "deadlock", check_payload(model_id))
         run = wait_terminal(client, response.json()["run_id"])
@@ -358,9 +371,22 @@ class TestRunStates:
             kind="deadlock",
             formula="EF DEADLOCK",
             model_id=ModelId("mdl_x"),
+            timeout_seconds=30,
+            tool_version=FAKE_TOOL_VERSION,
         )
-        run_store.mark_done(run_id=run.run_id, output=DONE_OUTPUT)
-        run_store.mark_error(run_id=run.run_id, kind="timeout", detail="late watchdog")
+        run_store.mark_done(
+            run_id=run.run_id,
+            output=DONE_OUTPUT,
+            command=FAKE_COMMAND,
+            measured_seconds=0.5,
+        )
+        run_store.mark_error(
+            run_id=run.run_id,
+            kind="timeout",
+            detail="late watchdog",
+            command=[],
+            measured_seconds=1.0,
+        )
         final = run_store.get(run_id=run.run_id)
         assert final is not None
         assert final.status == "done"
@@ -392,6 +418,10 @@ class TestRunStates:
             "formula",
             "model_id",
             "input_hash",
+            "timeout_seconds",
+            "tool_version",
+            "command",
+            "measured_seconds",
             "output",
             "error",
         }
@@ -399,6 +429,10 @@ class TestRunStates:
         assert run["kind"] == "deadlock"
         assert run["formula"] == "EF DEADLOCK"
         assert run["input_hash"].startswith("sha256:")
+        assert run["timeout_seconds"] == 30
+        assert run["tool_version"] == str(FAKE_TOOL_VERSION)
+        assert run["command"] == FAKE_COMMAND
+        assert isinstance(run["measured_seconds"], float)
 
 
 class TestEdgeBranches:
@@ -479,6 +513,8 @@ class TestRunKeyProperty:
             kind="safety.invariant",
             formula=formula,
             model_id=ModelId(model_id),
+            timeout_seconds=30,
+            tool_version=FAKE_TOOL_VERSION,
         )
         second, created_second = run_store.create_or_get(
             key=key,
@@ -486,6 +522,8 @@ class TestRunKeyProperty:
             kind="safety.invariant",
             formula=formula,
             model_id=ModelId(model_id),
+            timeout_seconds=30,
+            tool_version=FAKE_TOOL_VERSION,
         )
         assert created_first is True
         assert created_second is False

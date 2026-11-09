@@ -94,7 +94,10 @@ paths:
         to the family of the endpoint - a pattern outside the family is
         422 and is never reinterpreted (garde anti-polymorphisme, spec
         §12.1). Engine errors and timeouts surface as the explicit error
-        state of the run, never as a default verdict.
+        state of the run, never as a default verdict. Every new run passes
+        the session budget cap (spec §12.4): when the remaining budget
+        cannot cover the run, the request is refused with 429 and the
+        remaining budget in the problem extensions - no carry-over.
       parameters:
         - name: family
           in: path
@@ -140,6 +143,16 @@ paths:
           $ref: "#/components/responses/UnsupportedMediaType"
         "422":
           description: Malformed body, or kind pattern outside the family (never reinterpreted).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "429":
+          description: >-
+            Session budget cap exceeded (spec §12.4): the remaining budget
+            cannot cover one run. The problem extensions carry
+            remaining_budget_seconds, session_budget_seconds,
+            consumed_seconds and timeout_seconds. No carry-over.
           content:
             application/problem+json:
               schema:
@@ -262,8 +275,12 @@ components:
           default: {}
     Run:
       type: object
-      description: One asynchronous run (spec §5, §6); output is the normalized engine output served verbatim.
-      required: [run_id, status, family, kind, formula, model_id, input_hash, output, error]
+      description: >-
+        One asynchronous run (spec §5, §6), archived in full (spec §12.5):
+        command, tool version, timeout, input hash and measured cost.
+        Runs are never deleted - no API or code path removes one.
+        output is the normalized engine output served verbatim.
+      required: [run_id, status, family, kind, formula, model_id, input_hash, timeout_seconds, tool_version, command, measured_seconds, output, error]
       properties:
         run_id:
           type: string
@@ -283,6 +300,25 @@ components:
           type: string
           pattern: "^sha256:[0-9a-f]{64}$"
           description: Idempotence key - hash of (model, question).
+        timeout_seconds:
+          type: integer
+          minimum: 1
+          description: The timeout the run was accepted with (spec §12.5).
+        tool_version:
+          type: string
+          description: The pinned version of the tool that executed the run (spec §12.5).
+        command:
+          type: array
+          items:
+            type: string
+          nullable: true
+          description: The tool command, archived when the run reaches a terminal state; null while running.
+        measured_seconds:
+          type: number
+          nullable: true
+          description: >-
+            The measured wall-clock tool time of the run (spec §12.4) -
+            measured, never estimated; null while running.
         output:
           nullable: true
           description: The normalized engine output when done, null otherwise.

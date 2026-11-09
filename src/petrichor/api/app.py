@@ -1,4 +1,4 @@
-"""HTTP API (WSGI) of the Gérer service: models and asynchronous checks (spec §4.1, §5; ADR-0016).
+"""HTTP API (WSGI) of the Gérer service: models and checks (spec §4.1, §5, §12; ADR-0016).
 
 - ``POST /v1/models`` with ``application/pnml+xml`` imports a net into the
   canonical `petri+json` form: ``201`` when new, ``200`` when the content
@@ -9,8 +9,13 @@
   ``202 Accepted`` + ``Location: /v1/runs/{rid}``; the run is idempotent by
   hash of (model, question) and its ``kind`` pattern must belong to the
   family of the endpoint, otherwise ``422`` - never reinterpreted (spec §12.1).
+  Every accepted run passes the session budget cap (spec §12.4): when the
+  remaining budget cannot cover the run, the request is refused with an
+  explicit ``429`` carrying the remaining budget - no carry-over.
 - ``GET /v1/runs/{rid}`` polls the run states ``running`` | ``done`` | ``error``;
   engine errors and timeouts are explicit error states, never a default verdict.
+  Every run is archived with its command, tool version, timeout, input hash
+  and measured cost (spec §12.5) - and no API or code path ever deletes a run.
 - Every request is authenticated with the ``X-API-Key`` header before it is
   parsed deeply; every error is an RFC 7807 ``application/problem+json``
   payload of the same shape.
@@ -21,6 +26,7 @@ The contract document is ``openapi.yaml`` next to this module (ADR-0016).
 import hmac
 import json
 import threading
+import time
 from collections.abc import Callable, Iterable
 from http import HTTPStatus
 from typing import TYPE_CHECKING, TypeGuard
@@ -94,7 +100,14 @@ def _accepts_petri_json(*, accept_header: str | None) -> bool:
     return False
 
 
-def _problem_body(*, instance: str, status: HTTPStatus, reason: str, detail: str) -> bytes:
+def _problem_body(
+    *,
+    instance: str,
+    status: HTTPStatus,
+    reason: str,
+    detail: str,
+    extra_extensions: dict[str, float | int] | None = None,
+) -> bytes:
     """Serialize an RFC 7807 problem+json payload with a stable shape."""
     payload = {
         "type": f"{PROBLEM_TYPE_BASE_URL}{reason}",
@@ -102,7 +115,7 @@ def _problem_body(*, instance: str, status: HTTPStatus, reason: str, detail: str
         "status": status.value,
         "detail": detail,
         "instance": instance,
-        "extensions": {"reason": reason},
+        "extensions": {"reason": reason, **(extra_extensions or {})},
     }
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
@@ -132,10 +145,15 @@ def _problem_response(
     status: HTTPStatus,
     reason: str,
     detail: str,
+    extra_extensions: dict[str, float | int] | None = None,
 ) -> Iterable[bytes]:
     """Respond with the documented problem+json error payload."""
     body = _problem_body(
-        instance=environ.get("PATH_INFO", "/"), status=status, reason=reason, detail=detail
+        instance=environ.get("PATH_INFO", "/"),
+        status=status,
+        reason=reason,
+        detail=detail,
+        extra_extensions=extra_extensions,
     )
     return _respond(
         start_response=start_response,
@@ -252,11 +270,19 @@ def _get_model(
 class _ProblemPayloadError(Exception):
     """An internal early-exit carrying an RFC 7807 payload to the caller."""
 
-    def __init__(self, *, status: HTTPStatus, reason: str, detail: str) -> None:
+    def __init__(
+        self,
+        *,
+        status: HTTPStatus,
+        reason: str,
+        detail: str,
+        extensions: dict[str, float | int] | None = None,
+    ) -> None:
         super().__init__(detail)
         self.status = status
         self.reason = reason
         self.detail = detail
+        self.extensions = extensions
 
 
 def _is_check_family(value: str) -> TypeGuard[CheckFamilyName]:
@@ -308,33 +334,111 @@ def _execute_run(
     run_id: RunId,
     question: CheckQuestion,
     timeout_seconds: int,
+    started_monotonic: float,
 ) -> None:
-    """Run one check on a background thread and record its explicit outcome."""
+    """Run one check on a background thread and record its explicit outcome.
+
+    The cost of the run is the wall-clock tool time measured around the
+    runner call (spec §12.4) - never an estimate - and is archived with the
+    run together with the command the runner reports (spec §12.5).
+    """
     logger.debug("check_run_started", run_id=run_id, family=question.family, kind=question.kind)
     try:
         outcome: CheckOutcome = runner.run(question=question, timeout_seconds=timeout_seconds)
     except Exception as error:  # noqa: BLE001 - a crashed runner must still become an explicit error state, never a run stuck in "running"
+        measured_seconds = time.monotonic() - started_monotonic
         logger.error("check_run_crashed", run_id=run_id, error=repr(error))
-        run_store.mark_error(run_id=run_id, kind="engine_error", detail=repr(error))
+        run_store.mark_error(
+            run_id=run_id,
+            kind="engine_error",
+            detail=repr(error),
+            command=[],
+            measured_seconds=measured_seconds,
+        )
         return
+    measured_seconds = time.monotonic() - started_monotonic
     if isinstance(outcome, CheckCompleted):
-        run_store.mark_done(run_id=run_id, output=outcome.output)
-        logger.debug("check_run_finished", run_id=run_id, status="done")
+        run_store.mark_done(
+            run_id=run_id,
+            output=outcome.output,
+            command=outcome.command,
+            measured_seconds=measured_seconds,
+        )
+        logger.debug(
+            "check_run_finished", run_id=run_id, status="done", measured_seconds=measured_seconds
+        )
     else:
-        run_store.mark_error(run_id=run_id, kind=outcome.kind, detail=outcome.detail)
-        logger.debug("check_run_finished", run_id=run_id, status="error", error_kind=outcome.kind)
+        run_store.mark_error(
+            run_id=run_id,
+            kind=outcome.kind,
+            detail=outcome.detail,
+            command=outcome.command,
+            measured_seconds=measured_seconds,
+        )
+        logger.debug(
+            "check_run_finished",
+            run_id=run_id,
+            status="error",
+            error_kind=outcome.kind,
+            measured_seconds=measured_seconds,
+        )
 
 
-def _watchdog(*, run_store: RunStore, run_id: RunId, timeout_seconds: int) -> None:
+def _watchdog(
+    *, run_store: RunStore, run_id: RunId, timeout_seconds: int, started_monotonic: float
+) -> None:
     """Backstop: a runner that ignores its timeout still ends in an explicit error state."""
     run = run_store.get(run_id=run_id)
     if run is not None and run.status == "running":
+        measured_seconds = time.monotonic() - started_monotonic
         logger.warning("check_run_watchdog_fired", run_id=run_id, timeout_seconds=timeout_seconds)
         run_store.mark_error(
             run_id=run_id,
             kind="timeout",
             detail=f"runner did not answer within {timeout_seconds}s (watchdog backstop)",
+            command=[],
+            measured_seconds=measured_seconds,
         )
+
+
+def _session_budget_refusal(
+    *, run_store: RunStore, settings: ApiSettings, timeout_seconds: int
+) -> _ProblemPayloadError | None:
+    """Admission control of the session budget cap (spec §12.4, issue #7).
+
+    A new run is refused when its worst-case tool time - bounded by its
+    timeout plus the watchdog grace, since the watchdog ends any run - does
+    not fit in the remaining budget, so the cumulative measured cost never
+    exceeds the cap. The refusal is explicit and carries the remaining
+    budget; there is no carry-over between sessions.
+    """
+    consumed_seconds = run_store.consumed_seconds()
+    remaining_budget_seconds = settings.session_budget_seconds - consumed_seconds
+    reservation_seconds = timeout_seconds + WATCHDOG_GRACE_SECONDS
+    if remaining_budget_seconds >= reservation_seconds:
+        return None
+    logger.warning(
+        "api_check_budget_refused",
+        remaining_budget_seconds=remaining_budget_seconds,
+        session_budget_seconds=settings.session_budget_seconds,
+        consumed_seconds=consumed_seconds,
+        timeout_seconds=timeout_seconds,
+    )
+    return _ProblemPayloadError(
+        status=HTTPStatus.TOO_MANY_REQUESTS,
+        reason="session_budget_exceeded",
+        detail=(
+            f"Session budget exceeded: {remaining_budget_seconds:.3f}s of tool time remain"
+            f" (cap {settings.session_budget_seconds}s, consumed {consumed_seconds:.3f}s),"
+            f" but one run can consume up to {reservation_seconds}s (timeout + watchdog grace)."
+        ),
+        extensions={
+            "remaining_budget_seconds": remaining_budget_seconds,
+            "session_budget_seconds": settings.session_budget_seconds,
+            "consumed_seconds": consumed_seconds,
+            "timeout_seconds": timeout_seconds,
+        },
+    )
 
 
 def _post_check(
@@ -345,9 +449,10 @@ def _post_check(
     run_store: RunStore,
     runner: CheckRunner | None,
     family: CheckFamilyName,
-    timeout_seconds: int,
+    settings: ApiSettings,
 ) -> Iterable[bytes]:
     """Accept a check question: 202 + Location, idempotent by (model, question) hash."""
+    timeout_seconds = settings.check_timeout_seconds
     try:
         request = _parse_check_request(environ=environ)
         if request.kind not in FAMILY_PATTERNS[family]:
@@ -378,19 +483,36 @@ def _post_check(
             status=problem.status,
             reason=problem.reason,
             detail=problem.detail,
+            extra_extensions=problem.extensions,
         )
     question = CheckQuestion(
         family=family, kind=request.kind, formula=request.formula, parameters=request.parameters
     )
     key = run_key(model_id=request.model_id, question=question)
+    if run_store.get_by_key(key=key) is None:
+        budget_problem = _session_budget_refusal(
+            run_store=run_store, settings=settings, timeout_seconds=timeout_seconds
+        )
+        if budget_problem is not None:
+            return _problem_response(
+                start_response=start_response,
+                environ=environ,
+                status=budget_problem.status,
+                reason=budget_problem.reason,
+                detail=budget_problem.detail,
+                extra_extensions=budget_problem.extensions,
+            )
     run, created = run_store.create_or_get(
         key=key,
         family=family,
         kind=request.kind,
         formula=request.formula,
         model_id=request.model_id,
+        timeout_seconds=timeout_seconds,
+        tool_version=runner.tool_version,
     )
     if created:
+        started_monotonic = time.monotonic()
         thread = threading.Thread(
             target=_execute_run,
             kwargs={
@@ -399,6 +521,7 @@ def _post_check(
                 "run_id": run.run_id,
                 "question": question,
                 "timeout_seconds": timeout_seconds,
+                "started_monotonic": started_monotonic,
             },
             daemon=True,
         )
@@ -410,6 +533,7 @@ def _post_check(
                 "run_store": run_store,
                 "run_id": run.run_id,
                 "timeout_seconds": timeout_seconds,
+                "started_monotonic": started_monotonic,
             },
         )
         watchdog.daemon = True
@@ -520,7 +644,7 @@ def _dispatch_checks_and_runs(
                 run_store=run_store,
                 runner=runner,
                 family=family,
-                timeout_seconds=settings.check_timeout_seconds,
+                settings=settings,
             )
         return _problem_response(
             start_response=start_response,
