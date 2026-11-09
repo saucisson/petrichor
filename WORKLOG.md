@@ -44,6 +44,14 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-09 - feat(P04): compose moteurs, driver `dummy` et contrat de sortie normalisée (issue #4, PR pending)
+
+- **Issue**: #4 (P04). Picked in auto-discovery: the only worklist item whose `blocked-by` is satisfied (#1 closed); #6/#7/#9/#10 all depend on unmerged work (#3 PR #71 open, #4, #6, #8 PR #70 open, #9). Claimed via `make claim ISSUE=4`.
+- **Done**: `docker-compose.yml` with a `dummy` service compliant with spec §19.4 (locally built image `petrichor-engine-dummy:0.1.0`, base pinned by digest in `Dockerfile.dummy`, healthcheck, non-root read-only container, `cap_drop: ALL`, `no-new-privileges`, loopback-only port, `ENGINE_TIMEOUT` configurable with default 30). Driver contract in `src/petrichor/engines/`: formal `EngineQuestion` in → normalized `{verdict, witness, cost, technique}` out (`contract.py`), `ComposeEngineDriver` runs the real container (`up --wait --build` → POST /check → `down`) and archives each run as a `RunRecord` (command, engine version, timeout, input hash, measured cost — §12.5) in the append-only `RunArchive`. `@engine` test runs the driver in the real container; verdict-lock guard test asserts no module outside `engines/` imports verdict types. `engine` marker registered in pyproject (required by `--strict-markers`, mandated by spec §19.4).
+- **Evidence**: run: `make check` green on this branch - ruff + format, mypy strict (src included), import-linter, 305 tests passed (incl. `@engine` test building and running the real container), coverage 94.29% >= 90%. The @engine test was run locally against the local docker daemon and passed (20s incl. image build).
+- **Judgement calls**: (1) `cost` as the JSON key for "coût" (spec §6 uses `cost`); (2) the dummy answers `verdict: unknown` - it makes no semantic claim, it exercises the contract; (3) "no egress beyond necessary" is enforced as loopback-only published port + cap_drop ALL + read_only (compose cannot express per-service egress rules); (4) `COPY --chmod=644` plus explicit `install -d -m 755` because `--chmod` also hit auto-created parent dirs; (5) pyproject `markers` gained the `engine` entry - required by `--strict-markers` for the §19.4-mandated marker, not a gate weakening.
+- **Escalations**: none.
+
 ## 2026-11-09 - daily rebased onto main @ b2436ea (PR #68 merged); driver tests moved to scripts/tests/
 
 - **Issue**: none (human-directed: "C'est mergé. Met à jour daily par rebase").

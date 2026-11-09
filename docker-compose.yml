@@ -1,0 +1,34 @@
+# Petrichor engines (spec §19.4): one engine = one compose service, image
+# built locally (GPL engines are not redistributed), base image pinned by
+# digest in Dockerfile.dummy, healthcheck, non-privileged read-only
+# container, and no network beyond the loopback-published port.
+#
+# The engine timeout is configurable: ENGINE_TIMEOUT (seconds, default 30).
+services:
+  dummy:
+    build:
+      context: .
+      dockerfile: Dockerfile.dummy
+    image: petrichor-engine-dummy:0.1.0
+    user: "65534:65534"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    ports:
+      - "127.0.0.1:${DUMMY_HOST_PORT:-18080}:8080"
+    environment:
+      ENGINE_TIMEOUT: ${ENGINE_TIMEOUT:-30}
+      PYTHONDONTWRITEBYTECODE: "1"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2)"
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 2s
+    restart: "no"

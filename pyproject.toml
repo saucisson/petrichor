@@ -192,6 +192,7 @@ addopts = "--strict-markers --cov=notify --cov=petrichor --cov-branch --cov-repo
 markers = [
     "integration: exercises adapter boundaries through injected fakes (http, filesystem).",
     "property: hypothesis-based invariant tests (ADR-0012).",
+    "engine: runs a driver inside its real docker compose container; a failure is a CI failure, never a skip (spec §19.4).",
 ]
 filterwarnings = ["error"]
 
