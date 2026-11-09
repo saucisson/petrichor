@@ -44,6 +44,14 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-09 - P06 review round 2 on PR #75: narration test made deterministic (wait for terminal state inside the capture window) (PR #75)
+
+- **Issue**: #6 (P06).
+- **Done**: addressed the second reviewer report (0 BLOCKING / 1 TO-FIX / 2 SUGGESTION). TO-FIX: `test_accepted_check_is_narrated` now calls `wait_terminal` inside the `capture_logs` window, so the daemon thread's `check_run_started` / `check_run_finished` events are guaranteed captured before the assertions - no more spurious flake.
+- **Evidence**: run: `make check` green on the final state - ruff, mypy strict, import-linter, 448 tests passed, coverage 97.35% >= 90%. Not run yet: CI and the re-review (after push).
+- **Judgement calls**: none.
+- **Escalations**: none.
+
 ## 2026-11-09 - P06 review round on PR #75: frozen StoredRun (no torn reads), watchdog timeout backstop, run-id collision check (PR #75)
 
 - **Issue**: #6 (P06).
