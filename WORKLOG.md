@@ -44,6 +44,14 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-09 - issues #3/#5/#8 closed; sync-daily refused on commit-count guard, escalated as #74
+
+- **Issue**: #3 (P03), #5 (P05), #8 (P08) closed; #74 opened (needs-human).
+- **Done**: closed issues #3, #5, #8 with a comment referencing the merged PRs (#71, #69, #70) and removed their `night-claimed` labels (via `gh`; the GitHub App connector returned 403 on issue writes this session). `make sync-daily` refused with exit 2: the rebase onto origin/main would change the daily-only commit count (67 before, 17 after); daily was restored, nothing pushed. Verified with `git cherry origin/main origin/daily` that 50 of the 67 daily-only commits are patch-equivalent to commits already on origin/main (earlier daily→main merge, different SHAs) and 17 are genuinely unique - the replay would lose no content, but the ADR-0020 fail-closed guard refuses any count change and no sanctioned agent path exists around it.
+- **Evidence**: run: `git fetch origin`, `git rev-list --count` both directions (67 daily-only, 51 main-only), `git cherry` (50 `-` / 17 `+`), `make sync-daily` exit 2 with restore, `gh issue close` x3 + `gh issue edit --remove-label` x3, `gh issue create` #74 with `needs-human`, `make notify severity=question issue-identifier=74` delivered (console channel). Not run: the rebase push itself (refused by the driver, escalated).
+- **Judgement calls**: escalated instead of hand-rebasing daily - ADR-0020 makes `make sync-daily` the only sanctioned rewrite of the protected branch, and a guard refusal is a stop-and-escalate signal, not an obstacle to route around. Created the `needs-human` label (it did not exist on this repo yet) per docs/agents/escalation.md.
+- **Escalations**: #74 (needs-human, severity=question) - authorize the count-changing rebase, do the sync by hand, or amend ADR-0020's guard.
+
 ## 2026-11-09 - PR #69, #70, #71 merged into daily after rebase + fresh zero-BLOCKING reviews
 
 - **Issue**: #5 (P05), #8 (P08), #3 (P03).
