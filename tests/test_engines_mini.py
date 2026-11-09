@@ -398,6 +398,13 @@ class TestCapacityAndFormalism:
         with pytest.raises(NetBeyondCapacityError, match="capped"):
             symmetry_orbits(model=model, graph=graph)
 
+    def test_automorphism_node_budget_is_rejected_explicitly(self) -> None:
+        """9 identical self-loop places: the search tree exceeds 100,000 nodes."""
+        model = build_canonical_model(payload=self_loop_net_payload(place_count=9))
+        graph = explore_state_graph(model=model)
+        with pytest.raises(NetBeyondCapacityError, match="budget"):
+            symmetry_orbits(model=model, graph=graph)
+
     def test_symmetric_net_is_rejected_explicitly(self) -> None:
         model = build_canonical_model(payload=symmetric_payload())
         with pytest.raises(UnsupportedFormalismError, match="P/T nets only"):

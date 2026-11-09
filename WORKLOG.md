@@ -44,6 +44,14 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-09 - PR #69 review round 2 on the rebased head: automorphism node-budget test added, nxt renamed (PR #69)
+
+- **Issue**: #5 (P05).
+- **Done**: addressed the second reviewer report (1 BLOCKING / 1 TO-FIX / 1 SUGGESTION). BLOCKING: added `test_automorphism_node_budget_is_rejected_explicitly` - 9 identical self-loop places make the backtracking search exceed the 100,000-node budget (`MAX_AUTOMORPHISM_NODES`), now pinned with `pytest.raises(NetBeyondCapacityError, match="budget")`. TO-FIX: renamed the `nxt` abbreviation to `next_marking` throughout `mini_engine.py` (24 occurrences). SUGGESTION (bare `str` place at the engine API boundary) deliberately not addressed: advisory only, and `petri_canonical` itself types place names as plain `str`, so a `PlaceName` primitive only at this boundary would diverge from the canonical model.
+- **Evidence**: run: `make check` green (ruff, mypy strict, import-linter, 337 tests passed, coverage 96.29% >= 90%). Not run: CI until push.
+- **Judgement calls**: self-loop net with 9 places (9! search tree > 100,000 nodes, under the 16-place cap so the node budget is the limit actually exercised).
+- **Escalations**: none.
+
 ## 2026-11-09 - PR #69 review round on the rebased head: property tier added, io renamed, split proposal in the PR body (PR #69)
 
 - **Issue**: #5 (P05).
