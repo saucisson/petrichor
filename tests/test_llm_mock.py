@@ -13,11 +13,15 @@ from typing import TYPE_CHECKING
 
 import pytest
 import structlog.testing
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from petrichor.llm import (
     DEFAULT_GOLDEN_ROOT,
     MAX_LLM_ATTEMPTS,
     DeterministicMockProvider,
+    FormulaText,
+    HumanMessage,
     LLMDegradationError,
     LLMError,
     SessionRequest,
@@ -88,7 +92,9 @@ class TestReadings:
         self, provider: DeterministicMockProvider
     ) -> None:
         for formula in CATALOGUE_FORMULAS:
-            reading = provider.reading(model_hash=PHILOSOPHES3_CONTENT_HASH, formula=formula)
+            reading = provider.reading(
+                model_hash=PHILOSOPHES3_CONTENT_HASH, formula=FormulaText(formula)
+            )
             assert reading.reading
             assert reading.not_says
             assert reading.pattern
@@ -97,13 +103,17 @@ class TestReadings:
     def test_deadlock_reading_matches_the_maquette(
         self, provider: DeterministicMockProvider
     ) -> None:
-        reading = provider.reading(model_hash=PHILOSOPHES3_CONTENT_HASH, formula="EF DEADLOCK")
+        reading = provider.reading(
+            model_hash=PHILOSOPHES3_CONTENT_HASH, formula=FormulaText("EF DEADLOCK")
+        )
         assert reading.pattern == "atteignabilité d'impasse"
         assert "plus aucune transition n'est activable" in reading.reading
 
     def test_unknown_formula_degrades_explicitly(self, provider: DeterministicMockProvider) -> None:
         with pytest.raises(LLMDegradationError, match="No scripted reading"):
-            provider.reading(model_hash=PHILOSOPHES3_CONTENT_HASH, formula="AG (eat_1)")
+            provider.reading(
+                model_hash=PHILOSOPHES3_CONTENT_HASH, formula=FormulaText("AG (eat_1)")
+            )
 
 
 class TestClusters:
@@ -123,7 +133,9 @@ class TestBoundedRetryAndDegradation:
             structlog.testing.capture_logs() as events,
             pytest.raises(LLMDegradationError, match="after 2 attempts"),
         ):
-            provider.clarification(model_hash=PHILOSOPHES3_CONTENT_HASH, text="un texte")
+            provider.clarification(
+                model_hash=PHILOSOPHES3_CONTENT_HASH, text=HumanMessage("un texte")
+            )
         failures = [event for event in events if event["event"] == "llm_golden_load_failed"]
         assert len(failures) == MAX_LLM_ATTEMPTS
         assert any(event["event"] == "llm_degraded" for event in events)
@@ -156,7 +168,7 @@ class TestSessionDeterminism:
     ) -> None:
         requests = (
             SessionRequest(usage="semantic-profile"),
-            SessionRequest(usage="reading", formula="EF DEADLOCK"),
+            SessionRequest(usage="reading", formula=FormulaText("EF DEADLOCK")),
             SessionRequest(usage="cluster"),
         )
         first = run_session(
@@ -199,7 +211,9 @@ class TestSessionDeterminism:
         journal = run_session(
             provider=provider,
             model_hash=PHILOSOPHES3_CONTENT_HASH,
-            requests=(SessionRequest(usage="clarification", text="le système se fige"),),
+            requests=(
+                SessionRequest(usage="clarification", text=HumanMessage("le système se fige")),
+            ),
         )
         assert json.loads(journal[0]) == scripted
 
@@ -214,3 +228,51 @@ class TestLogNarration:
         assert len(served) == 1
         assert served[0]["usage"] == "cluster"
         assert served[0]["model_hash"] == PHILOSOPHES3_CONTENT_HASH
+
+
+class TestSessionLogNarration:
+    def test_run_session_narrates_each_step_and_the_completion(
+        self, provider: DeterministicMockProvider
+    ) -> None:
+        """llm_session_step fires once per request, llm_session_completed once at the end."""
+        requests = (
+            SessionRequest(usage="semantic-profile"),
+            SessionRequest(usage="reading", formula=FormulaText("EF DEADLOCK")),
+            SessionRequest(usage="cluster"),
+        )
+        with structlog.testing.capture_logs() as events:
+            journal = run_session(
+                provider=provider, model_hash=PHILOSOPHES3_CONTENT_HASH, requests=requests
+            )
+        steps = [event for event in events if event["event"] == "llm_session_step"]
+        completed = [event for event in events if event["event"] == "llm_session_completed"]
+        assert [event["index"] for event in steps] == [0, 1, 2]
+        assert len(completed) == 1
+        assert completed[0]["steps"] == len(journal) == 3
+
+
+@pytest.mark.property
+@settings(deadline=None, max_examples=25)
+@given(
+    requests=st.lists(
+        st.one_of(
+            st.just(SessionRequest(usage="semantic-profile")),
+            st.just(SessionRequest(usage="reading", formula=FormulaText("EF DEADLOCK"))),
+            st.just(SessionRequest(usage="cluster")),
+        ),
+        max_size=5,
+    )
+)
+def test_property_any_session_is_deterministic_across_two_runs(
+    requests: list[SessionRequest],
+) -> None:
+    """Two executions of the same random session produce an identical journal."""
+    provider = DeterministicMockProvider()
+    first = run_session(
+        provider=provider, model_hash=PHILOSOPHES3_CONTENT_HASH, requests=tuple(requests)
+    )
+    second = run_session(
+        provider=provider, model_hash=PHILOSOPHES3_CONTENT_HASH, requests=tuple(requests)
+    )
+    assert first == second
+    assert len(first) == len(requests)
