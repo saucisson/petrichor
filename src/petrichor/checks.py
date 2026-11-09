@@ -35,6 +35,9 @@ RunId = NewType("RunId", str)
 RunKey = NewType("RunKey", str)
 """The idempotence key of a run: hash of (model, question), formatted ``sha256:<hex>``."""
 
+KindPattern = NewType("KindPattern", str)
+"""A check pattern kind, e.g. ``safety.invariant``; validated against FAMILY_PATTERNS."""
+
 RUN_ID_PREFIX = "run_"
 RUN_ID_HEX_DIGITS = 6
 
@@ -56,7 +59,7 @@ class CheckRequest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     model_id: ModelId
-    kind: str = Field(min_length=1)
+    kind: KindPattern = Field(min_length=1)
     formula: str = Field(min_length=1)
     parameters: dict[str, JsonValue] = Field(default_factory=dict)
 
@@ -67,7 +70,7 @@ class CheckQuestion(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     family: CheckFamilyName
-    kind: str = Field(min_length=1)
+    kind: KindPattern = Field(min_length=1)
     formula: str = Field(min_length=1)
     parameters: dict[str, JsonValue] = Field(default_factory=dict)
 

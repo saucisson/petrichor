@@ -120,6 +120,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Run"
+        "400":
+          description: The Content-Length header is not an integer.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":

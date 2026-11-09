@@ -44,6 +44,14 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-09 - P06 review round 3 on PR #75: KindPattern distinct type, 400 on non-integer Content-Length, wait_terminal in idempotence tests (PR #75)
+
+- **Issue**: #6 (P06).
+- **Done**: addressed the third reviewer report. (1) `kind` is now the distinct type `KindPattern` (`NewType`) in `CheckRequest`, `CheckQuestion`, `StoredRun` and `RunStore.create_or_get` instead of bare `str` - a domain primitive, validated against `FAMILY_PATTERNS` at the API boundary. (2) `openapi.yaml` documents the `400` problem+json response when `Content-Length` is not an integer on `POST /v1/checks/{family}`. (3) `wait_terminal` added in the three idempotence/collision/timeout tests so no daemon thread leaks past its test.
+- **Evidence**: run: `make check` green on the final state - ruff, mypy strict, import-linter, 448 tests passed, coverage 97.35% >= 90%. Not run yet: CI and the re-review (after push).
+- **Judgement calls**: none.
+- **Escalations**: none.
+
 ## 2026-11-09 - P06 review round 2 on PR #75: narration test made deterministic (wait for terminal state inside the capture window) (PR #75)
 
 - **Issue**: #6 (P06).

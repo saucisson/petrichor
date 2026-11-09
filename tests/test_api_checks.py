@@ -197,6 +197,7 @@ class TestPostCheck:
         assert second.status_code == 202
         assert second.json()["run_id"] == first.json()["run_id"]
         assert second.headers["Location"] == first.headers["Location"]
+        wait_terminal(client, first.json()["run_id"])
         assert len(run_store) == 1
         assert len(runner.calls) == 1
 
@@ -208,6 +209,8 @@ class TestPostCheck:
             client, "deadlock", check_payload(model_id, formula="EF DEADLOCK and EF (fork_1)")
         )
         assert second.json()["run_id"] != first.json()["run_id"]
+        wait_terminal(client, first.json()["run_id"])
+        wait_terminal(client, second.json()["run_id"])
         assert len(run_store) == 2
         assert len(runner.calls) == 2
 
@@ -302,7 +305,8 @@ class TestPostCheck:
     def test_configured_timeout_is_passed_to_the_runner(self) -> None:
         runner = FakeRunner()
         client, model_id, _ = build_client(runner, timeout_seconds=7)
-        post_check(client, "deadlock", check_payload(model_id))
+        response = post_check(client, "deadlock", check_payload(model_id))
+        wait_terminal(client, response.json()["run_id"])
         assert runner.calls[0][1] == 7
 
 
