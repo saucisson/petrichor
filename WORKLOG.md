@@ -44,6 +44,14 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-09 - PR #69, #70, #71 merged into daily after rebase + fresh zero-BLOCKING reviews
+
+- **Issue**: #5 (P05), #8 (P08), #3 (P03).
+- **Done**: all three recovery PRs left open by earlier sessions are now merged into `daily`. Each branch was rebased onto the moving `daily` (only `WORKLOG.md` conflicted each time, both sides kept; for #69 also the add/add on `src/petrichor/engines/__init__.py`, resolved by keeping daily's stdlib-only `__init__.py` required by `Dockerfile.dummy` and importing `petrichor.engines.mini_engine` directly in the test). Review findings were addressed on the branches: #69 got the `property` tier (3 hypothesis tests), the `io`->`input_output` and `nxt`->`next_marking` renames, the automorphism node-budget test, and a split proposal in the PR body (ADR-0019); #70 got the session log-narration test, `FormulaText`/`HumanMessage` primitives, `conf`->`confidence` with verbatim aliases, a determinism property test, and a split proposal in the PR body. The standing needs-human on `REVIEWER_MODEL` is stale: `.env` now sets `large-4`, a valid alias, and `make review` ran cleanly (exit 0) on all three heads. Final reviews: #69 0 BLOCKING / 1 TO-FIX / 1 SUGGESTION, #70 0 BLOCKING / 0 TO-FIX / 1 SUGGESTION, #71 0 BLOCKING / 0 TO-FIX / 3 SUGGESTION. CI green (2/2 check runs) on each head before review; `make merge-pr` merged each (rebase merge, branch deleted).
+- **Evidence**: run: `make check` green on each rebased branch (337 / 358 / 419 tests passed, coverage 96.29% / 96.59% / 97.32%); `make wait-ci` exit 0 on each PR head; `make review` exit 0 on each; `make merge-pr` exit 0 x3. Not run: `make mutate` (EOD on daily), a live `make night`.
+- **Judgement calls**: over-budget PRs (#69 ~1500 lines, #70 ~740 lines) resolved by split proposals in the PR bodies per checklist section 7 / ADR-0019 rather than by splitting the branches, because the verdict lock (spec §19.4) and the single `LLMProvider` port (spec §8) make the units indivisible without breaking their own contracts.
+- **Escalations**: none new; the reviewer-model needs-human is answered by the working `REVIEWER_MODEL=large-4` in `.env`.
+
 ## 2026-11-09 - PR #71 rebased onto daily (now including PR #69 / P05 and PR #70 / P08) (PR #71)
 
 - **Issue**: #3 (P03).
