@@ -1,0 +1,46 @@
+{
+  "readings": {
+    "EF (eat_1)": {
+      "pattern": "atteignabilité",
+      "reading": "Il existe au moins une exécution où le philosophe 1 finit par être en train de manger. Autrement dit : manger est possible — au moins une fois, sur au moins un chemin.",
+      "not_says": "Rien sur les autres exécutions : une seule suffit. C'est la plus faible des lectures — et c'est précisément son rôle : elle sert de précondition de non-vacuité aux propriétés plus fortes.",
+      "cross": "non-vacuité de la question M3 — satisfaite"
+    },
+    "AG EF (fork_1 = 1)": {
+      "pattern": "récurrence",
+      "reading": "Dans toute situation atteignable, il reste toujours un chemin pour remettre la fourchette 1 sur la table : quelle que soit la catastrophe intermédiaire, la ressource n'est pas perdue à jamais — on peut s'en remettre.",
+      "not_says": "Possible n'est pas certain : un adversaire peut repousser indéfiniment. Et « toute situation » inclut l'impasse, où plus aucun chemin n'existe — c'est exactement là qu'elle tombe.",
+      "cross": "question M5 — réfutée par l'impasse"
+    },
+    "AG AF (eat_1)": {
+      "pattern": "vivacité",
+      "reading": "Quelle que soit l'exécution et le point de départ, le philosophe 1 finira inévitablement par manger — et l'histoire se répète : il remangera toujours, indéfiniment.",
+      "not_says": "Rien sur le délai. Et surtout : rien sans hypothèse d'ordonnancement — un adversaire peut le laisser mourir de faim en donnant toujours la fourchette aux autres.",
+      "cross": "question M3 / proposition humaine — fausse sans équité forte"
+    },
+    "AG (eat_1 → AF think_1)": {
+      "pattern": "vivacité conditionnelle",
+      "reading": "Chaque fois que le philosophe 1 est en train de manger (section critique), il est garanti qu'il en sortira : le retour à la réflexion (think_1) finit par arriver, sur toutes les suites.",
+      "not_says": "Ne garantit ni qu'il mange souvent, ni même qu'il mange un jour — seulement la sortie, jamais l'entrée.",
+      "cross": "question M4 — vraie sans aucune hypothèse d'équité"
+    },
+    "AG (hasL_1 → AF (eat_1 ∨ think_1))": {
+      "pattern": "vivacité de flux partiel",
+      "reading": "Chaque fois que le philosophe 1 tient sa fourchette gauche, il est garanti que ce geste commencé se résout : soit il mangera, soit il reposera sa fourchette. Un flux partiel finit toujours — d'une manière ou d'une autre.",
+      "not_says": "Ne dit pas lequel des deux aboutissements. Et elle tombe précisément dans l'impasse, où le geste est figé pour toujours.",
+      "cross": "question M2 — réfutée (même témoin que l'impasse)"
+    },
+    "EF DEADLOCK": {
+      "pattern": "atteignabilité d'impasse",
+      "reading": "Il existe une exécution qui conduit à un marquage où plus aucune transition n'est activable : le système entier se fige. Ici : les trois philosophes saisissent chacun leur fourchette gauche et se regardent.",
+      "not_says": "Ne dit pas que l'impasse est inévitable — une seule exécution suffit. C'est AG EF DEADLOCK qui exprimerait qu'on peut toujours y retomber.",
+      "cross": "question M1 — atteinte en 3 tirs"
+    },
+    "AG ¬(eat_1 ∧ eat_2)": {
+      "pattern": "exclusion mutuelle (sûreté)",
+      "reading": "À aucun instant, sur aucune exécution, les philosophes 1 et 2 ne mangent en même temps : la fourchette 2 qu'ils partagent impose l'exclusion mutuelle.",
+      "not_says": "Rien sur les non-voisins (dans un anneau de 3, il n'y en a pas), rien sur « quelqu'un mange » — seulement « jamais ces deux-là ensemble ».",
+      "cross": "patron de la question S1 — prouvable par invariant statique"
+    }
+  }
+}

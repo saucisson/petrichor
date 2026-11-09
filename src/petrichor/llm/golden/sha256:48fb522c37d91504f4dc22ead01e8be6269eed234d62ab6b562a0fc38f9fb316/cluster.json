@@ -1,0 +1,14 @@
+{
+  "clusters": [
+    {
+      "cause": "model",
+      "fix": "Casser la symétrie : un philosophe asymétrique (prend d'abord sa fourchette droite). Les propriétés de récurrence tuées par l'impasse redeviendraient vertes.",
+      "members": ["M1", "M2", "M5"]
+    },
+    {
+      "cause": "specification",
+      "fix": "Écrire l'équité forte dans le volet hypothèses du contrat — ou accepter explicitement la famine. Ce n'est pas un bug du modèle.",
+      "members": ["M3"]
+    }
+  ]
+}
