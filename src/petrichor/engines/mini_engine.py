@@ -179,14 +179,14 @@ def explore_state_graph(*, model: CanonicalModel) -> StateGraph:
         marking = queue.pop(0)
         fired_any = False
         for name, input_output in transitions:
-            nxt = _fire(marking=marking, index_of=index_of, input_output=input_output)
-            if nxt is None:
+            next_marking = _fire(marking=marking, index_of=index_of, input_output=input_output)
+            if next_marking is None:
                 continue
             fired_any = True
             arc_count += 1
-            successors[marking].append((name, nxt))
-            if nxt not in seen:
-                _register_state(seen=seen, queue=queue, successors=successors, marking=nxt)
+            successors[marking].append((name, next_marking))
+            if next_marking not in seen:
+                _register_state(seen=seen, queue=queue, successors=successors, marking=next_marking)
         if not fired_any:
             deadlocks.append(marking)
     logger.debug(
@@ -396,12 +396,12 @@ def _strong_connect(*, graph: StateGraph, node: Marking, state: _TarjanState) ->
     state.counter += 1
     state.stack.append(node)
     state.on_stack.add(node)
-    for _, nxt in graph.successors[node]:
-        if nxt not in state.index:
-            _strong_connect(graph=graph, node=nxt, state=state)
-            state.low[node] = min(state.low[node], state.low[nxt])
-        elif nxt in state.on_stack:
-            state.low[node] = min(state.low[node], state.index[nxt])
+    for _, next_marking in graph.successors[node]:
+        if next_marking not in state.index:
+            _strong_connect(graph=graph, node=next_marking, state=state)
+            state.low[node] = min(state.low[node], state.low[next_marking])
+        elif next_marking in state.on_stack:
+            state.low[node] = min(state.low[node], state.index[next_marking])
     if state.low[node] == state.index[node]:
         component: list[Marking] = []
         while True:
@@ -627,17 +627,17 @@ def _path_from_initial(
     queue = [graph.initial]
     while queue:
         marking = queue.pop(0)
-        for _, nxt in graph.successors[marking]:
-            if nxt in visited:
+        for _, next_marking in graph.successors[marking]:
+            if next_marking in visited:
                 continue
-            visited.add(nxt)
-            parents[nxt] = marking
-            if target_predicate(nxt):
-                path = [nxt]
+            visited.add(next_marking)
+            parents[next_marking] = marking
+            if target_predicate(next_marking):
+                path = [next_marking]
                 while path[-1] != graph.initial:
                     path.append(parents[path[-1]])
                 return tuple(reversed(path))
-            queue.append(nxt)
+            queue.append(next_marking)
     raise PetriEngineError("No reachable state satisfies the predicate; the graph is inconsistent.")
 
 
@@ -708,12 +708,12 @@ def _cycle_within(
     path = [start]
     current = start
     while True:
-        nxt = next(target for _, target in successors[current] if target in component)
-        if nxt in seen:
-            return (*path[seen[nxt] :], nxt)
-        seen[nxt] = len(path)
-        path.append(nxt)
-        current = nxt
+        next_marking = next(target for _, target in successors[current] if target in component)
+        if next_marking in seen:
+            return (*path[seen[next_marking] :], next_marking)
+        seen[next_marking] = len(path)
+        path.append(next_marking)
+        current = next_marking
 
 
 def find_starvation_cycle(*, model: CanonicalModel, place: str) -> CycleWitness | None:
