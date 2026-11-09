@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from petrichor.checks import (
     CheckFamilyName,
+    KindPattern,
     RunErrorKind,
     RunId,
     RunKey,
@@ -48,7 +49,7 @@ class StoredRun(BaseModel):
     run_id: RunId
     status: RunStatus
     family: CheckFamilyName
-    kind: str
+    kind: KindPattern
     formula: str
     model_id: ModelId
     input_hash: RunKey
@@ -70,7 +71,7 @@ class RunStore:
         *,
         key: RunKey,
         family: CheckFamilyName,
-        kind: str,
+        kind: KindPattern,
         formula: str,
         model_id: ModelId,
     ) -> tuple[StoredRun, bool]:
