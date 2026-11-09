@@ -1,0 +1,17 @@
+# Dummy engine image (spec §19.4): built locally only, base pinned by
+# digest, non-root user, standard-library-only payload (no pip install).
+FROM python:3.15-slim@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928
+
+RUN groupadd --system engine \
+    && useradd --system --gid engine --home-dir /app --shell /usr/sbin/nologin engine
+
+WORKDIR /app
+RUN install -d -m 755 /app/petrichor/engines
+COPY --chmod=644 src/petrichor/__init__.py /app/petrichor/__init__.py
+COPY --chmod=644 src/petrichor/engines/__init__.py /app/petrichor/engines/__init__.py
+COPY --chmod=644 src/petrichor/engines/dummy_server.py /app/petrichor/engines/dummy_server.py
+
+USER engine
+ENV PYTHONDONTWRITEBYTECODE=1
+EXPOSE 8080
+CMD ["python", "-m", "petrichor.engines.dummy_server"]
