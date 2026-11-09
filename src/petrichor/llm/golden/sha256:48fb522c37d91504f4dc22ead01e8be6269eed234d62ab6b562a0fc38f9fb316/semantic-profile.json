@@ -1,0 +1,55 @@
+{
+  "entries": [
+    {
+      "id": "think",
+      "elements": "think_1..3",
+      "role": "file d'attente",
+      "conf": 0.62,
+      "evidence": "le philosophe y « attend » ; jeton initial unique",
+      "options": ["état d'automate (attente)", "compteur", "ressource"],
+      "wrong": true
+    },
+    {
+      "id": "hasL",
+      "elements": "hasL_1..3",
+      "role": "état intermédiaire (détention)",
+      "conf": 0.9,
+      "evidence": "« has + Left » ; conserve le jeton d'état"
+    },
+    {
+      "id": "eat",
+      "elements": "eat_1..3",
+      "role": "section critique",
+      "conf": 0.95,
+      "evidence": "« eat », précédé de deux acquisitions"
+    },
+    {
+      "id": "fork",
+      "elements": "fork_1..3",
+      "role": "ressource partagée (capacité 1)",
+      "conf": 0.97,
+      "evidence": "jeton initial unique ; consommée par deux voisins"
+    },
+    {
+      "id": "take",
+      "elements": "takeL_i / takeR_i",
+      "role": "acquisition (2 phases)",
+      "conf": 0.95,
+      "evidence": "consomme think + fork, produit hasL puis eat"
+    },
+    {
+      "id": "rel",
+      "elements": "rel_i",
+      "role": "libération",
+      "conf": 0.97,
+      "evidence": "produit exactement ce que takeL/takeR consomment"
+    },
+    {
+      "id": "motif",
+      "elements": "motif global",
+      "role": "anneau de processus / ressources alternées (symétrie d'ordre 3)",
+      "conf": 0.93,
+      "evidence": "noms 1/2/3 + disposition en arc de cercle (coordonnées PNML)"
+    }
+  ]
+}
