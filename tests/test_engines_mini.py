@@ -13,7 +13,7 @@ import pytest
 import structlog.testing
 from philosophes3 import build_philosophes3
 
-from petrichor.engines import (
+from petrichor.engines.mini_engine import (
     NetBeyondCapacityError,
     PetriEngineError,
     UnsupportedFormalismError,
