@@ -1,8 +1,11 @@
-"""In-memory run store with (model, question) idempotence (spec §5, issue #6).
+"""In-memory run store: idempotence and full archiving (spec §5, §12.5; issues #6, #7).
 
 Runs are stored by id and indexed by their idempotence key: creating a run
 whose key is already known returns the existing run instead of a duplicate,
-which is what makes ``POST /v1/checks/{family}`` idempotent. The store is
+which is what makes ``POST /v1/checks/{family}`` idempotent. Every run is
+archived with its command, tool version, timeout, input hash and measured
+cost (spec §12.5) - and there is deliberately no delete path in this class:
+the budget limits what we produce, never what we keep. The store is
 thread-safe: runs are executed on background threads and polled over HTTP.
 """
 
@@ -19,6 +22,7 @@ from petrichor.checks import (
     RunId,
     RunKey,
     RunStatus,
+    ToolVersion,
     new_run_id,
 )
 from petrichor.petri_canonical import JsonValue, ModelId
@@ -36,12 +40,18 @@ class RunError(BaseModel):
 
 
 class StoredRun(BaseModel):
-    """One asynchronous run as stored and served by the API (spec §5, §6).
+    """One asynchronous run as stored and served by the API (spec §5, §6, §12.5).
 
     Frozen on purpose: state transitions replace the whole entry under the
     store lock (``model_copy(update=...)``), so a reader can serialize the
     object returned by ``get`` outside the lock and never observe a torn
     state such as ``status="done"`` with ``output=None``.
+
+    The archive fields of spec §12.5 are always present: ``timeout_seconds``,
+    ``tool_version`` and ``input_hash`` are known when the run is created;
+    ``command`` and ``measured_seconds`` (the wall-clock tool time, measured
+    around the runner call - never estimated) are filled when the run
+    reaches a terminal state.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -53,12 +63,20 @@ class StoredRun(BaseModel):
     formula: str
     model_id: ModelId
     input_hash: RunKey
+    timeout_seconds: int = Field(gt=0)
+    tool_version: ToolVersion
+    command: list[str] | None = None
+    measured_seconds: float | None = Field(default=None, ge=0)
     output: dict[str, JsonValue] | None = None
     error: RunError | None = None
 
 
 class RunStore:
-    """Stores runs by id, indexed by idempotence key, guarded by a lock."""
+    """Stores runs by id, indexed by idempotence key, guarded by a lock.
+
+    Append-only by construction: the class exposes no delete, remove, purge
+    or clear path (spec §12.5, issue #7 pins that with a guard test).
+    """
 
     def __init__(self) -> None:
         """Start with an empty store."""
@@ -74,6 +92,8 @@ class RunStore:
         kind: KindPattern,
         formula: str,
         model_id: ModelId,
+        timeout_seconds: int,
+        tool_version: ToolVersion,
     ) -> tuple[StoredRun, bool]:
         """Create a running run, or return the existing one for a known key."""
         with self._lock:
@@ -92,6 +112,8 @@ class RunStore:
                 formula=formula,
                 model_id=model_id,
                 input_hash=key,
+                timeout_seconds=timeout_seconds,
+                tool_version=tool_version,
             )
             self._by_id[run.run_id] = run
             self._by_key[key] = run.run_id
@@ -103,17 +125,60 @@ class RunStore:
         with self._lock:
             return self._by_id.get(run_id)
 
-    def mark_done(self, *, run_id: RunId, output: dict[str, JsonValue]) -> None:
+    def get_by_key(self, *, key: RunKey) -> StoredRun | None:
+        """Return the stored run for an idempotence key, or None."""
+        with self._lock:
+            run_id = self._by_key.get(key)
+            return self._by_id.get(run_id) if run_id is not None else None
+
+    def consumed_seconds(self) -> float:
+        """The cumulative measured tool time of the session (spec §12.4).
+
+        Only terminal runs contribute: a running run has no measured cost
+        yet - the cost is measured, never estimated.
+        """
+        with self._lock:
+            return sum(
+                run.measured_seconds
+                for run in self._by_id.values()
+                if run.measured_seconds is not None
+            )
+
+    def mark_done(
+        self,
+        *,
+        run_id: RunId,
+        output: dict[str, JsonValue],
+        command: list[str],
+        measured_seconds: float,
+    ) -> None:
         """Move a running run to the ``done`` state with its normalized output."""
         with self._lock:
             run = self._by_id[run_id]
             if run.status != "running":
                 logger.warning("run_store_terminal_state_kept", run_id=run_id, status=run.status)
                 return
-            self._by_id[run_id] = run.model_copy(update={"status": "done", "output": output})
-        logger.debug("run_store_done", run_id=run_id)
+            self._by_id[run_id] = run.model_copy(
+                update={
+                    "status": "done",
+                    "output": output,
+                    "command": command,
+                    "measured_seconds": measured_seconds,
+                }
+            )
+        logger.debug(
+            "run_store_done", run_id=run_id, measured_seconds=measured_seconds, command=command
+        )
 
-    def mark_error(self, *, run_id: RunId, kind: RunErrorKind, detail: str) -> None:
+    def mark_error(
+        self,
+        *,
+        run_id: RunId,
+        kind: RunErrorKind,
+        detail: str,
+        command: list[str],
+        measured_seconds: float,
+    ) -> None:
         """Move a running run to the explicit ``error`` state - never a default verdict."""
         with self._lock:
             run = self._by_id[run_id]
@@ -125,9 +190,17 @@ class RunStore:
                     "status": "error",
                     "output": None,
                     "error": RunError(kind=kind, detail=detail),
+                    "command": command,
+                    "measured_seconds": measured_seconds,
                 }
             )
-        logger.debug("run_store_error", run_id=run_id, error_kind=kind)
+        logger.debug(
+            "run_store_error",
+            run_id=run_id,
+            error_kind=kind,
+            measured_seconds=measured_seconds,
+            command=command,
+        )
 
     def __len__(self) -> int:
         """The number of stored runs."""
