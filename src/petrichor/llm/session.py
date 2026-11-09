@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 
 import structlog
 
-from petrichor.llm.provider import LLMError, LLMProvider
+from petrichor.llm.provider import FormulaText, HumanMessage, LLMError, LLMProvider
 from petrichor.petri_canonical import canonical_json
 
 if TYPE_CHECKING:
@@ -26,8 +26,8 @@ class SessionRequest:
     """One LLM request of a session: a usage and its parameters."""
 
     usage: LlmUsage
-    formula: str | None = None
-    text: str | None = None
+    formula: FormulaText | None = None
+    text: HumanMessage | None = None
 
 
 def run_session(
