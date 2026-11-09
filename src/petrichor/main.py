@@ -1,8 +1,13 @@
 """Composition root of the Petrichor HTTP API (ADR-0002).
 
-Wires logging, settings, the model store and the WSGI app, then serves with
-the stdlib `wsgiref` server - no adapter is constructed anywhere else.
-Run with ``PETRICHOR_API_KEY=... python -m petrichor.main``.
+Wires logging, settings, the model store, the run store and the WSGI app,
+then serves with the stdlib `wsgiref` server - no adapter is constructed
+anywhere else. Run with ``PETRICHOR_API_KEY=... python -m petrichor.main``.
+
+No check runner is wired yet: the verdict lock (spec §19.4) forbids any
+module outside ``petrichor.engines`` from importing that package, so the
+real engine adapters land with P09+; until then ``POST /v1/checks/{family}``
+answers ``503 runner_not_configured``.
 """
 
 import logging
@@ -13,6 +18,7 @@ import structlog
 from petrichor.api import create_app
 from petrichor.api.settings import ApiSettings
 from petrichor.model_store import ModelStore
+from petrichor.run_store import RunStore
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8080
@@ -26,9 +32,9 @@ def configure_logging() -> None:
     )
 
 
-def build_server(*, settings: ApiSettings, store: ModelStore) -> WSGIServer:
+def build_server(*, settings: ApiSettings, store: ModelStore, run_store: RunStore) -> WSGIServer:
     """Assemble the WSGI server around the application."""
-    app = create_app(settings=settings, store=store)
+    app = create_app(settings=settings, store=store, run_store=run_store, runner=None)
     return make_server(DEFAULT_HOST, DEFAULT_PORT, app)
 
 
@@ -37,7 +43,7 @@ def main() -> None:
     configure_logging()
     logger = structlog.get_logger(__name__)
     settings = ApiSettings()
-    server = build_server(settings=settings, store=ModelStore())
+    server = build_server(settings=settings, store=ModelStore(), run_store=RunStore())
     logger.info("api_server_started", host=DEFAULT_HOST, port=DEFAULT_PORT)
     server.serve_forever()  # pragma: no cover - the serving loop is the entry point
 

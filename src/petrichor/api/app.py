@@ -1,10 +1,16 @@
-"""HTTP API (WSGI) of the Gérer service: model import and read (spec §4.1, §5; ADR-0016).
+"""HTTP API (WSGI) of the Gérer service: models and asynchronous checks (spec §4.1, §5; ADR-0016).
 
 - ``POST /v1/models`` with ``application/pnml+xml`` imports a net into the
   canonical `petri+json` form: ``201`` when new, ``200`` when the content
   hash is already known (idempotent import, spec §13).
 - ``GET /v1/models/{mid}`` serves the canonical document as
   ``application/petri+json; version=1.0``.
+- ``POST /v1/checks/{family}`` accepts a check question and answers
+  ``202 Accepted`` + ``Location: /v1/runs/{rid}``; the run is idempotent by
+  hash of (model, question) and its ``kind`` pattern must belong to the
+  family of the endpoint, otherwise ``422`` - never reinterpreted (spec §12.1).
+- ``GET /v1/runs/{rid}`` polls the run states ``running`` | ``done`` | ``error``;
+  engine errors and timeouts are explicit error states, never a default verdict.
 - Every request is authenticated with the ``X-API-Key`` header before it is
   parsed deeply; every error is an RFC 7807 ``application/problem+json``
   payload of the same shape.
@@ -14,19 +20,33 @@ The contract document is ``openapi.yaml`` next to this module (ADR-0016).
 
 import hmac
 import json
+import threading
 from collections.abc import Callable, Iterable
 from http import HTTPStatus
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeGuard
 from wsgiref.types import StartResponse, WSGIEnvironment
 
 import structlog
+from pydantic import ValidationError
 
+from petrichor.checks import (
+    FAMILY_PATTERNS,
+    CheckCompleted,
+    CheckFamilyName,
+    CheckOutcome,
+    CheckQuestion,
+    CheckRequest,
+    CheckRunner,
+    RunId,
+    run_key,
+)
 from petrichor.petri_canonical import InvalidCanonicalModelError, ModelId, serialize_model
 from petrichor.pnml_import import PnmlImportError, import_pnml
 
 if TYPE_CHECKING:
     from petrichor.api.settings import ApiSettings
     from petrichor.model_store import ModelStore
+    from petrichor.run_store import RunStore
 
 logger = structlog.get_logger(__name__)
 
@@ -34,7 +54,10 @@ type WSGIApp = Callable[[WSGIEnvironment, StartResponse], Iterable[bytes]]
 
 MODELS_PATH = "/v1/models"
 MODEL_PATH_PREFIX = "/v1/models/"
+CHECKS_PATH_PREFIX = "/v1/checks/"
+RUNS_PATH_PREFIX = "/v1/runs/"
 CONTENT_TYPE_PNML = "application/pnml+xml"
+CONTENT_TYPE_JSON = "application/json"
 CONTENT_TYPE_PETRI_JSON = "application/petri+json; version=1.0"
 CONTENT_TYPE_PROBLEM_JSON = "application/problem+json"
 HEADER_API_KEY = "X-API-Key"
@@ -224,7 +247,289 @@ def _get_model(
     )
 
 
-def create_app(*, settings: ApiSettings, store: ModelStore) -> WSGIApp:
+class _ProblemPayloadError(Exception):
+    """An internal early-exit carrying an RFC 7807 payload to the caller."""
+
+    def __init__(self, *, status: HTTPStatus, reason: str, detail: str) -> None:
+        super().__init__(detail)
+        self.status = status
+        self.reason = reason
+        self.detail = detail
+
+
+def _is_check_family(value: str) -> TypeGuard[CheckFamilyName]:
+    """Narrow a path segment to a known check family (spec §12.1)."""
+    return value in FAMILY_PATTERNS
+
+
+def _parse_check_request(*, environ: WSGIEnvironment) -> CheckRequest:
+    """Read and validate the JSON body of a check request, or raise a problem."""
+    content_type = _media_type(header_value=environ.get("CONTENT_TYPE"))
+    if content_type != CONTENT_TYPE_JSON:
+        raise _ProblemPayloadError(
+            status=HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+            reason="unsupported_media_type",
+            detail=f"POST {CHECKS_PATH_PREFIX}{{family}} expects Content-Type {CONTENT_TYPE_JSON},"
+            f" got {content_type or 'none'}.",
+        )
+    try:
+        length = int(environ.get("CONTENT_LENGTH", "") or 0)
+    except ValueError:
+        raise _ProblemPayloadError(
+            status=HTTPStatus.BAD_REQUEST,
+            reason="invalid_content_length",
+            detail="The Content-Length header is not an integer.",
+        ) from None
+    body = environ["wsgi.input"].read(length)
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise _ProblemPayloadError(
+            status=HTTPStatus.UNPROCESSABLE_ENTITY,
+            reason="invalid_json",
+            detail=f"The body is not valid JSON: {error}",
+        ) from None
+    try:
+        return CheckRequest.model_validate(payload)
+    except ValidationError as error:
+        raise _ProblemPayloadError(
+            status=HTTPStatus.UNPROCESSABLE_ENTITY,
+            reason="invalid_check_request",
+            detail=f"The check request does not conform to the contract: {error}",
+        ) from None
+
+
+def _execute_run(
+    *,
+    runner: CheckRunner,
+    run_store: RunStore,
+    run_id: RunId,
+    question: CheckQuestion,
+    timeout_seconds: int,
+) -> None:
+    """Run one check on a background thread and record its explicit outcome."""
+    logger.debug("check_run_started", run_id=run_id, family=question.family, kind=question.kind)
+    try:
+        outcome: CheckOutcome = runner.run(question=question, timeout_seconds=timeout_seconds)
+    except Exception as error:  # noqa: BLE001 - a crashed runner must still become an explicit error state, never a run stuck in "running"
+        logger.error("check_run_crashed", run_id=run_id, error=repr(error))
+        run_store.mark_error(run_id=run_id, kind="engine_error", detail=repr(error))
+        return
+    if isinstance(outcome, CheckCompleted):
+        run_store.mark_done(run_id=run_id, output=outcome.output)
+        logger.debug("check_run_finished", run_id=run_id, status="done")
+    else:
+        run_store.mark_error(run_id=run_id, kind=outcome.kind, detail=outcome.detail)
+        logger.debug("check_run_finished", run_id=run_id, status="error", error_kind=outcome.kind)
+
+
+def _post_check(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    store: ModelStore,
+    run_store: RunStore,
+    runner: CheckRunner | None,
+    family: CheckFamilyName,
+    timeout_seconds: int,
+) -> Iterable[bytes]:
+    """Accept a check question: 202 + Location, idempotent by (model, question) hash."""
+    try:
+        request = _parse_check_request(environ=environ)
+        if request.kind not in FAMILY_PATTERNS[family]:
+            raise _ProblemPayloadError(
+                status=HTTPStatus.UNPROCESSABLE_ENTITY,
+                reason="pattern_not_in_family",
+                detail=(
+                    f"Pattern {request.kind!r} does not belong to family {family!r};"
+                    " it is rejected, never reinterpreted (spec §12.1)."
+                ),
+            )
+        if store.get(model_id=request.model_id) is None:
+            raise _ProblemPayloadError(
+                status=HTTPStatus.NOT_FOUND,
+                reason="model_not_found",
+                detail=f"No model with id {request.model_id!r}.",
+            )
+        if runner is None:
+            raise _ProblemPayloadError(
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+                reason="runner_not_configured",
+                detail="No check runner is wired into this server yet (real engines: P09+).",
+            )
+    except _ProblemPayloadError as problem:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            status=problem.status,
+            reason=problem.reason,
+            detail=problem.detail,
+        )
+    question = CheckQuestion(
+        family=family, kind=request.kind, formula=request.formula, parameters=request.parameters
+    )
+    key = run_key(model_id=request.model_id, question=question)
+    run, created = run_store.create_or_get(
+        key=key,
+        family=family,
+        kind=request.kind,
+        formula=request.formula,
+        model_id=request.model_id,
+    )
+    if created:
+        thread = threading.Thread(
+            target=_execute_run,
+            kwargs={
+                "runner": runner,
+                "run_store": run_store,
+                "run_id": run.run_id,
+                "question": question,
+                "timeout_seconds": timeout_seconds,
+            },
+            daemon=True,
+        )
+        thread.start()
+    logger.debug(
+        "api_check_accepted",
+        run_id=run.run_id,
+        family=family,
+        kind=request.kind,
+        model_id=request.model_id,
+        created=created,
+        status=HTTPStatus.ACCEPTED.value,
+    )
+    body = json.dumps(run.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.ACCEPTED,
+        content_type=CONTENT_TYPE_JSON,
+        body=body.encode("utf-8"),
+        extra_headers=[("Location", f"{RUNS_PATH_PREFIX}{run.run_id}")],
+    )
+
+
+def _get_run(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    run_store: RunStore,
+    run_id: str,
+) -> Iterable[bytes]:
+    """Poll one run: running, done (with output) or error (explicit, no verdict)."""
+    run = run_store.get(run_id=RunId(run_id))
+    if run is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            status=HTTPStatus.NOT_FOUND,
+            reason="run_not_found",
+            detail=f"No run with id {run_id!r}.",
+        )
+    logger.debug("api_run_read", run_id=run.run_id, status=run.status)
+    body = json.dumps(run.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.OK,
+        content_type=CONTENT_TYPE_JSON,
+        body=body.encode("utf-8"),
+    )
+
+
+def _dispatch_models(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    method: str,
+    path: str,
+    store: ModelStore,
+) -> Iterable[bytes] | None:
+    """Route the /v1/models resources, or return None when the path is not one."""
+    if path == MODELS_PATH:
+        if method == "POST":
+            return _post_models(environ=environ, start_response=start_response, store=store)
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            status=HTTPStatus.METHOD_NOT_ALLOWED,
+            reason="method_not_allowed",
+            detail=f"{method} is not supported on {MODELS_PATH}.",
+        )
+    if path.startswith(MODEL_PATH_PREFIX):
+        model_id = path.removeprefix(MODEL_PATH_PREFIX)
+        if method == "GET" and model_id and "/" not in model_id:
+            return _get_model(
+                environ=environ,
+                start_response=start_response,
+                store=store,
+                model_id=model_id,
+            )
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            status=HTTPStatus.METHOD_NOT_ALLOWED if method != "GET" else HTTPStatus.NOT_FOUND,
+            reason="method_not_allowed" if method != "GET" else "model_not_found",
+            detail=f"No resource at {path}.",
+        )
+    return None
+
+
+def _dispatch_checks_and_runs(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    method: str,
+    path: str,
+    settings: ApiSettings,
+    store: ModelStore,
+    run_store: RunStore,
+    runner: CheckRunner | None,
+) -> Iterable[bytes] | None:
+    """Route /v1/checks/{family} and /v1/runs/{run_id}, or return None."""
+    if path.startswith(CHECKS_PATH_PREFIX):
+        family = path.removeprefix(CHECKS_PATH_PREFIX)
+        if method == "POST" and "/" not in family and _is_check_family(family):
+            return _post_check(
+                environ=environ,
+                start_response=start_response,
+                store=store,
+                run_store=run_store,
+                runner=runner,
+                family=family,
+                timeout_seconds=settings.check_timeout_seconds,
+            )
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            status=HTTPStatus.METHOD_NOT_ALLOWED if method != "POST" else HTTPStatus.NOT_FOUND,
+            reason="method_not_allowed" if method != "POST" else "check_family_not_found",
+            detail=f"No check family at {path}.",
+        )
+    if path.startswith(RUNS_PATH_PREFIX):
+        run_id = path.removeprefix(RUNS_PATH_PREFIX)
+        if method == "GET" and run_id and "/" not in run_id:
+            return _get_run(
+                environ=environ,
+                start_response=start_response,
+                run_store=run_store,
+                run_id=run_id,
+            )
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            status=HTTPStatus.METHOD_NOT_ALLOWED if method != "GET" else HTTPStatus.NOT_FOUND,
+            reason="method_not_allowed" if method != "GET" else "run_not_found",
+            detail=f"No resource at {path}.",
+        )
+    return None
+
+
+def create_app(
+    *,
+    settings: ApiSettings,
+    store: ModelStore,
+    run_store: RunStore,
+    runner: CheckRunner | None,
+) -> WSGIApp:
     """Build the WSGI application: auth first, then routing and negotiation."""
 
     def app(environ: WSGIEnvironment, start_response: StartResponse) -> Iterable[bytes]:
@@ -240,32 +545,22 @@ def create_app(*, settings: ApiSettings, store: ModelStore) -> WSGIApp:
                 reason="missing_or_invalid_api_key",
                 detail=f"Provide a valid {HEADER_API_KEY} header.",
             )
-        if path == MODELS_PATH:
-            if method == "POST":
-                return _post_models(environ=environ, start_response=start_response, store=store)
-            return _problem_response(
-                start_response=start_response,
+        routed = _dispatch_models(
+            environ=environ, start_response=start_response, method=method, path=path, store=store
+        )
+        if routed is None:
+            routed = _dispatch_checks_and_runs(
                 environ=environ,
-                status=HTTPStatus.METHOD_NOT_ALLOWED,
-                reason="method_not_allowed",
-                detail=f"{method} is not supported on {MODELS_PATH}.",
-            )
-        if path.startswith(MODEL_PATH_PREFIX):
-            model_id = path.removeprefix(MODEL_PATH_PREFIX)
-            if method == "GET" and model_id and "/" not in model_id:
-                return _get_model(
-                    environ=environ,
-                    start_response=start_response,
-                    store=store,
-                    model_id=model_id,
-                )
-            return _problem_response(
                 start_response=start_response,
-                environ=environ,
-                status=HTTPStatus.METHOD_NOT_ALLOWED if method != "GET" else HTTPStatus.NOT_FOUND,
-                reason="method_not_allowed" if method != "GET" else "model_not_found",
-                detail=f"No resource at {path}.",
+                method=method,
+                path=path,
+                settings=settings,
+                store=store,
+                run_store=run_store,
+                runner=runner,
             )
+        if routed is not None:
+            return routed
         return _problem_response(
             start_response=start_response,
             environ=environ,
