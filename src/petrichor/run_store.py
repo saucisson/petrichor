@@ -35,9 +35,15 @@ class RunError(BaseModel):
 
 
 class StoredRun(BaseModel):
-    """One asynchronous run as stored and served by the API (spec §5, §6)."""
+    """One asynchronous run as stored and served by the API (spec §5, §6).
 
-    model_config = ConfigDict(extra="forbid")
+    Frozen on purpose: state transitions replace the whole entry under the
+    store lock (``model_copy(update=...)``), so a reader can serialize the
+    object returned by ``get`` outside the lock and never observe a torn
+    state such as ``status="done"`` with ``output=None``.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     run_id: RunId
     status: RunStatus
@@ -74,8 +80,11 @@ class RunStore:
             if existing_id is not None:
                 logger.debug("run_store_key_hit", run_key=key, run_id=existing_id)
                 return self._by_id[existing_id], False
+            run_id = new_run_id(random_hex=uuid4().hex)
+            while run_id in self._by_id:
+                run_id = new_run_id(random_hex=uuid4().hex)
             run = StoredRun(
-                run_id=new_run_id(random_hex=uuid4().hex),
+                run_id=run_id,
                 status="running",
                 family=family,
                 kind=kind,
@@ -94,21 +103,29 @@ class RunStore:
             return self._by_id.get(run_id)
 
     def mark_done(self, *, run_id: RunId, output: dict[str, JsonValue]) -> None:
-        """Move a run to the ``done`` state with its normalized output."""
+        """Move a running run to the ``done`` state with its normalized output."""
         with self._lock:
             run = self._by_id[run_id]
-            run.status = "done"
-            run.output = output
-            run.error = None
+            if run.status != "running":
+                logger.warning("run_store_terminal_state_kept", run_id=run_id, status=run.status)
+                return
+            self._by_id[run_id] = run.model_copy(update={"status": "done", "output": output})
         logger.debug("run_store_done", run_id=run_id)
 
     def mark_error(self, *, run_id: RunId, kind: RunErrorKind, detail: str) -> None:
-        """Move a run to the explicit ``error`` state - never a default verdict."""
+        """Move a running run to the explicit ``error`` state - never a default verdict."""
         with self._lock:
             run = self._by_id[run_id]
-            run.status = "error"
-            run.output = None
-            run.error = RunError(kind=kind, detail=detail)
+            if run.status != "running":
+                logger.warning("run_store_terminal_state_kept", run_id=run_id, status=run.status)
+                return
+            self._by_id[run_id] = run.model_copy(
+                update={
+                    "status": "error",
+                    "output": None,
+                    "error": RunError(kind=kind, detail=detail),
+                }
+            )
         logger.debug("run_store_error", run_id=run_id, error_kind=kind)
 
     def __len__(self) -> int:
