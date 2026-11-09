@@ -1,122 +1,44 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <pnml xmlns="http://www.pnml.org/version-2009/grammar/pnml">
-  <net id="philosophes3" type="http://www.pnml.org/version-2009/grammar/pnml">
-    <place id="think_1">
-      <name><value>think_1</value></name>
-      <initialMarking><text>1</text></initialMarking>
-      <graphics><position x="100" y="100"/></graphics>
-    </place>
-    <place id="eat_1">
-      <name><value>eat_1</value></name>
-      <initialMarking><text>0</text></initialMarking>
-      <graphics><position x="100" y="300"/></graphics>
-    </place>
-    <place id="fork_1">
-      <name><value>fork_1</value></name>
-      <initialMarking><text>1</text></initialMarking>
-      <graphics><position x="150" y="200"/></graphics>
-    </place>
-    <place id="think_2">
-      <name><value>think_2</value></name>
-      <initialMarking><text>1</text></initialMarking>
-      <graphics><position x="200" y="100"/></graphics>
-    </place>
-    <place id="eat_2">
-      <name><value>eat_2</value></name>
-      <initialMarking><text>0</text></initialMarking>
-      <graphics><position x="200" y="300"/></graphics>
-    </place>
-    <place id="fork_2">
-      <name><value>fork_2</value></name>
-      <initialMarking><text>1</text></initialMarking>
-      <graphics><position x="250" y="200"/></graphics>
-    </place>
-    <place id="think_3">
-      <name><value>think_3</value></name>
-      <initialMarking><text>1</text></initialMarking>
-      <graphics><position x="300" y="100"/></graphics>
-    </place>
-    <place id="eat_3">
-      <name><value>eat_3</value></name>
-      <initialMarking><text>0</text></initialMarking>
-      <graphics><position x="300" y="300"/></graphics>
-    </place>
-    <place id="fork_3">
-      <name><value>fork_3</value></name>
-      <initialMarking><text>1</text></initialMarking>
-      <graphics><position x="350" y="200"/></graphics>
-    </place>
-    <transition id="take_1">
-      <name><value>take_1</value></name>
-      <graphics><position x="100" y="200"/></graphics>
-    </transition>
-    <transition id="release_1">
-      <name><value>release_1</value></name>
-      <graphics><position x="130" y="250"/></graphics>
-    </transition>
-    <arc id="a_take_1_think" source="think_1" target="take_1">
-    </arc>
-    <arc id="a_take_1_fork1" source="fork_1" target="take_1">
-    </arc>
-    <arc id="a_take_1_fork2" source="fork_2" target="take_1">
-    </arc>
-    <arc id="a_take_1_eat" source="take_1" target="eat_1">
-    </arc>
-    <arc id="a_release_1_eat" source="eat_1" target="release_1">
-    </arc>
-    <arc id="a_release_1_think" source="release_1" target="think_1">
-    </arc>
-    <arc id="a_release_1_fork1" source="release_1" target="fork_1">
-    </arc>
-    <arc id="a_release_1_fork2" source="release_1" target="fork_2">
-    </arc>
-    <transition id="take_2">
-      <name><value>take_2</value></name>
-      <graphics><position x="200" y="200"/></graphics>
-    </transition>
-    <transition id="release_2">
-      <name><value>release_2</value></name>
-      <graphics><position x="230" y="250"/></graphics>
-    </transition>
-    <arc id="a_take_2_think" source="think_2" target="take_2">
-    </arc>
-    <arc id="a_take_2_fork2" source="fork_2" target="take_2">
-    </arc>
-    <arc id="a_take_2_fork3" source="fork_3" target="take_2">
-    </arc>
-    <arc id="a_take_2_eat" source="take_2" target="eat_2">
-    </arc>
-    <arc id="a_release_2_eat" source="eat_2" target="release_2">
-    </arc>
-    <arc id="a_release_2_think" source="release_2" target="think_2">
-    </arc>
-    <arc id="a_release_2_fork2" source="release_2" target="fork_2">
-    </arc>
-    <arc id="a_release_2_fork3" source="release_2" target="fork_3">
-    </arc>
-    <transition id="take_3">
-      <name><value>take_3</value></name>
-      <graphics><position x="300" y="200"/></graphics>
-    </transition>
-    <transition id="release_3">
-      <name><value>release_3</value></name>
-      <graphics><position x="330" y="250"/></graphics>
-    </transition>
-    <arc id="a_take_3_think" source="think_3" target="take_3">
-    </arc>
-    <arc id="a_take_3_fork3" source="fork_3" target="take_3">
-    </arc>
-    <arc id="a_take_3_fork1" source="fork_1" target="take_3">
-    </arc>
-    <arc id="a_take_3_eat" source="take_3" target="eat_3">
-    </arc>
-    <arc id="a_release_3_eat" source="eat_3" target="release_3">
-    </arc>
-    <arc id="a_release_3_think" source="release_3" target="think_3">
-    </arc>
-    <arc id="a_release_3_fork3" source="release_3" target="fork_3">
-    </arc>
-    <arc id="a_release_3_fork1" source="release_3" target="fork_1">
-    </arc>
-  </net>
+<net id="philosophes3" type="http://www.pnml.org/version-2009/grammar/pnml">
+<place id="think_1"><name><value>think_1</value></name><initialMarking><text>1</text></initialMarking><graphics><position x="100" y="100"/></graphics></place>
+<place id="eat_1"><name><value>eat_1</value></name><initialMarking><text>0</text></initialMarking><graphics><position x="100" y="300"/></graphics></place>
+<place id="fork_1"><name><value>fork_1</value></name><initialMarking><text>1</text></initialMarking><graphics><position x="150" y="200"/></graphics></place>
+<place id="think_2"><name><value>think_2</value></name><initialMarking><text>1</text></initialMarking><graphics><position x="200" y="100"/></graphics></place>
+<place id="eat_2"><name><value>eat_2</value></name><initialMarking><text>0</text></initialMarking><graphics><position x="200" y="300"/></graphics></place>
+<place id="fork_2"><name><value>fork_2</value></name><initialMarking><text>1</text></initialMarking><graphics><position x="250" y="200"/></graphics></place>
+<place id="think_3"><name><value>think_3</value></name><initialMarking><text>1</text></initialMarking><graphics><position x="300" y="100"/></graphics></place>
+<place id="eat_3"><name><value>eat_3</value></name><initialMarking><text>0</text></initialMarking><graphics><position x="300" y="300"/></graphics></place>
+<place id="fork_3"><name><value>fork_3</value></name><initialMarking><text>1</text></initialMarking><graphics><position x="350" y="200"/></graphics></place>
+<transition id="take_1"><name><value>take_1</value></name><graphics><position x="100" y="200"/></graphics></transition>
+<transition id="release_1"><name><value>release_1</value></name><graphics><position x="130" y="250"/></graphics></transition>
+<arc id="a_take_1_think" source="think_1" target="take_1"/>
+<arc id="a_take_1_fork1" source="fork_1" target="take_1"/>
+<arc id="a_take_1_fork2" source="fork_2" target="take_1"/>
+<arc id="a_take_1_eat" source="take_1" target="eat_1"/>
+<arc id="a_release_1_eat" source="eat_1" target="release_1"/>
+<arc id="a_release_1_think" source="release_1" target="think_1"/>
+<arc id="a_release_1_fork1" source="release_1" target="fork_1"/>
+<arc id="a_release_1_fork2" source="release_1" target="fork_2"/>
+<transition id="take_2"><name><value>take_2</value></name><graphics><position x="200" y="200"/></graphics></transition>
+<transition id="release_2"><name><value>release_2</value></name><graphics><position x="230" y="250"/></graphics></transition>
+<arc id="a_take_2_think" source="think_2" target="take_2"/>
+<arc id="a_take_2_fork2" source="fork_2" target="take_2"/>
+<arc id="a_take_2_fork3" source="fork_3" target="take_2"/>
+<arc id="a_take_2_eat" source="take_2" target="eat_2"/>
+<arc id="a_release_2_eat" source="eat_2" target="release_2"/>
+<arc id="a_release_2_think" source="release_2" target="think_2"/>
+<arc id="a_release_2_fork2" source="release_2" target="fork_2"/>
+<arc id="a_release_2_fork3" source="release_2" target="fork_3"/>
+<transition id="take_3"><name><value>take_3</value></name><graphics><position x="300" y="200"/></graphics></transition>
+<transition id="release_3"><name><value>release_3</value></name><graphics><position x="330" y="250"/></graphics></transition>
+<arc id="a_take_3_think" source="think_3" target="take_3"/>
+<arc id="a_take_3_fork3" source="fork_3" target="take_3"/>
+<arc id="a_take_3_fork1" source="fork_1" target="take_3"/>
+<arc id="a_take_3_eat" source="take_3" target="eat_3"/>
+<arc id="a_release_3_eat" source="eat_3" target="release_3"/>
+<arc id="a_release_3_think" source="release_3" target="think_3"/>
+<arc id="a_release_3_fork3" source="release_3" target="fork_3"/>
+<arc id="a_release_3_fork1" source="release_3" target="fork_1"/>
+</net>
 </pnml>
