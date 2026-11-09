@@ -44,6 +44,14 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-09 - issue #74 resolved by human: manual rebase of daily onto origin/main + force-with-lease push
+
+- **Issue**: #74 (needs-human, sync-daily count-guard refusal) - closed.
+- **Done**: the human performed the sync by hand: `git rebase origin/main` on daily (git auto-skipped the 50 patch-equivalent commits, warning "skipped previously applied commit" x50), then `git push --force-with-lease origin daily` (forced update 912058b...f728603). Post-push verification: `git merge-base --is-ancestor origin/main origin/daily` succeeds, 22 daily-only commits remain, `git cherry` shows all `+` (zero patch-equivalents left). ADR-0020 and the driver guard unchanged - the human path bypasses the guard by doing the rebase directly.
+- **Evidence**: run: `git push --force-with-lease` exit 0, `git fetch origin`, `git rev-list --count origin/main..origin/daily` = 22, `git merge-base --is-ancestor` exit 0, `git cherry origin/main origin/daily` all `+`. Not run: `make check` on the rebased daily (no code change, only history rewrite - the tree at f728603 is identical to the pre-rebase 912058b tree).
+- **Judgement calls**: none - human decision, agent executed the push and the issue closure.
+- **Escalations**: #74 consumed (answered by the human action).
+
 ## 2026-11-09 - P06 review round 3 on PR #75: KindPattern distinct type, 400 on non-integer Content-Length, wait_terminal in idempotence tests (PR #75)
 
 - **Issue**: #6 (P06).
