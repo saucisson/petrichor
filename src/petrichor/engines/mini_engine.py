@@ -60,7 +60,7 @@ class UnsupportedFormalismError(PetriEngineError):
 
 
 @dataclass
-class _TransitionIO:
+class _TransitionInputOutput:
     """Weighted pre- and post-sets of one transition, over place names."""
 
     pre: dict[str, int] = field(default_factory=dict)
@@ -97,14 +97,14 @@ def _place_names(*, model: CanonicalModel) -> tuple[str, ...]:
     return tuple(place.name for place in model.places)
 
 
-def _transition_io(*, model: CanonicalModel) -> dict[str, _TransitionIO]:
+def _transition_input_output(*, model: CanonicalModel) -> dict[str, _TransitionInputOutput]:
     """Per transition, the weighted pre- and post-sets over place names."""
     place_ids: set[str] = {place.id for place in model.places}
     names_by_id: dict[str, str] = {
         element.id: element.name for element in (*model.places, *model.transitions)
     }
-    io: dict[str, _TransitionIO] = {
-        transition.name: _TransitionIO() for transition in model.transitions
+    input_output: dict[str, _TransitionInputOutput] = {
+        transition.name: _TransitionInputOutput() for transition in model.transitions
     }
     for arc in model.arcs:
         source_is_place = arc.source in place_ids
@@ -115,24 +115,28 @@ def _transition_io(*, model: CanonicalModel) -> dict[str, _TransitionIO]:
                 f"{'places' if source_is_place else 'transitions'}."
             )
         if source_is_place:
-            io[names_by_id[arc.target]].pre[names_by_id[arc.source]] = (
-                io[names_by_id[arc.target]].pre.get(names_by_id[arc.source], 0) + arc.weight
+            input_output[names_by_id[arc.target]].pre[names_by_id[arc.source]] = (
+                input_output[names_by_id[arc.target]].pre.get(names_by_id[arc.source], 0)
+                + arc.weight
             )
         else:
-            io[names_by_id[arc.source]].post[names_by_id[arc.target]] = (
-                io[names_by_id[arc.source]].post.get(names_by_id[arc.target], 0) + arc.weight
+            input_output[names_by_id[arc.source]].post[names_by_id[arc.target]] = (
+                input_output[names_by_id[arc.source]].post.get(names_by_id[arc.target], 0)
+                + arc.weight
             )
-    return io
+    return input_output
 
 
-def _fire(*, marking: Marking, index_of: dict[str, int], io: _TransitionIO) -> Marking | None:
+def _fire(
+    *, marking: Marking, index_of: dict[str, int], input_output: _TransitionInputOutput
+) -> Marking | None:
     """The successor marking of firing the transition, or None if not enabled."""
-    if any(marking[index_of[place]] < weight for place, weight in io.pre.items()):
+    if any(marking[index_of[place]] < weight for place, weight in input_output.pre.items()):
         return None
     result = list(marking)
-    for place, weight in io.pre.items():
+    for place, weight in input_output.pre.items():
         result[index_of[place]] -= weight
-    for place, weight in io.post.items():
+    for place, weight in input_output.post.items():
         result[index_of[place]] += weight
     return tuple(result)
 
@@ -165,7 +169,7 @@ def explore_state_graph(*, model: CanonicalModel) -> StateGraph:
     place_names = _place_names(model=model)
     index_of = {name: position for position, name in enumerate(place_names)}
     initial = tuple(place.initial_marking for place in model.places)
-    transitions = tuple(_transition_io(model=model).items())
+    transitions = tuple(_transition_input_output(model=model).items())
     seen: dict[Marking, int] = {initial: 0}
     queue = [initial]
     successors: dict[Marking, list[tuple[str, Marking]]] = {initial: []}
@@ -174,8 +178,8 @@ def explore_state_graph(*, model: CanonicalModel) -> StateGraph:
     while queue:
         marking = queue.pop(0)
         fired_any = False
-        for name, io in transitions:
-            nxt = _fire(marking=marking, index_of=index_of, io=io)
+        for name, input_output in transitions:
+            nxt = _fire(marking=marking, index_of=index_of, input_output=input_output)
             if nxt is None:
                 continue
             fired_any = True
@@ -236,12 +240,12 @@ def _incidence_transposed(*, model: CanonicalModel) -> list[list[Fraction]]:
     """C^T (transitions x places) of the incidence matrix C = post - pre."""
     place_names = _place_names(model=model)
     index_of = {name: position for position, name in enumerate(place_names)}
-    ios = _transition_io(model=model)
-    matrix = [[Fraction(0)] * len(place_names) for _ in ios]
-    for row, io in enumerate(ios.values()):
-        for place, weight in io.pre.items():
+    input_outputs = _transition_input_output(model=model)
+    matrix = [[Fraction(0)] * len(place_names) for _ in input_outputs]
+    for row, input_output in enumerate(input_outputs.values()):
+        for place, weight in input_output.pre.items():
             matrix[row][index_of[place]] -= weight
-        for place, weight in io.post.items():
+        for place, weight in input_output.post.items():
             matrix[row][index_of[place]] += weight
     return matrix
 
@@ -254,11 +258,13 @@ def place_invariants(*, model: CanonicalModel) -> tuple[tuple[Fraction, ...], ..
     return tuple(tuple(vector) for vector in basis)
 
 
-def _is_invariant_support(*, support: frozenset[str], ios: dict[str, _TransitionIO]) -> bool:
+def _is_invariant_support(
+    *, support: frozenset[str], input_outputs: dict[str, _TransitionInputOutput]
+) -> bool:
     """Whether the 0/1 indicator of the support is a P-invariant."""
-    for io in ios.values():
-        consumed = sum(weight for place, weight in io.pre.items() if place in support)
-        produced = sum(weight for place, weight in io.post.items() if place in support)
+    for input_output in input_outputs.values():
+        consumed = sum(weight for place, weight in input_output.pre.items() if place in support)
+        produced = sum(weight for place, weight in input_output.post.items() if place in support)
         if consumed != produced:
             return False
     return True
@@ -282,13 +288,13 @@ def positive_invariants(*, model: CanonicalModel) -> tuple[tuple[str, ...], ...]
         raise NetBeyondCapacityError(
             f"Invariant enumeration is capped at {MAX_PLACES_FOR_INVARIANT_ENUMERATION} places."
         )
-    ios = _transition_io(model=model)
+    input_outputs = _transition_input_output(model=model)
     supports: list[frozenset[str]] = []
     for mask in range(1, 1 << len(place_names)):
         support = frozenset(
             place_names[position] for position in range(len(place_names)) if mask >> position & 1
         )
-        if _is_invariant_support(support=support, ios=ios):
+        if _is_invariant_support(support=support, input_outputs=input_outputs):
             supports.append(support)
     minimal = [support for support in supports if not any(other < support for other in supports)]
     invariants = tuple(tuple(sorted(support)) for support in minimal)
@@ -308,24 +314,34 @@ def structural_bounds(*, model: CanonicalModel) -> dict[str, int]:
     return bounds
 
 
-def _siphon_keeps(*, place: str, current: set[str], ios: dict[str, _TransitionIO]) -> bool:
+def _siphon_keeps(
+    *, place: str, current: set[str], input_outputs: dict[str, _TransitionInputOutput]
+) -> bool:
     """A place stays in a siphon iff every transition producing it consumes from the siphon."""
     return all(
-        any(source in current for source in io.pre) for io in ios.values() if place in io.post
+        any(source in current for source in input_output.pre)
+        for input_output in input_outputs.values()
+        if place in input_output.post
     )
 
 
-def _trap_keeps(*, place: str, current: set[str], ios: dict[str, _TransitionIO]) -> bool:
+def _trap_keeps(
+    *, place: str, current: set[str], input_outputs: dict[str, _TransitionInputOutput]
+) -> bool:
     """A place stays in a trap iff every transition consuming it produces into the trap."""
     return all(
-        any(target in current for target in io.post) for io in ios.values() if place in io.pre
+        any(target in current for target in input_output.post)
+        for input_output in input_outputs.values()
+        if place in input_output.pre
     )
 
 
 class _KeepsPredicate(Protocol):
     """The place-removal predicate of a siphon/trap fixed-point iteration."""
 
-    def __call__(self, *, place: str, current: set[str], ios: dict[str, _TransitionIO]) -> bool: ...
+    def __call__(
+        self, *, place: str, current: set[str], input_outputs: dict[str, _TransitionInputOutput]
+    ) -> bool: ...
 
 
 def _greatest_fixed_point(
@@ -334,13 +350,13 @@ def _greatest_fixed_point(
     keeps: _KeepsPredicate,
 ) -> frozenset[str]:
     """Greatest fixed point of a monotone place-removal operator."""
-    ios = _transition_io(model=model)
+    input_outputs = _transition_input_output(model=model)
     current = set(_place_names(model=model))
     changed = True
     while changed:
         changed = False
         for place in sorted(current):
-            if not keeps(place=place, current=current, ios=ios):
+            if not keeps(place=place, current=current, input_outputs=input_outputs):
                 current.discard(place)
                 changed = True
     return frozenset(current)
@@ -416,44 +432,45 @@ def _place_signature(
     *,
     initial: dict[str, int],
     place: str,
-    ios: dict[str, _TransitionIO],
+    input_outputs: dict[str, _TransitionInputOutput],
 ) -> tuple[int, tuple[tuple[str, int], ...]]:
     """Structural signature of a place: initial marking + sorted incident arc kinds."""
     incident = sorted(
         (direction, weight)
-        for io in ios.values()
+        for input_output in input_outputs.values()
         for direction, weight in (
-            [("out", w) for w in io.pre.values() if place in io.pre]
-            + [("in", w) for w in io.post.values() if place in io.post]
+            [("out", w) for w in input_output.pre.values() if place in input_output.pre]
+            + [("in", w) for w in input_output.post.values() if place in input_output.post]
         )
     )
     return (initial[place], tuple(incident))
 
 
-def _io_key(
+def _input_output_key(
     *,
-    io: _TransitionIO,
+    input_output: _TransitionInputOutput,
     mapping: dict[str, str],
 ) -> tuple[frozenset[tuple[str, int]], frozenset[tuple[str, int]]]:
     """The pre/post key of a transition, with place names mapped through the automorphism."""
-    pre = frozenset((mapping[place], weight) for place, weight in io.pre.items())
-    post = frozenset((mapping[place], weight) for place, weight in io.post.items())
+    pre = frozenset((mapping[place], weight) for place, weight in input_output.pre.items())
+    post = frozenset((mapping[place], weight) for place, weight in input_output.post.items())
     return (pre, post)
 
 
 def _complete_automorphism(
     *,
     model: CanonicalModel,
-    ios: dict[str, _TransitionIO],
+    input_outputs: dict[str, _TransitionInputOutput],
     mapping: dict[str, str],
 ) -> dict[str, str] | None:
     """Extend a place map to a full automorphism, or None if it does not extend."""
     own_keys = {
-        (frozenset(io.pre.items()), frozenset(io.post.items())): name for name, io in ios.items()
+        (frozenset(input_output.pre.items()), frozenset(input_output.post.items())): name
+        for name, input_output in input_outputs.items()
     }
     transition_map: dict[str, str] = {}
-    for name, io in ios.items():
-        image = _io_key(io=io, mapping=mapping)
+    for name, input_output in input_outputs.items():
+        image = _input_output_key(input_output=input_output, mapping=mapping)
         if image not in own_keys or own_keys[image] in transition_map.values():
             return None
         transition_map[name] = own_keys[image]
@@ -483,7 +500,7 @@ class _AutomorphismSearch:
     order: tuple[str, ...]
     candidates: dict[str, tuple[str, ...]]
     model: CanonicalModel
-    ios: dict[str, _TransitionIO]
+    input_outputs: dict[str, _TransitionInputOutput]
     mapping: dict[str, str] = field(default_factory=dict)
     used: set[str] = field(default_factory=set)
     found: list[dict[str, str]] = field(default_factory=list)
@@ -504,7 +521,7 @@ def _search_automorphisms(*, search: _AutomorphismSearch, position: int) -> None
         )
     if position == len(search.order):
         automorphism = _complete_automorphism(
-            model=search.model, ios=search.ios, mapping=search.mapping
+            model=search.model, input_outputs=search.input_outputs, mapping=search.mapping
         )
         if automorphism is not None:
             search.found.append(automorphism)
@@ -533,17 +550,20 @@ def _automorphisms(*, model: CanonicalModel) -> tuple[dict[str, str], ...]:
         raise NetBeyondCapacityError(
             f"Automorphism search is capped at {MAX_PLACES_FOR_AUTOMORPHISM_SEARCH} places."
         )
-    ios = _transition_io(model=model)
+    input_outputs = _transition_input_output(model=model)
     initial: dict[str, int] = {place.name: place.initial_marking for place in model.places}
     signatures = {
-        name: _place_signature(initial=initial, place=name, ios=ios) for name in place_names
+        name: _place_signature(initial=initial, place=name, input_outputs=input_outputs)
+        for name in place_names
     }
     order = tuple(sorted(place_names, key=lambda name: (signatures[name], name), reverse=True))
     candidates = {
         name: tuple(q for q in place_names if signatures[q] == signatures[name])
         for name in place_names
     }
-    search = _AutomorphismSearch(order=order, candidates=candidates, model=model, ios=ios)
+    search = _AutomorphismSearch(
+        order=order, candidates=candidates, model=model, input_outputs=input_outputs
+    )
     _search_automorphisms(search=search, position=0)
     logger.debug("automorphisms_computed", count=len(search.found))
     return tuple(search.found)

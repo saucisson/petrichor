@@ -11,6 +11,8 @@ from fractions import Fraction
 
 import pytest
 import structlog.testing
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from philosophes3 import build_philosophes3
 
 from petrichor.engines.mini_engine import (
@@ -308,15 +310,15 @@ def _transition_sets(*, model: CanonicalModel) -> dict[str, tuple[set[str], set[
     """Per transition name, the (pre, post) place-name sets."""
     place_ids = {place.id for place in model.places}
     names_by_id = {element.id: element.name for element in (*model.places, *model.transitions)}
-    io: dict[str, tuple[set[str], set[str]]] = {
+    input_output: dict[str, tuple[set[str], set[str]]] = {
         transition.name: (set(), set()) for transition in model.transitions
     }
     for arc in model.arcs:
         if arc.source in place_ids:
-            io[names_by_id[arc.target]][0].add(names_by_id[arc.source])
+            input_output[names_by_id[arc.target]][0].add(names_by_id[arc.source])
         else:
-            io[names_by_id[arc.source]][1].add(names_by_id[arc.target])
-    return io
+            input_output[names_by_id[arc.source]][1].add(names_by_id[arc.target])
+    return input_output
 
 
 def _is_siphon(*, model: CanonicalModel, candidate: frozenset[str]) -> bool:
@@ -448,3 +450,110 @@ def test_fraction_import_is_used_for_invariant_arithmetic() -> None:
     """Pin the exact-arithmetic import: invariants are rational, not float."""
     invariants = place_invariants(model=build_philosophes3())
     assert all(isinstance(coefficient, Fraction) for inv in invariants for coefficient in inv)
+
+
+@st.composite
+def random_small_net_payload(draw: st.DrawFn) -> dict[str, object]:
+    """A random small P/T net: 1-4 places, 1-3 transitions, unit-weight arcs."""
+    place_count = draw(st.integers(min_value=1, max_value=4))
+    transition_count = draw(st.integers(min_value=1, max_value=3))
+    places = [
+        {
+            "id": f"pl_p{index}",
+            "name": f"p{index}",
+            "initial_marking": draw(st.integers(min_value=0, max_value=2)),
+            "layout": {"x": 0, "y": 0},
+            "annotations": {},
+        }
+        for index in range(place_count)
+    ]
+    transitions = [
+        {
+            "id": f"tr_t{index}",
+            "name": f"t{index}",
+            "layout": {"x": 0, "y": 1},
+            "annotations": {},
+        }
+        for index in range(transition_count)
+    ]
+    arcs: list[dict[str, object]] = []
+    arc_index = 0
+    for transition_index in range(transition_count):
+        # Bounded nets only: every transition consumes at least one token and
+        # produces no more than it consumes, so the reachability graph is finite.
+        pre_places = draw(st.sets(st.integers(min_value=0, max_value=place_count - 1), min_size=1))
+        post_places = draw(
+            st.sets(st.integers(min_value=0, max_value=place_count - 1), max_size=len(pre_places))
+        )
+        for place_index in pre_places:
+            arcs.append(
+                {
+                    "id": f"ar_{arc_index}",
+                    "source": f"pl_p{place_index}",
+                    "target": f"tr_t{transition_index}",
+                    "weight": 1,
+                    "annotations": {},
+                }
+            )
+            arc_index += 1
+        for place_index in post_places:
+            arcs.append(
+                {
+                    "id": f"ar_{arc_index}",
+                    "source": f"tr_t{transition_index}",
+                    "target": f"pl_p{place_index}",
+                    "weight": 1,
+                    "annotations": {},
+                }
+            )
+            arc_index += 1
+    return {
+        "id": "mdl_random",
+        "formalism": "pt",
+        "places": places,
+        "transitions": transitions,
+        "arcs": arcs,
+        "metadata": {},
+    }
+
+
+@pytest.mark.property
+@settings(deadline=None, max_examples=25)
+@given(payload=random_small_net_payload())
+def test_property_place_invariants_are_constant_over_every_reachable_marking(
+    payload: dict[str, object],
+) -> None:
+    """Every place invariant has the same dot product on all reachable markings."""
+    model = build_canonical_model(payload=payload)
+    graph = explore_state_graph(model=model)
+    for invariant in place_invariants(model=model):
+        totals = {
+            sum(coefficient * marking[position] for position, coefficient in enumerate(invariant))
+            for marking in graph.states
+        }
+        assert len(totals) == 1
+
+
+@pytest.mark.property
+@settings(deadline=None, max_examples=25)
+@given(payload=random_small_net_payload())
+def test_property_maximal_siphon_and_trap_satisfy_their_defining_property(
+    payload: dict[str, object],
+) -> None:
+    """The greatest fixed points really are a siphon and a trap."""
+    model = build_canonical_model(payload=payload)
+    assert _is_siphon(model=model, candidate=maximal_siphon(model=model))
+    assert _is_trap(model=model, candidate=maximal_trap(model=model))
+
+
+@pytest.mark.property
+@settings(deadline=None, max_examples=25)
+@given(payload=random_small_net_payload())
+def test_property_deadlock_verdict_matches_the_explored_graph(
+    payload: dict[str, object],
+) -> None:
+    """EF DEADLOCK is true exactly when the reachability graph has a deadlock."""
+    model = build_canonical_model(payload=payload)
+    graph = explore_state_graph(model=model)
+    verdict = check_ef_deadlock(model=model)
+    assert (verdict.value == "true") == bool(graph.deadlocks)

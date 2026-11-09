@@ -44,6 +44,14 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-09 - PR #69 review round on the rebased head: property tier added, io renamed, split proposal in the PR body (PR #69)
+
+- **Issue**: #5 (P05).
+- **Done**: addressed the reviewer report on the rebased head (1 BLOCKING / 1 TO-FIX / 1 SUGGESTION). TO-FIX: added the `property` tier to `tests/test_engines_mini.py` - three hypothesis tests over random bounded small nets (place invariants constant on every reachable marking; maximal siphon/trap satisfy their defining fixed-point property; EF DEADLOCK verdict matches the explored graph's deadlocks). SUGGESTION: renamed the `io` abbreviation to `input_output` throughout `mini_engine.py` (and the test helper). BLOCKING (PR ~1500 lines vs the ~500 budget): resolved per review checklist section 7 / ADR-0019 by writing a split proposal into the PR body via `make update-pr`.
+- **Evidence**: run: `make check` green (ruff, mypy strict, import-linter, 336 tests passed incl. 3 property tests, coverage 96.04% >= 90%). Not run: CI until push.
+- **Judgement calls**: random-net strategy constrained to bounded nets (every transition consumes >= 1 token and produces <= it consumes) so the reachability graph stays finite and under the engine capacity cap.
+- **Escalations**: none.
+
 ## 2026-11-09 - PR #69 rebased onto daily: WORKLOG + engines/__init__.py conflicts resolved (PR #69)
 
 - **Issue**: #5 (P05).
