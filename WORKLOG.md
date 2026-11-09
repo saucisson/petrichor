@@ -44,6 +44,13 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-09 - P05 mini-moteur statique embarqué (issue #5, branch feat/5-mini-moteur-statique)
+
+- **Issue**: #5 (P05 · Mini-moteur statique embarqué, spec §18.1/§14/§19.4). Picked because its only dependency (#2) is merged on daily and it is pure computation: no new dependency, no Docker, no HTTP layer, fully verifiable with `make check` unattended.
+- **Done**: new package `src/petrichor/engines/` — the only producer of verdict values (spec §19.4). `verdict.py` holds the normalized contract (`Verdict`/`VerdictValue`/`Witness`, cost pinned to 0 = coût nul). `mini_engine.py` implements the static analyses: P/T-invariants (exact rational kernel of the incidence matrix), minimal 0/1 positive invariants + structural bounds, maximal siphon/trap (greatest fixed points), Tarjan SCC over the reachability graph, BFS `AG EF`, deadlock detection, symmetry orbits under the verified automorphism group, and a cyclic-starvation witness finder. Nets beyond capacity (state cap, invariant/automorphism place caps, search-node budget) raise `NetBeyondCapacityError` — explicit rejection, never a silent result; non-P/T formalisms raise `UnsupportedFormalismError`. Tests: `tests/test_engines_mini.py` (fil rouge reference on Philosophes-3: 14 states, 27 arcs, 1 deadlock, 6 invariants, 6 orbits, starvation witness; verdicts; capacity/formalism rejections; log narration) and `tests/test_engines_guard.py` (AST guard: no module outside `engines/` imports it or defines a verdict type).
+- **Evidence**: run: `make check` green on the final state — ruff, mypy strict (incl. src), import-linter, 318 tests passed, coverage 96.64% >= 90% (engines: mini_engine 97%, verdict 93%). Not run: CI until push.
+- **Judgement calls**: "6 orbites" of the issue is read as the 6 symmetry orbits under the order-3 rotation (spec §14.5), not SCCs — the state graph has 2 SCCs (sizes 1 and 13), asserted separately; 6 = 2 rotation-invariant states + 4 orbits of 3. "6 invariants" is the kernel dimension (nullity 6), and the 6 minimal positive invariants are asserted too. Verdict values are a closed `Literal["true", "false"]` — no "unknown": beyond capacity the engine raises instead of emitting an implicit verdict (§14.2).
+
 ## 2026-11-09 - resumed pull request #72 left open by an earlier session: review report now zero-BLOCKING, CI green, merging into daily (PR #72 / 28d11dc)
 
 - **Issue**: #4 (P04), recovered via `make claim-pr PR=72` (auto-discovery night session; the four worklist issues #6/#7/#9/#10 are all dependency-blocked on unmerged #3/#4/#6/#8/#9, so the only cleanly completable items were the open recovery PRs).
