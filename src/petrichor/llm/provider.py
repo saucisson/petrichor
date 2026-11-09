@@ -11,7 +11,7 @@ invents an answer (spec §15).
 import json
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, NewType, TypeVar
 
 import structlog
 from pydantic import BaseModel, ValidationError
@@ -39,6 +39,12 @@ DEFAULT_GOLDEN_ROOT = Path(__file__).parent / "golden"
 
 OutputType = TypeVar("OutputType", bound=BaseModel)
 
+FormulaText = NewType("FormulaText", str)
+"""A catalogue formula, as written in the spec (spec §15)."""
+
+HumanMessage = NewType("HumanMessage", str)
+"""A human proposal in natural language (spec §15)."""
+
 
 class LLMError(Exception):
     """Base class of every domain error raised by the LLM layer."""
@@ -56,11 +62,11 @@ class LLMProvider(ABC):
         """Extract the semantic profile of a model."""
 
     @abstractmethod
-    def reading(self, *, model_hash: ContentHash, formula: str) -> Reading:
+    def reading(self, *, model_hash: ContentHash, formula: FormulaText) -> Reading:
         """Read one catalogue formula in natural language."""
 
     @abstractmethod
-    def clarification(self, *, model_hash: ContentHash, text: str) -> Clarification:
+    def clarification(self, *, model_hash: ContentHash, text: HumanMessage) -> Clarification:
         """Reformulate a human proposal and propose option chips."""
 
     @abstractmethod
@@ -81,7 +87,7 @@ class DeterministicMockProvider(LLMProvider):
             usage="semantic-profile", model_hash=model_hash, output_type=SemanticProfile
         )
 
-    def reading(self, *, model_hash: ContentHash, formula: str) -> Reading:
+    def reading(self, *, model_hash: ContentHash, formula: FormulaText) -> Reading:
         """Serve the scripted reading of one formula; unknown formulas degrade."""
         document = self._load(usage="reading", model_hash=model_hash, output_type=FormulaReadings)
         if formula not in document.readings:
@@ -89,7 +95,7 @@ class DeterministicMockProvider(LLMProvider):
             raise LLMDegradationError(f"No scripted reading for formula {formula!r}.")
         return document.readings[formula]
 
-    def clarification(self, *, model_hash: ContentHash, text: str) -> Clarification:
+    def clarification(self, *, model_hash: ContentHash, text: HumanMessage) -> Clarification:
         """Serve the scripted clarification; the initial corpus scripts none."""
         return self._load(usage="clarification", model_hash=model_hash, output_type=Clarification)
 
