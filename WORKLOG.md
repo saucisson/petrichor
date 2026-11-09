@@ -44,6 +44,14 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-09 - P06 review round on PR #75: frozen StoredRun (no torn reads), watchdog timeout backstop, run-id collision check (PR #75)
+
+- **Issue**: #6 (P06).
+- **Done**: addressed the reviewer report on PR #75 (0 BLOCKING / 1 TO-FIX / 2 SUGGESTION). TO-FIX: `StoredRun` is now frozen and `mark_done`/`mark_error` replace the whole entry via `model_copy(update=...)` under the lock, so a `GET /v1/runs/{rid}` can never serialize a torn state (status done with output None); terminal states are final (a late transition is refused and logged). SUGGESTION 1: added a watchdog `threading.Timer` per run (timeout + 5s grace) that forces the explicit `error`/`timeout` state when a runner ignores its timeout - a run can never stay `running` forever. SUGGESTION 2: `create_or_get` now regenerates the run id on collision instead of overwriting. New tests: `test_watchdog_forces_timeout_when_runner_ignores_it`, `test_terminal_state_is_final`.
+- **Evidence**: run: `make check` green on the final state - ruff, mypy strict, import-linter, 448 tests passed, coverage 97.35% >= 90%. Not run yet: CI and the re-review (after push).
+- **Judgement calls**: the watchdog fires at timeout + `WATCHDOG_GRACE_SECONDS` (5s) so a runner that honors the timeout itself always wins the race; the terminal-state guard makes the outcome deterministic either way.
+- **Escalations**: none.
+
 ## 2026-11-09 - P06: async checks API - 202 + Location, (model, question) idempotence, anti-polymorphism 422, explicit error states (issue #6, branch feat/6-async-runs-checks)
 
 - **Issue**: #6 (P06 · Runs asynchrones). Picked in auto-discovery: the only worklist item whose dependencies are resolved on daily (#3 and #4 closed); #7 is blocked-by #6, #10 blocked-by #6/#9. Claimed with `make claim ISSUE=6` (exit 0) before any other action.
