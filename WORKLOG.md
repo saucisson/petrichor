@@ -44,6 +44,14 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-09 - PR #69 rebased onto daily: WORKLOG + engines/__init__.py conflicts resolved (PR #69)
+
+- **Issue**: #5 (P05).
+- **Done**: rebased `feat/5-mini-moteur-statique` onto `origin/daily` (which had gained PR #72 / P04). Two conflicts resolved: `WORKLOG.md` (both sides kept, newest entry on top per the append-only rule) and `src/petrichor/engines/__init__.py` (add/add) - kept daily's version on purpose: `Dockerfile.dummy` copies only `__init__.py` + `dummy_server.py` into a stdlib-only image, so the package `__init__` must not import `mini_engine`/`verdict` (pydantic/structlog). The one consumer of the package-level re-exports, `tests/test_engines_mini.py`, now imports from `petrichor.engines.mini_engine` directly; no test weakened.
+- **Evidence**: run: `make check` green on the rebased head (ruff, mypy strict, import-linter, 333 tests passed, coverage 95.63% >= 90%). Not run: CI until push.
+- **Judgement calls**: keeping daily's stdlib-only `__init__.py` over the branch's re-exports, because the Docker skeleton constraint is explicit in the file and the Dockerfile; the alternative (copying mini_engine/verdict into the image) would add third-party deps to a deliberately dependency-free image.
+- **Escalations**: none.
+
 ## 2026-11-09 - resumed PR #69 left open by an earlier session (P05) - zero-BLOCKING report present, CI green, merging
 
 - **Issue**: #5 (P05). Recovery pick: the worklist issues #6/#7/#10 are all dependency-blocked (blockers #3/#8/#9 still open), so the clean item tonight was an open pull request an earlier session left behind; PR #69 carries a zero-BLOCKING reviewer report and its backing issue #5 is `night-claimed`.
