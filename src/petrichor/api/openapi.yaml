@@ -152,7 +152,8 @@ paths:
             Session budget cap exceeded (spec §12.4): the remaining budget
             cannot cover one run. The problem extensions carry
             remaining_budget_seconds, session_budget_seconds,
-            consumed_seconds and timeout_seconds. No carry-over.
+            consumed_seconds, reserved_seconds and timeout_seconds.
+            No carry-over.
           content:
             application/problem+json:
               schema:
