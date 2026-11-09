@@ -44,6 +44,14 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-09 - PR #71 rebased onto daily (now including PR #69 / P05 and PR #70 / P08) (PR #71)
+
+- **Issue**: #3 (P03).
+- **Done**: rebased `feat/3-pnml-import-models-api` onto `origin/daily` after PR #69 and #70 merged; only `WORKLOG.md` conflicted (both sides kept, newest entry on top). No code interaction: the API/PNML layer touches `src/petrichor/api` + `pnml_import`, disjoint from `engines/` and `llm/`.
+- **Evidence**: run: `make check` green on the rebased head (ruff, mypy strict, import-linter, 419 tests passed, coverage 97.32% >= 90%). Not run: CI until push.
+- **Judgement calls**: none.
+- **Escalations**: none.
+
 ## 2026-11-09 - P03: POST /v1/models PNML import + GET canonical, Symmetric non déplié (issue #3, branch feat/3-pnml-import-models-api)
 
 - **Issue**: #3 (P03 · `POST /models` et import PNML). Picked in auto-discovery: the only worklist items whose dependencies are resolved on daily (#1 closed, #2's PR #59 merged); #6/#7/#9/#10 still blocked, and recovery PRs #69/#70 are stuck on the unanswered reviewer-model needs-human. Claimed with `make claim ISSUE=3` (exit 0) before any other action.
