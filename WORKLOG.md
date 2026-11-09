@@ -44,6 +44,14 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-09 - P03: POST /v1/models PNML import + GET canonical, Symmetric non déplié (issue #3, branch feat/3-pnml-import-models-api)
+
+- **Issue**: #3 (P03 · `POST /models` et import PNML). Picked in auto-discovery: the only worklist items whose dependencies are resolved on daily (#1 closed, #2's PR #59 merged); #6/#7/#9/#10 still blocked, and recovery PRs #69/#70 are stuck on the unanswered reviewer-model needs-human. Claimed with `make claim ISSUE=3` (exit 0) before any other action.
+- **Done**: new `src/petrichor/pnml_import.py` (stdlib ElementTree PNML → canonical `petri+json`, model id derived from the content hash, injectable clock; P/T and Symmetric net types, everything else rejected as unsupported), `src/petrichor/model_store.py` (content-hash idempotence), `src/petrichor/api/` (WSGI app: `POST /v1/models` 201/200 idempotent, `GET /v1/models/{id}` canonical, `X-API-Key` auth before parsing, RFC 7807 problem+json everywhere, OpenAPI contract `openapi.yaml` kept with the code per ADR-0016), `src/petrichor/main.py` (composition root, wsgiref). No new dependency (stdlib WSGI + httpx's WSGITransport in tests) - a web framework would have been an escalation-list item. Tests: `tests/test_pnml_import.py`, `tests/test_api_models.py`, fixtures `tests/fixtures/philosophes3{,-symmetric}.pnml` (9 places / 6 transitions / 24 arcs).
+- **Evidence**: run: `make check` green on the final state - ruff + format, mypy strict (incl. src), import-linter, 351 tests passed, coverage 97.91% >= 90% (new modules 100%). Not run yet: CI and review (after push).
+- **Judgement calls**: (1) WSGI on stdlib instead of FastAPI - new dependencies are on the escalation list and unanswered at night; (2) model id = `mdl_` + first 8 hex of the content hash, so idempotent import returns the same id; (3) per-place color class kept in `annotations` (excluded from the hash) because the P02 schema has no semantic per-place color field - noted as a limitation, schema change is not P03's call; (4) PNML re-export on GET answers 406 explicitly (issue scope is canonical read); (5) `X-API-Key` has no default - `PETRICHOR_API_KEY` must be set, so no secret sits in the repo.
+- **Escalations**: none raised by this change. Known pre-existing blocker: `make review` exits 2 (reviewer model `mistral-large-4` unknown to the runtime), already escalated as needs-human on PRs #69/#70 - if it still fails on this PR, the PR stays open, CI green, awaiting the human.
+
 ## 2026-11-09 - PR #70 review round on the rebased head: narration pinned, typed primitives, conf renamed, property tier (PR #70)
 
 - **Issue**: #8 (P08).
