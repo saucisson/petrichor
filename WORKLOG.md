@@ -241,3 +241,11 @@ One entry per commit or pull request:
 - **Evidence**: `make check` green after the fix (ruff, mypy strict 34 files, import-linter, pytest 33 passed, coverage 94.76%).
 - **Judgement calls**: fixes committed as a separate commit on the branch rather than rewriting the human's commits.
 - **Escalations**: none.
+
+## 2026-11-09 - night loop: no JSON dump at the end of a session
+
+- **Issue**: none (human request: avoid the big JSON dump at the end of the night loop, after the template-side "more output" fix).
+- **Done**: `scripts/night.py` `run_developer_session` now launches the headless session with `--output text` (new `SESSION_OUTPUT_FORMAT` constant) instead of `--output json`, so each session's final answer lands on stdout as readable text and the full-session JSON blob is gone. The loop never parsed that JSON. Module and function docstrings updated; new test `test_run_developer_session_uses_text_output_not_json` pins the command (`--output text`, `"json" not in command`).
+- **Evidence**: run: `make check` (ruff, mypy strict, import-linter, pytest 319 passed, coverage 96.64%); the three vibe output modes (`text`/`json`/`streaming`) compared with a live one-turn headless run. Not run: a full `make night` end to end.
+- **Judgement calls**: chose `--output text` over `--output streaming` (which emits JSON lines all run long) to keep stdout readable per ADR-0017's two-channel design; ADR-0017's decision text still names `--output json` but the decision (process boundary = context reset) is unchanged, and `docs/decisions/` was left untouched.
+- **Escalations**: none.

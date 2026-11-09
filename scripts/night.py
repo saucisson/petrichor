@@ -34,8 +34,9 @@ on. The verdicts live in the repository (``WORKLOG.md``, the pull
 requests, the issues) for the morning audit.
 
 Output has two channels (ADR-0017): stdout is the short, readable
-summary - one line per session and one verdict at the end - while the
-verbose trace (full candidate lists, anti-spin decisions, fetch
+summary - one line per session and one verdict at the end - and each
+session's final answer is printed as plain text, never as a JSON dump.
+The verbose trace (full candidate lists, anti-spin decisions, fetch
 warnings) lands in ``.night/night-loop.log`` (override it with
 ``NIGHT_LOG_FILE``). The morning audit reads the terminal; the
 post-mortem reads the log.
@@ -73,6 +74,7 @@ if TYPE_CHECKING:
 
 EXIT_CODE_ALL_ISSUES_PROCESSED = EXIT_CODE_SUCCESS  # a subcommand-local alias, same protocol code
 DEVELOPER_CLI_COMMAND = "vibe"
+SESSION_OUTPUT_FORMAT = "text"
 PROMPT_TEMPLATE_PATH = ".vibe/prompts/night-issue.md"
 AUTO_PROMPT_TEMPLATE_PATH = ".vibe/prompts/night-auto.md"
 ISSUE_PLACEHOLDER = "{{issue}}"
@@ -457,13 +459,17 @@ def run_developer_session(
     maximum_session_turns: int,
     session_time_limit_seconds: int,
 ) -> tuple[int, int]:
-    """Run one headless developer session; return (exit code, seconds)."""
+    """Run one headless developer session; return (exit code, seconds).
+
+    The session's final answer lands on the loop's stdout as readable
+    text (``--output text``) - never as a JSON dump at the end.
+    """
     command = [
         DEVELOPER_CLI_COMMAND,
         "--prompt-file",
         str(prompt_path),
         "--output",
-        "json",
+        SESSION_OUTPUT_FORMAT,
         "--max-turns",
         str(maximum_session_turns),
         "--time-limit",
