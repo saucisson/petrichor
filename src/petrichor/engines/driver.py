@@ -48,7 +48,9 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_COMPOSE_FILE = REPO_ROOT / "docker-compose.yml"
 DUMMY_SERVICE_NAME = "dummy"
 DEFAULT_DUMMY_HOST_PORT = 18080
-COMPOSE_START_TIMEOUT_SECONDS = 300
+COMPOSE_START_TIMEOUT_SECONDS = 1200
+"""Cold builds of real engine images (verifypn compiles C++ for ~10 min) exceed
+the dummy's few seconds; 1200s covers a cold CI runner with headroom."""
 CHECK_PATH = "/check"
 DOCKER_BINARY = "docker"
 
