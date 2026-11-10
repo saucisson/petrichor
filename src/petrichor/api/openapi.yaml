@@ -326,6 +326,82 @@ paths:
           $ref: "#/components/responses/NotFound"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+  /sessions/{session_id}/profile:
+    get:
+      summary: Read the proposed + arbitrated semantic profile of a session (spec §14)
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The profile state (proposed entries, arbitrations, coverage groups).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProfileState"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+  /sessions/{session_id}/profile/arbitrate:
+    post:
+      summary: Arbitrate one proposed role — accept or replace it (spec §14)
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArbitrationDecision"
+      responses:
+        "200":
+          description: The updated profile state after arbitration.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProfileState"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+  /sessions/{session_id}/coverage:
+    get:
+      summary: Coverage groups of a session; uncovered ones are re-seeding targets (spec §14)
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The coverage groups and the uncovered re-seeding targets.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CoverageReport"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
 components:
   securitySchemes:
     apiKey:
@@ -359,6 +435,58 @@ components:
           type: string
         detail:
           type: object
+    ArbitrationDecision:
+      type: object
+      required: [entry_id, accepted, chosen_role]
+      properties:
+        entry_id:
+          type: string
+        accepted:
+          type: boolean
+        chosen_role:
+          type: string
+          minLength: 1
+    CoverageGroup:
+      type: object
+      required: [group_id, role, elements, covered_by]
+      properties:
+        group_id:
+          type: string
+        role:
+          type: string
+        elements:
+          type: string
+        covered_by:
+          type: array
+          items:
+            type: string
+    ProfileState:
+      type: object
+      required: [proposed, arbitrations, groups]
+      properties:
+        proposed:
+          type: object
+          description: The LLM-proposed semantic profile.
+        arbitrations:
+          type: array
+          items:
+            $ref: "#/components/schemas/ArbitrationDecision"
+        groups:
+          type: array
+          items:
+            $ref: "#/components/schemas/CoverageGroup"
+    CoverageReport:
+      type: object
+      required: [groups, uncovered_groups]
+      properties:
+        groups:
+          type: array
+          items:
+            $ref: "#/components/schemas/CoverageGroup"
+        uncovered_groups:
+          type: array
+          items:
+            $ref: "#/components/schemas/CoverageGroup"
     Problem:
       type: object
       required: [type, title, status, detail, instance]
@@ -525,6 +653,18 @@ components:
             $ref: "#/components/schemas/Problem"
     InvalidPnml:
       description: The PNML document is malformed or uses an unsupported dialect.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    BadRequest:
+      description: The request is malformed (e.g. invalid Content-Length).
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    UnprocessableEntity:
+      description: The request body fails schema validation.
       content:
         application/problem+json:
           schema:

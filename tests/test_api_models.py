@@ -25,6 +25,7 @@ from petrichor.main import build_server, main
 from petrichor.model_store import ModelStore
 from petrichor.petri_canonical import ModelId
 from petrichor.pnml_import import import_pnml
+from petrichor.profile import ProfileArbitrator
 from petrichor.run_store import RunStore
 from petrichor.session_store import SessionStore
 
@@ -325,6 +326,7 @@ class TestCompositionRoot:
             store=ModelStore(),
             run_store=RunStore(),
             session_store=SessionStore(directory=tmp_path / "sessions"),
+            arbitrator=ProfileArbitrator(),
         )
         assert isinstance(server.application, Callable)
         assert server.server_port == 8080

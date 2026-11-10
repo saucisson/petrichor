@@ -54,6 +54,7 @@ from petrichor.petri_canonical import (
     serialize_model,
 )
 from petrichor.pnml_import import PnmlImportError, import_pnml
+from petrichor.profile import ArbitrationDecision, ProfileArbitrator
 from petrichor.run_store import BudgetRefused, RunAdmission, RunStore
 from petrichor.session_store import SessionId, SessionStore
 
@@ -72,6 +73,9 @@ RUNS_PATH_PREFIX = "/v1/runs/"
 SESSIONS_PATH = "/v1/sessions"
 SESSION_PATH_PREFIX = "/v1/sessions/"
 SESSION_JOURNAL_SUFFIX = "/journal"
+SESSION_PROFILE_SUFFIX = "/profile"
+SESSION_ARBITRATE_SUFFIX = "/profile/arbitrate"
+SESSION_COVERAGE_SUFFIX = "/coverage"
 DEFAULT_SESSIONS_PAGE_LIMIT = 100
 MAX_SESSIONS_PAGE_LIMIT = 500
 CONTENT_TYPE_PNML = "application/pnml+xml"
@@ -908,6 +912,172 @@ def _get_session_journal(
     )
 
 
+def _get_session_profile(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    arbitrator: ProfileArbitrator,
+    session_id: str,
+) -> Iterable[bytes]:
+    """Read the proposed + arbitrated profile of a session (spec §14)."""
+    state = arbitrator.get(session_id=session_id)
+    if state is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="profile_not_found",
+                detail=f"No proposed profile for session {session_id!r}.",
+            ),
+        )
+    logger.debug("api_profile_read", session_id=session_id, arbitrations=len(state.arbitrations))
+    body = json.dumps(state.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.OK,
+        content_type=CONTENT_TYPE_JSON,
+        body=body.encode("utf-8"),
+    )
+
+
+def _post_profile_arbitration(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    arbitrator: ProfileArbitrator,
+    session_id: str,
+) -> Iterable[bytes]:
+    """Arbitrate one proposed role: the human accepts or replaces it (spec §14)."""
+    try:
+        length = int(environ.get("CONTENT_LENGTH", "") or 0)
+    except ValueError:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.BAD_REQUEST,
+                reason="invalid_content_length",
+                detail="The Content-Length header is not an integer.",
+            ),
+        )
+    body = environ["wsgi.input"].read(length)
+    try:
+        payload = json.loads(body.decode("utf-8"))
+        decision = ArbitrationDecision.model_validate(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError, ValidationError) as error:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.UNPROCESSABLE_ENTITY,
+                reason="invalid_arbitration",
+                detail=f"The arbitration body is invalid: {error}",
+            ),
+        )
+    state = arbitrator.arbitrate(session_id=session_id, decision=decision)
+    if state is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="profile_not_found",
+                detail=f"No proposed profile for session {session_id!r}.",
+            ),
+        )
+    logger.debug("api_profile_arbitrated", session_id=session_id, entry_id=decision.entry_id)
+    body_out = json.dumps(state.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.OK,
+        content_type=CONTENT_TYPE_JSON,
+        body=body_out.encode("utf-8"),
+    )
+
+
+def _get_session_coverage(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    arbitrator: ProfileArbitrator,
+    session_id: str,
+) -> Iterable[bytes]:
+    """Coverage groups of a session; uncovered ones are re-seeding targets (spec §14)."""
+    state = arbitrator.get(session_id=session_id)
+    if state is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="profile_not_found",
+                detail=f"No proposed profile for session {session_id!r}.",
+            ),
+        )
+    uncovered = state.uncovered_groups()
+    logger.debug(
+        "api_coverage_read",
+        session_id=session_id,
+        groups=len(state.groups),
+        uncovered=len(uncovered),
+    )
+    body = json.dumps(
+        {
+            "groups": [g.model_dump(mode="json") for g in state.groups],
+            "uncovered_groups": [g.model_dump(mode="json") for g in uncovered],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.OK,
+        content_type=CONTENT_TYPE_JSON,
+        body=body.encode("utf-8"),
+    )
+
+
+def _dispatch_session_profile(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    method: str,
+    remainder: str,
+    arbitrator: ProfileArbitrator,
+) -> Iterable[bytes] | None:
+    """Route the profile/coverage sub-resources of a session, or None (spec §14)."""
+    profile_id = remainder[: -len(SESSION_PROFILE_SUFFIX)]
+    if remainder.endswith(SESSION_PROFILE_SUFFIX) and "/" not in profile_id:
+        session_id = profile_id
+        if method == "GET":
+            return _get_session_profile(
+                environ=environ,
+                start_response=start_response,
+                arbitrator=arbitrator,
+                session_id=session_id,
+            )
+    elif remainder.endswith(SESSION_ARBITRATE_SUFFIX):
+        session_id = remainder[: -len(SESSION_ARBITRATE_SUFFIX)]
+        if method == "POST" and session_id and "/" not in session_id:
+            return _post_profile_arbitration(
+                environ=environ,
+                start_response=start_response,
+                arbitrator=arbitrator,
+                session_id=session_id,
+            )
+    elif remainder.endswith(SESSION_COVERAGE_SUFFIX):
+        session_id = remainder[: -len(SESSION_COVERAGE_SUFFIX)]
+        if method == "GET" and session_id and "/" not in session_id:
+            return _get_session_coverage(
+                environ=environ,
+                start_response=start_response,
+                arbitrator=arbitrator,
+                session_id=session_id,
+            )
+    return None
+
+
 def _dispatch_sessions(
     *,
     environ: WSGIEnvironment,
@@ -916,6 +1086,7 @@ def _dispatch_sessions(
     path: str,
     store: ModelStore,
     session_store: SessionStore,
+    arbitrator: ProfileArbitrator | None = None,
 ) -> Iterable[bytes] | None:
     """Route the /v1/sessions resources, or return None when the path is not one."""
     result: Iterable[bytes] | None = None
@@ -959,6 +1130,14 @@ def _dispatch_sessions(
                 session_store=session_store,
                 session_id=remainder,
             )
+        elif arbitrator is not None:
+            result = _dispatch_session_profile(
+                environ=environ,
+                start_response=start_response,
+                method=method,
+                remainder=remainder,
+                arbitrator=arbitrator,
+            )
         if result is None:
             result = _problem_response(
                 start_response=start_response,
@@ -981,6 +1160,7 @@ def create_app(
     run_store: RunStore,
     runner: CheckRunner | None,
     session_store: SessionStore | None = None,
+    arbitrator: ProfileArbitrator | None = None,
 ) -> WSGIApp:
     """Build the WSGI application: auth first, then routing and negotiation."""
 
@@ -1021,6 +1201,7 @@ def create_app(
                 path=path,
                 store=store,
                 session_store=session_store,
+                arbitrator=arbitrator,
             )
         if routed is not None:
             return routed
