@@ -245,6 +245,27 @@ def test_handle_check_rejects_out_of_scope_family() -> None:
     assert status == 422
 
 
+MALFORMED_VERIFYPN = """#!/bin/sh
+# Fake verifypn: exit 0 but no FORMULA verdict line (engine contract violation).
+echo "explored states:   3"
+exit 0
+"""
+
+
+def test_handle_check_maps_malformed_exit0_stdout_to_500(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Exit 0 without a FORMULA line is a typed HTTP 500, never a dropped connection."""
+    fake = tmp_path / "verifypn"
+    fake.write_text(MALFORMED_VERIFYPN, encoding="utf-8")
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setenv("VERIFYPN_BINARY", str(fake))
+    body = json.dumps(_question(family="deadlock", formula="EF DEADLOCK").model_dump(mode="json"))
+    status, payload = handle_check(body=body.encode("utf-8"), timeout_seconds=10)
+    assert status == 500
+    assert "invalid" in json.loads(payload.decode("utf-8"))["detail"]
+
+
 class _StubDriver:
     """A driver stub programmed with one outcome, to exercise the runner paths."""
 
