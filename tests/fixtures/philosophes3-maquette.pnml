@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<pnml xmlns="http://www.pnml.org/version-2009/grammar/pnml">
+  <net id="model" type="http://www.pnml.org/version-2009/grammar/pnml">
+    <place id="eat_1">
+      <initialMarking><text>0</text></initialMarking>
+    </place>
+    <place id="eat_2">
+      <initialMarking><text>0</text></initialMarking>
+    </place>
+    <place id="eat_3">
+      <initialMarking><text>0</text></initialMarking>
+    </place>
+    <place id="fork_1">
+      <initialMarking><text>1</text></initialMarking>
+    </place>
+    <place id="fork_2">
+      <initialMarking><text>1</text></initialMarking>
+    </place>
+    <place id="fork_3">
+      <initialMarking><text>1</text></initialMarking>
+    </place>
+    <place id="hasL_1">
+      <initialMarking><text>0</text></initialMarking>
+    </place>
+    <place id="hasL_2">
+      <initialMarking><text>0</text></initialMarking>
+    </place>
+    <place id="hasL_3">
+      <initialMarking><text>0</text></initialMarking>
+    </place>
+    <place id="think_1">
+      <initialMarking><text>1</text></initialMarking>
+    </place>
+    <place id="think_2">
+      <initialMarking><text>1</text></initialMarking>
+    </place>
+    <place id="think_3">
+      <initialMarking><text>1</text></initialMarking>
+    </place>
+    <transition id="rel_1"/>
+    <transition id="rel_2"/>
+    <transition id="rel_3"/>
+    <transition id="takeL_1"/>
+    <transition id="takeL_2"/>
+    <transition id="takeL_3"/>
+    <transition id="takeR_1"/>
+    <transition id="takeR_2"/>
+    <transition id="takeR_3"/>
+    <arc id="ar_001" source="eat_1" target="rel_1">
+      <inscription><text>1</text></inscription>
+    </arc>
+    <arc id="ar_002" source="eat_2" target="rel_2">
+      <inscription><text>1</text></inscription>
+    </arc>
+    <arc id="ar_003" source="eat_3" target="rel_3">
+      <inscription><text>1</text></inscription>
+    </arc>
+    <arc id="ar_004" source="fork_1" target="takeL_1">
+      <inscription><text>1</text></inscription>
+    </arc>
+    <arc id="ar_005" source="fork_1" target="takeR_3">
+      <inscription><text>1</text></inscription>
+    </arc>
+    <arc id="ar_006" source="fork_2" target="takeL_2">
+      <inscription><text>1</text></inscription>
+    </arc>
+    <arc id="ar_007" source="fork_2" target="takeR_1">
+      <inscription><text>1</text></inscription>
+    </arc>
+    <arc id="ar_008" source="fork_3" target="takeL_3">
+      <inscription><text>1</text></inscription>
+    </arc>
+    <arc id="ar_009" source="fork_3" target="takeR_2">
+      <inscription><text>1</text></inscription>
+    </arc>
+    <arc id="ar_010" source="hasL_1" target="takeR_1">
+      <inscription><text>1</text></inscription>
+    </arc>
+    <arc id="ar_011" source="hasL_2" target="takeR_2">
+      <inscription><text>1</text></inscription>
+    </arc>
+    <arc id="ar_012" source="hasL_3" target="takeR_3">
+      <inscription><text>1</text></inscription>
+    </arc>
+    <arc id="ar_013" source="rel_1" target="fork_1">
+      <inscription><text>1</text></inscription>
+    </arc>
+    <arc id="ar_014" source="rel_1" target="fork_2">
+      <inscription><text>1</text></inscription>
+    </arc>
+    <arc id="ar_015" source="rel_1" target="think_1">
+      <inscription><text>1</text></inscription>
+    </arc>
+    <arc id="ar_016" source="rel_2" target="fork_2">
+      <inscription><text>1</text></inscription>
+    </arc>
+    <arc id="ar_017" source="rel_2" target="fork_3">
+      <inscription><text>1</text></inscription>
+    </arc>
+    <arc id="ar_018" source="rel_2" target="think_2">
+      <inscription><text>1</text></inscription>
+    </arc>
+    <arc id="ar_019" source="rel_3" target="fork_1">
+      <inscription><text>1</text></inscription>
+    </arc>
+    <arc id="ar_020" source="rel_3" target="fork_3">
+      <inscription><text>1</text></inscription>
+    </arc>
+    <arc id="ar_021" source="rel_3" target="think_3">
+      <inscription><text>1</text></inscription>
+    </arc>
+    <arc id="ar_022" source="takeL_1" target="hasL_1">
+      <inscription><text>1</text></inscription>
+    </arc>
+    <arc id="ar_023" source="takeL_2" target="hasL_2">
+      <inscription><text>1</text></inscription>
+    </arc>
+    <arc id="ar_024" source="takeL_3" target="hasL_3">
+      <inscription><text>1</text></inscription>
+    </arc>
+    <arc id="ar_025" source="takeR_1" target="eat_1">
+      <inscription><text>1</text></inscription>
+    </arc>
+    <arc id="ar_026" source="takeR_2" target="eat_2">
+      <inscription><text>1</text></inscription>
+    </arc>
+    <arc id="ar_027" source="takeR_3" target="eat_3">
+      <inscription><text>1</text></inscription>
+    </arc>
+    <arc id="ar_028" source="think_1" target="takeL_1">
+      <inscription><text>1</text></inscription>
+    </arc>
+    <arc id="ar_029" source="think_2" target="takeL_2">
+      <inscription><text>1</text></inscription>
+    </arc>
+    <arc id="ar_030" source="think_3" target="takeL_3">
+      <inscription><text>1</text></inscription>
+    </arc>
+  </net>
+</pnml>
