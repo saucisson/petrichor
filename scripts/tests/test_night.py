@@ -205,27 +205,14 @@ def test_load_prompt_template_missing_file_fails_closed(tmp_path: Path) -> None:
     assert excinfo.value.code == _shared.EXIT_CODE_PROTOCOL_FAILURE
 
 
-def test_run_developer_session_uses_text_output_not_json(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_session_command_uses_text_output_not_json(tmp_path: Path) -> None:
     """The session command asks for text output: no JSON dump at the end."""
-    captured: list[list[str]] = []
-
-    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
-        captured.append(command)
-        return subprocess.CompletedProcess(args=command, returncode=0)
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
-    prompt_path = tmp_path / "prompt.md"
-    prompt_path.write_text("prompt", encoding="utf-8")
-    exit_code, elapsed_seconds = night.run_developer_session(
-        prompt_path=prompt_path,
+    command = night.build_session_command(
+        prompt_path=tmp_path / "prompt.md",
         maximum_session_turns=10,
         session_time_limit_seconds=60,
     )
-    assert exit_code == 0
-    assert elapsed_seconds >= 0
-    command = captured[0]
+    assert night.SESSION_OUTPUT_FORMAT == "text"
     assert command[0] == night.DEVELOPER_CLI_COMMAND
     assert command[command.index("--output") + 1] == "text"
     assert "json" not in command
