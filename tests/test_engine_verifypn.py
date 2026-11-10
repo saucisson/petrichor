@@ -333,6 +333,43 @@ def test_build_normalized_output_satisfied_trace_has_cyclicity_fields() -> None:
     assert witness["back_edge"] is None
 
 
+@pytest.mark.property
+@settings(deadline=None, max_examples=50)
+@given(
+    markings=st.lists(
+        st.lists(st.text(alphabet="ab", min_size=1, max_size=3), min_size=1, max_size=5),
+        min_size=1,
+        max_size=10,
+    )
+)
+def test_property_detect_cyclicity_invariant(markings: list[list[str]]) -> None:
+    """Property: cyclic iff a marking repeats; back_edge points to the first occurrence."""
+    steps = [
+        {"index": i, "marking": sorted(m), "fired": f"t{i}" if i > 0 else None}
+        for i, m in enumerate(markings)
+    ]
+    cyclic, back_edge = detect_cyclicity(steps=steps)
+    seen: set[str] = set()
+    expected_cyclic = False
+    expected_back_edge: int | None = None
+    for _i, m in enumerate(markings):
+        key = json.dumps(sorted(m), sort_keys=True)
+        if key in seen:
+            expected_cyclic = True
+            if expected_back_edge is None:
+                expected_back_edge = next(
+                    j
+                    for j, m2 in enumerate(markings)
+                    if json.dumps(sorted(m2), sort_keys=True) == key
+                )
+        seen.add(key)
+    assert cyclic == expected_cyclic
+    if expected_cyclic:
+        assert back_edge == expected_back_edge
+    else:
+        assert back_edge is None
+
+
 @pytest.mark.engine
 def test_verifypn_safety_ctl_in_the_real_container(tmp_path: Path) -> None:
     """CTLCardinality: AG (eat_1 <= 1) holds (1-safe), AG (eat_1 <= 0) is violated."""
@@ -372,7 +409,8 @@ def test_verifypn_liveness_ltl_in_the_real_container(tmp_path: Path) -> None:
         question=_question(family="liveness", formula="AG EF (eat_1 > 0)"),
         timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
     )
-    assert record.output.verdict in ("satisfied", "violated")
+    # Philosophes-3 has a reachable deadlock, so AG EF (eat_1 > 0) is violated
+    assert record.output.verdict == "violated"
     assert record.output.technique == "verifypn-4.4.2"
     assert len(archive) == 1
 
@@ -392,7 +430,8 @@ def test_verifypn_recovery_ctl_in_the_real_container(tmp_path: Path) -> None:
         question=_question(family="recovery", formula="AG (think_1 == 0 or EF (eat_1 > 0))"),
         timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
     )
-    assert record.output.verdict in ("satisfied", "violated")
+    # No starvation on Philosophes-3: every thinking philosopher can eventually eat
+    assert record.output.verdict == "satisfied"
     assert len(archive) == 1
 
 
