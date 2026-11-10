@@ -7,13 +7,15 @@ not covered by any arbitrated question are exposed as re-seeding targets.
 """
 
 import threading
-from typing import NewType
+from typing import TYPE_CHECKING, NewType
 
 import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
 from petrichor.llm.schemas import SemanticProfile
-lazy from petrichor.session_store import SessionId
+
+if TYPE_CHECKING:
+    from petrichor.session_store import SessionId
 
 logger = structlog.get_logger(__name__)
 
