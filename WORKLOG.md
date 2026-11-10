@@ -54,6 +54,8 @@ One entry per commit or pull request:
 
 ---
 
+## 2026-11-10 - template sync feec180 code part, review round 2 (PR #78, branch fix/template-sync-feec180)
+
 - **Issue**: none (human-directed template sync from saucisson/project-template @ feec180).
 - **Done**: applied the code-side changes from project-template main @ feec180 on top of daily's hardened version (first attempt took template files wholesale and lost daily's hardening - isascii guards, re.ASCII, IssueIdentifier NewType, request_or_fail, json_list_or_warn, OPEN_STATE_FILTER, UNKNOWN_HEAD_REF, causes preserved - all restored). New features: `build_session_command` extracted, `run_developer_session` uses Popen with heartbeat loop (HEARTBEAT_POLL_INTERVAL_SECONDS named constant), `--heartbeat` CLI flag (default 60s), `describe_claimed_items` names claimed items in the result line, post-session claim-label check logged, session prompts persisted under `.night/sessions/<run>/` instead of a tempdir. Tests: 4 new tests pinning describe_claimed_items, heartbeat defaults, and .night/sessions/ directory usage.
 - **Evidence**: run: `make check` green - ruff, mypy strict, import-linter, 491 tests passed, coverage 94.51% >= 90%. Not run: CI until push.
