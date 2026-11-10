@@ -124,7 +124,7 @@ def export_pnml(*, model: dict[str, Json]) -> str:
         lines.append(f"    <transition id={quoteattr(transition.name)}/>")
     for position, arc in enumerate(arc_views, start=1):
         lines.append(
-            f"    <arc id={quoteattr(f'ar_{position:03d}')}"
+            f"    <arc id={quoteattr(f'arc_{position:03d}')}"
             f" source={quoteattr(arc.source)} target={quoteattr(arc.target)}>"
         )
         lines.append(f"      <inscription><text>{arc.weight}</text></inscription>")

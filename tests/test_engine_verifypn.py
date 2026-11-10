@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 import structlog.testing
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from philosophes3 import build_philosophes3
 
 from petrichor.checks import (
@@ -264,6 +266,22 @@ def test_handle_check_maps_malformed_exit0_stdout_to_500(
     status, payload = handle_check(body=body.encode("utf-8"), timeout_seconds=10)
     assert status == 500
     assert "invalid" in json.loads(payload.decode("utf-8"))["detail"]
+
+
+@pytest.mark.property
+@settings(deadline=None)
+@given(ids=st.lists(st.from_regex(r"[A-Za-z_][A-Za-z0-9_]*", fullmatch=True), max_size=20))
+def test_property_parse_trace_transitions_roundtrip(ids: list[str]) -> None:
+    """Any well-formed XML trace parses back to exactly the fired ids, in order."""
+    stderr = (
+        "<trace>"
+        + "".join(
+            f'<transition id="{name}" index="{index}"></transition>'
+            for index, name in enumerate(ids)
+        )
+        + "</trace>"
+    )
+    assert parse_trace_transitions(stderr=stderr) == ids
 
 
 class _StubDriver:
