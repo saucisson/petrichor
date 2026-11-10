@@ -1,0 +1,54 @@
+# verifypn (Tapaal) engine image (spec §19.4; issue #9): built locally only
+# (GPL-3 engine, not redistributed), source pinned to the v4.4.2 tag commit,
+# base images pinned by digest, non-root user, standard-library-only Python
+# payload. The builder stage compiles verifypn statically; the runtime stage
+# is the same pinned python:3.15-slim as the dummy engine.
+ARG VERIFYPN_TAG=v4.4.2
+ARG VERIFYPN_COMMIT=0f4862d296918434c7cd75adf424d27fecd0bba6
+
+FROM debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc AS builder
+ARG VERIFYPN_TAG
+ARG VERIFYPN_COMMIT
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        autoconf \
+        automake \
+        bison \
+        build-essential \
+        ca-certificates \
+        cmake \
+        flex \
+        git \
+        libtool \
+        m4 \
+        patch \
+        perl \
+        unzip \
+        wget \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --depth 1 --branch "${VERIFYPN_TAG}" https://github.com/tapaal/verifypn.git /src/verifypn \
+    && cd /src/verifypn \
+    && test "$(git rev-parse HEAD)" = "${VERIFYPN_COMMIT}" \
+    && cmake -B build -DCMAKE_BUILD_TYPE=Release -DVERIFYPN_TEST=OFF \
+    && cmake --build build --parallel 4
+
+FROM python:3.15-slim@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928
+
+RUN groupadd --system engine \
+    && useradd --system --gid engine --home-dir /app --shell /usr/sbin/nologin engine
+
+COPY --from=builder --chmod=755 /src/verifypn/build/verifypn/bin/verifypn-linux64 /usr/local/bin/verifypn
+
+WORKDIR /app
+RUN install -d -m 755 /app/petrichor/engines
+COPY --chmod=644 src/petrichor/__init__.py /app/petrichor/__init__.py
+COPY --chmod=644 src/petrichor/engines/__init__.py /app/petrichor/engines/__init__.py
+COPY --chmod=644 src/petrichor/engines/pnml_export.py /app/petrichor/engines/pnml_export.py
+COPY --chmod=644 src/petrichor/engines/verifypn_server.py /app/petrichor/engines/verifypn_server.py
+
+USER engine
+ENV PYTHONDONTWRITEBYTECODE=1
+EXPOSE 8080
+CMD ["python", "-m", "petrichor.engines.verifypn_server"]

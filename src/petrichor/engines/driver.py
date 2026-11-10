@@ -24,8 +24,10 @@ from petrichor.engines.contract import (
     DUMMY_ENGINE_NAME,
     DUMMY_ENGINE_VERSION,
     DriverError,
+    EngineName,
     EngineQuestion,
     EngineTimeoutError,
+    EngineVersion,
     InvalidOutputError,
     NormalizedOutput,
     RunId,
@@ -71,7 +73,7 @@ def parse_engine_output(*, body: bytes) -> NormalizedOutput:
         raise InvalidOutputError(f"engine answer is not a normalized output: {error}") from error
 
 
-def build_run_record(
+def build_run_record(  # noqa: PLR0913 - one keyword per archived run field (spec §12.5)
     *,
     question: EngineQuestion,
     output: NormalizedOutput,
@@ -80,12 +82,14 @@ def build_run_record(
     measured_seconds: float,
     archived_at: str,
     run_id: RunId,
+    engine_name: EngineName = DUMMY_ENGINE_NAME,
+    engine_version: EngineVersion = DUMMY_ENGINE_VERSION,
 ) -> RunRecord:
     """Assemble the archived run record of one driver execution (spec §12.5)."""
     return RunRecord(
         run_id=run_id,
-        engine=DUMMY_ENGINE_NAME,
-        engine_version=DUMMY_ENGINE_VERSION,
+        engine=engine_name,
+        engine_version=engine_version,
         command=command,
         timeout_seconds=timeout_seconds,
         input_hash=question_input_hash(question=question),
@@ -96,7 +100,7 @@ def build_run_record(
 
 
 class ComposeEngineDriver:
-    """Runs the dummy engine in its real container through docker compose."""
+    """Runs an engine in its real container through docker compose."""
 
     def __init__(
         self,
@@ -104,9 +108,12 @@ class ComposeEngineDriver:
         archive: RunArchive,
         compose_file: Path = DEFAULT_COMPOSE_FILE,
         host_port: int = DEFAULT_DUMMY_HOST_PORT,
+        service_name: str = DUMMY_SERVICE_NAME,
+        engine_name: EngineName = DUMMY_ENGINE_NAME,
+        engine_version: EngineVersion = DUMMY_ENGINE_VERSION,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
-        """Wire the driver to a compose file, an archive and a host port."""
+        """Wire the driver to a compose file, an archive, a service and a host port."""
         docker = shutil.which(DOCKER_BINARY)
         if docker is None:
             raise DriverError(f"the {DOCKER_BINARY!r} binary was not found on PATH")
@@ -114,6 +121,9 @@ class ComposeEngineDriver:
         self._compose_file = compose_file
         self._archive = archive
         self._host_port = host_port
+        self._service_name = service_name
+        self._engine_name = engine_name
+        self._engine_version = engine_version
         self._clock = clock or (lambda: datetime.now(UTC))
 
     def _compose(self, *arguments: str, timeout: int) -> list[str]:
@@ -143,7 +153,7 @@ class ComposeEngineDriver:
             "--detach",
             "--wait",
             "--build",
-            DUMMY_SERVICE_NAME,
+            self._service_name,
             timeout=COMPOSE_START_TIMEOUT_SECONDS,
         )
         try:
@@ -162,6 +172,8 @@ class ComposeEngineDriver:
             measured_seconds=measured_seconds,
             archived_at=self._clock().isoformat(),
             run_id=new_run_id(),
+            engine_name=self._engine_name,
+            engine_version=self._engine_version,
         )
         self._archive.append(record=record)
         logger.info(
