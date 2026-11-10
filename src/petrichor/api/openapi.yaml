@@ -224,19 +224,52 @@ paths:
           $ref: "#/components/responses/NotFound"
         "415":
           $ref: "#/components/responses/UnsupportedMediaType"
+        "400":
+          description: The Content-Length header or a pagination parameter is not an integer.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
         "422":
-          $ref: "#/components/responses/InvalidPnml"
+          description: The body is not valid JSON or lacks a model_id string field.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
     get:
-      summary: List all sessions in creation order
+      summary: List sessions with limit/offset pagination, in creation order
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+            maximum: 500
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
       responses:
         "200":
-          description: Every session, in creation order.
+          description: A page of sessions in creation order, with total count.
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/Session"
+                type: object
+                required: [sessions, total, limit, offset]
+                properties:
+                  sessions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Session"
+                  total:
+                    type: integer
+                  limit:
+                    type: integer
+                  offset:
+                    type: integer
         "401":
           $ref: "#/components/responses/Unauthorized"
   /sessions/{session_id}:

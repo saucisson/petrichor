@@ -72,6 +72,8 @@ RUNS_PATH_PREFIX = "/v1/runs/"
 SESSIONS_PATH = "/v1/sessions"
 SESSION_PATH_PREFIX = "/v1/sessions/"
 SESSION_JOURNAL_SUFFIX = "/journal"
+DEFAULT_SESSIONS_PAGE_LIMIT = 100
+MAX_SESSIONS_PAGE_LIMIT = 500
 CONTENT_TYPE_PNML = "application/pnml+xml"
 CONTENT_TYPE_JSON = "application/json"
 CONTENT_TYPE_PETRI_JSON = "application/petri+json; version=1.0"
@@ -795,11 +797,47 @@ def _get_sessions(
     start_response: StartResponse,
     session_store: SessionStore,
 ) -> Iterable[bytes]:
-    """List every session, in creation order (spec §4)."""
-    sessions = session_store.list_all()
-    logger.debug("api_sessions_listed", count=len(sessions))
+    """List sessions with limit/offset pagination, in creation order (spec §4, ADR-0016)."""
+    query = environ.get("QUERY_STRING", "")
+    params: dict[str, str] = {}
+    for pair in query.split("&"):
+        if "=" in pair:
+            key, value = pair.split("=", maxsplit=1)
+            params[key] = value
+    try:
+        limit = min(
+            int(params.get("limit", str(DEFAULT_SESSIONS_PAGE_LIMIT))),
+            MAX_SESSIONS_PAGE_LIMIT,
+        )
+        offset = max(0, int(params.get("offset", "0")))
+    except ValueError:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.BAD_REQUEST,
+                reason="invalid_pagination",
+                detail="The limit and offset query parameters must be integers.",
+            ),
+        )
+    all_sessions = session_store.list_all()
+    sessions = all_sessions[offset : offset + limit]
+    logger.debug(
+        "api_sessions_listed",
+        count=len(sessions),
+        total=len(all_sessions),
+        limit=limit,
+        offset=offset,
+    )
     body = json.dumps(
-        [s.model_dump(mode="json") for s in sessions], sort_keys=True, separators=(",", ":")
+        {
+            "sessions": [s.model_dump(mode="json") for s in sessions],
+            "total": len(all_sessions),
+            "limit": limit,
+            "offset": offset,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
     )
     return _respond(
         start_response=start_response,
