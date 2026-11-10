@@ -46,7 +46,13 @@ from petrichor.checks import (
     RunId,
     run_key,
 )
-from petrichor.petri_canonical import InvalidCanonicalModelError, ModelId, serialize_model
+from petrichor.petri_canonical import (
+    InvalidCanonicalModelError,
+    ModelId,
+    canonical_json,
+    semantic_projection,
+    serialize_model,
+)
 from petrichor.pnml_import import PnmlImportError, import_pnml
 from petrichor.run_store import BudgetRefused, RunAdmission, RunStore
 
@@ -450,7 +456,8 @@ def _post_check(
                     ),
                 )
             )
-        if store.get(model_id=request.model_id) is None:
+        model = store.get(model_id=request.model_id)
+        if model is None:
             raise _ProblemPayloadError(
                 payload=_problem(
                     status=HTTPStatus.NOT_FOUND,
@@ -470,8 +477,19 @@ def _post_check(
         return _problem_response(
             start_response=start_response, environ=environ, payload=problem.payload
         )
+    # The model travels inside the question parameters: the runner (engines/)
+    # ships it to the engine container, which knows no model store (spec §7).
+    # Only the semantic projection goes in - it is what the content hash
+    # covers, so the idempotence key stays stable across app instances
+    # (metadata like imported_at would break it).
     question = CheckQuestion(
-        family=family, kind=request.kind, formula=request.formula, parameters=request.parameters
+        family=family,
+        kind=request.kind,
+        formula=request.formula,
+        parameters={
+            **request.parameters,
+            "model": json.loads(canonical_json(payload=semantic_projection(model=model))),
+        },
     )
     admission = RunAdmission(
         key=run_key(model_id=request.model_id, question=question),
