@@ -48,6 +48,10 @@ MAX_BODY_BYTES = 1_048_576
 MODEL_PARAMETER = "model"
 SUPPORTED_FAMILIES = frozenset({"deadlock", "reachability"})
 DEADLOCK_PQL = "EF deadlock"
+TRACE_XML_ARGUMENT = "2"
+"""verifypn ``-t 2``: emit the witness trace as XML on stderr."""
+EXPLORED_STATES_ARGUMENT = "1"
+"""verifypn ``-n 1``: print the state-space statistics (the ``explored states:`` line)."""
 FORMULA_VERDICT_PATTERN = re.compile(r"FORMULA \S+ (TRUE|FALSE)\b")
 MAYBE_PATTERN = re.compile(r"Query is MAYBE satisfied")
 STATES_EXPLORED_PATTERN = re.compile(r"explored states:\s+(\d+)")
@@ -262,7 +266,15 @@ def run_verifypn(
         query_path.write_text(query_pql + "\n", encoding="utf-8")
         started = time.monotonic()
         completed = subprocess.run(  # noqa: S603 - fixed argv, no shell
-            [executable, str(model_path), str(query_path), "-t", "2", "-n", "1"],
+            [
+                executable,
+                str(model_path),
+                str(query_path),
+                "-t",
+                TRACE_XML_ARGUMENT,
+                "-n",
+                EXPLORED_STATES_ARGUMENT,
+            ],
             capture_output=True,
             text=True,
             timeout=timeout_seconds,
@@ -385,6 +397,8 @@ def main() -> None:  # pragma: no cover - the container serving loop
     """Serve the verifypn engine until the container stops."""
     timeout = float(os.environ.get(ENGINE_TIMEOUT_VARIABLE, DEFAULT_ENGINE_TIMEOUT_SECONDS))
     server = ThreadingHTTPServer((SERVER_HOST, SERVER_PORT), VerifypnHandler)
+    # ThreadingHTTPServer declares no engine_timeout attribute; the handler
+    # reads it back with getattr(self.server, "engine_timeout", default).
     server.engine_timeout = timeout  # type: ignore[attr-defined]
     server.daemon_threads = True
     logger.info(
