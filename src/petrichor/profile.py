@@ -13,11 +13,9 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
 from petrichor.llm.schemas import SemanticProfile
+lazy from petrichor.session_store import SessionId
 
 logger = structlog.get_logger(__name__)
-
-ArbitrationId = NewType("ArbitrationId", str)
-"""An arbitration identifier, e.g. ``arb_7c2a9f``."""
 
 EntryId = NewType("EntryId", str)
 """A semantic-profile entry identifier, e.g. ``think``."""
@@ -28,8 +26,6 @@ GroupId = NewType("GroupId", str)
 QuestionKind = NewType("QuestionKind", str)
 """The kind of an arbitrated question covering a group, e.g. ``section_critique``."""
 
-ARBITRATION_ID_PREFIX = "arb_"
-ARBITRATION_ID_HEX_DIGITS = 6
 GROUP_ID_PREFIX = "grp_"
 
 
@@ -84,9 +80,9 @@ class ProfileArbitrator:
     def __init__(self) -> None:
         """Start with no profile state."""
         self._lock = threading.Lock()
-        self._states: dict[str, ProfileState] = {}
+        self._states: dict[SessionId, ProfileState] = {}
 
-    def propose(self, *, session_id: str, profile: SemanticProfile) -> ProfileState:
+    def propose(self, *, session_id: SessionId, profile: SemanticProfile) -> ProfileState:
         """Register a proposed profile for a session; groups derived from entries."""
         groups = tuple(
             CoverageGroup(
@@ -107,7 +103,9 @@ class ProfileArbitrator:
         )
         return state
 
-    def arbitrate(self, *, session_id: str, decision: ArbitrationDecision) -> ProfileState | None:
+    def arbitrate(
+        self, *, session_id: SessionId, decision: ArbitrationDecision
+    ) -> ProfileState | None:
         """Apply one human arbitration; None if the session has no proposed profile."""
         with self._lock:
             state = self._states.get(session_id)
@@ -148,13 +146,13 @@ class ProfileArbitrator:
         )
         return updated
 
-    def get(self, *, session_id: str) -> ProfileState | None:
+    def get(self, *, session_id: SessionId) -> ProfileState | None:
         """Return the profile state of a session, or None."""
         with self._lock:
             return self._states.get(session_id)
 
     def mark_covered(
-        self, *, session_id: str, group_id: GroupId, question_kind: QuestionKind
+        self, *, session_id: SessionId, group_id: GroupId, question_kind: QuestionKind
     ) -> None:
         """Mark a coverage group as covered by an arbitrated question."""
         with self._lock:

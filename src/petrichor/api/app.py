@@ -920,7 +920,7 @@ def _get_session_profile(
     session_id: str,
 ) -> Iterable[bytes]:
     """Read the proposed + arbitrated profile of a session (spec §14)."""
-    state = arbitrator.get(session_id=session_id)
+    state = arbitrator.get(session_id=SessionId(session_id))
     if state is None:
         return _problem_response(
             start_response=start_response,
@@ -975,7 +975,7 @@ def _post_profile_arbitration(
                 detail=f"The arbitration body is invalid: {error}",
             ),
         )
-    state = arbitrator.arbitrate(session_id=session_id, decision=decision)
+    state = arbitrator.arbitrate(session_id=SessionId(session_id), decision=decision)
     if state is None:
         return _problem_response(
             start_response=start_response,
@@ -1004,7 +1004,7 @@ def _get_session_coverage(
     session_id: str,
 ) -> Iterable[bytes]:
     """Coverage groups of a session; uncovered ones are re-seeding targets (spec §14)."""
-    state = arbitrator.get(session_id=session_id)
+    state = arbitrator.get(session_id=SessionId(session_id))
     if state is None:
         return _problem_response(
             start_response=start_response,

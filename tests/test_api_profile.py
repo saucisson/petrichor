@@ -21,7 +21,7 @@ from petrichor.profile import (
     QuestionKind,
 )
 from petrichor.run_store import RunStore
-from petrichor.session_store import SessionStore
+from petrichor.session_store import SessionId, SessionStore
 
 FIXTURES = Path(__file__).parent / "fixtures"
 PHILOSOPHES3_PNML = (FIXTURES / "philosophes3.pnml").read_text(encoding="utf-8")
@@ -114,7 +114,7 @@ def test_get_profile_returns_proposed_entries(tmp_path: Path) -> None:
     client, arbitrator = build_client(tmp_path)
     model_id = import_model(client)
     session_id = create_session(client, model_id)
-    arbitrator.propose(session_id=session_id, profile=sample_profile())
+    arbitrator.propose(session_id=SessionId(session_id), profile=sample_profile())
     response = client.get(f"/v1/sessions/{session_id}/profile", headers=AUTH_HEADERS)
     assert response.status_code == 200
     body = response.json()
@@ -128,7 +128,7 @@ def test_post_arbitration_accepts_role(tmp_path: Path) -> None:
     client, arbitrator = build_client(tmp_path)
     model_id = import_model(client)
     session_id = create_session(client, model_id)
-    arbitrator.propose(session_id=session_id, profile=sample_profile())
+    arbitrator.propose(session_id=SessionId(session_id), profile=sample_profile())
     decision = ArbitrationDecision(
         entry_id=EntryId("eat"), accepted=True, chosen_role="section critique"
     )
@@ -149,7 +149,7 @@ def test_post_arbitration_rejects_wrong_role(tmp_path: Path) -> None:
     client, arbitrator = build_client(tmp_path)
     model_id = import_model(client)
     session_id = create_session(client, model_id)
-    arbitrator.propose(session_id=session_id, profile=sample_profile())
+    arbitrator.propose(session_id=SessionId(session_id), profile=sample_profile())
     decision = ArbitrationDecision(
         entry_id=EntryId("think"), accepted=False, chosen_role="etat d'automate"
     )
@@ -172,7 +172,7 @@ def test_no_role_applied_without_arbitration(tmp_path: Path) -> None:
     client, arbitrator = build_client(tmp_path)
     model_id = import_model(client)
     session_id = create_session(client, model_id)
-    state = arbitrator.propose(session_id=session_id, profile=sample_profile())
+    state = arbitrator.propose(session_id=SessionId(session_id), profile=sample_profile())
     # Before any arbitration, groups exist but none are covered
     assert len(state.groups) == 3
     assert all(not g.covered_by for g in state.groups)
@@ -187,7 +187,7 @@ def test_get_coverage_exposes_uncovered_groups(tmp_path: Path) -> None:
     client, arbitrator = build_client(tmp_path)
     model_id = import_model(client)
     session_id = create_session(client, model_id)
-    arbitrator.propose(session_id=session_id, profile=sample_profile())
+    arbitrator.propose(session_id=SessionId(session_id), profile=sample_profile())
     response = client.get(f"/v1/sessions/{session_id}/coverage", headers=AUTH_HEADERS)
     assert response.status_code == 200
     body = response.json()
@@ -200,9 +200,9 @@ def test_coverage_after_mark_covered(tmp_path: Path) -> None:
     client, arbitrator = build_client(tmp_path)
     model_id = import_model(client)
     session_id = create_session(client, model_id)
-    arbitrator.propose(session_id=session_id, profile=sample_profile())
+    arbitrator.propose(session_id=SessionId(session_id), profile=sample_profile())
     arbitrator.mark_covered(
-        session_id=session_id,
+        session_id=SessionId(session_id),
         group_id=GroupId("grp_eat"),
         question_kind=QuestionKind("section_critique"),
     )
@@ -219,7 +219,7 @@ def test_post_arbitration_invalid_body_returns_422(tmp_path: Path) -> None:
     client, arbitrator = build_client(tmp_path)
     model_id = import_model(client)
     session_id = create_session(client, model_id)
-    arbitrator.propose(session_id=session_id, profile=sample_profile())
+    arbitrator.propose(session_id=SessionId(session_id), profile=sample_profile())
     response = client.post(
         f"/v1/sessions/{session_id}/profile/arbitrate",
         content=json.dumps({"entry_id": "eat"}),
@@ -234,7 +234,7 @@ def test_profile_endpoints_require_auth(tmp_path: Path) -> None:
     client, arbitrator = build_client(tmp_path)
     model_id = import_model(client)
     session_id = create_session(client, model_id)
-    arbitrator.propose(session_id=session_id, profile=sample_profile())
+    arbitrator.propose(session_id=SessionId(session_id), profile=sample_profile())
     for path in (
         f"/v1/sessions/{session_id}/profile",
         f"/v1/sessions/{session_id}/coverage",
@@ -251,7 +251,7 @@ def test_profile_narration_events(tmp_path: Path) -> None:
     model_id = import_model(client)
     session_id = create_session(client, model_id)
     with structlog.testing.capture_logs() as logs:
-        arbitrator.propose(session_id=session_id, profile=sample_profile())
+        arbitrator.propose(session_id=SessionId(session_id), profile=sample_profile())
         client.get(f"/v1/sessions/{session_id}/profile", headers=AUTH_HEADERS)
         decision = ArbitrationDecision(
             entry_id="eat", accepted=True, chosen_role="section critique"
@@ -265,6 +265,7 @@ def test_profile_narration_events(tmp_path: Path) -> None:
     events = [log["event"] for log in logs]
     assert "profile_proposed" in events
     assert "api_profile_read" in events
+    assert "profile_arbitrated" in events
     assert "api_profile_arbitrated" in events
     assert "api_coverage_read" in events
 
@@ -292,7 +293,7 @@ def test_propose_creates_one_group_per_entry(entries: list[ProfileEntry]) -> Non
     """Property: propose() always creates exactly one coverage group per profile entry."""
     arbitrator = ProfileArbitrator()
     profile = SemanticProfile(entries=tuple(entries))
-    state = arbitrator.propose(session_id="ses_test", profile=profile)
+    state = arbitrator.propose(session_id=SessionId("ses_test"), profile=profile)
     assert len(state.groups) == len(entries)
     assert all(not g.covered_by for g in state.groups)
 
@@ -319,12 +320,12 @@ def test_arbitrate_is_idempotent_for_same_entry(
             ),
         )
     )
-    arbitrator.propose(session_id="ses_test", profile=profile)
+    arbitrator.propose(session_id=SessionId("ses_test"), profile=profile)
     decision = ArbitrationDecision(
         entry_id=EntryId(entry_id), accepted=accepted, chosen_role=chosen_role
     )
-    first = arbitrator.arbitrate(session_id="ses_test", decision=decision)
-    second = arbitrator.arbitrate(session_id="ses_test", decision=decision)
+    first = arbitrator.arbitrate(session_id=SessionId("ses_test"), decision=decision)
+    second = arbitrator.arbitrate(session_id=SessionId("ses_test"), decision=decision)
     assert first is not None
     assert second is not None
     assert len(second.arbitrations) == 1
@@ -338,17 +339,40 @@ def test_uncovered_groups_inverse_of_covered(*, covered: bool) -> None:
     profile = SemanticProfile(
         entries=(ProfileEntry(id="x", elements="e", role="r", conf=0.5, evidence="ev"),)
     )
-    arbitrator.propose(session_id="ses_test", profile=profile)
+    arbitrator.propose(session_id=SessionId("ses_test"), profile=profile)
     if covered:
         arbitrator.mark_covered(
-            session_id="ses_test",
+            session_id=SessionId("ses_test"),
             group_id=GroupId("grp_x"),
             question_kind=QuestionKind("q"),
         )
-    state = arbitrator.get(session_id="ses_test")
+    state = arbitrator.get(session_id=SessionId("ses_test"))
     assert state is not None
     uncovered = state.uncovered_groups()
     if covered:
         assert len(uncovered) == 0
     else:
         assert len(uncovered) == 1
+
+
+def test_profile_domain_narration_events(tmp_path: Path) -> None:
+    """The domain narration events are pinned: profile_group_covered, profile_already_arbitrated."""
+    client, arbitrator = build_client(tmp_path)
+    model_id = import_model(client)
+    session_id = create_session(client, model_id)
+    with structlog.testing.capture_logs() as logs:
+        arbitrator.propose(session_id=SessionId(session_id), profile=sample_profile())
+        arbitrator.mark_covered(
+            session_id=SessionId(session_id),
+            group_id=GroupId("grp_eat"),
+            question_kind=QuestionKind("section_critique"),
+        )
+        decision = ArbitrationDecision(
+            entry_id=EntryId("eat"), accepted=True, chosen_role="section critique"
+        )
+        arbitrator.arbitrate(session_id=SessionId(session_id), decision=decision)
+        # Re-arbitrate the same entry to trigger the warning
+        arbitrator.arbitrate(session_id=SessionId(session_id), decision=decision)
+    events = [log["event"] for log in logs]
+    assert "profile_group_covered" in events
+    assert "profile_already_arbitrated" in events
