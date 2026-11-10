@@ -19,6 +19,7 @@ import structlog
 from petrichor.api import create_app
 from petrichor.api.settings import ApiSettings
 from petrichor.model_store import ModelStore
+from petrichor.profile import ProfileArbitrator
 from petrichor.run_store import RunStore
 from petrichor.session_store import SessionStore
 
@@ -36,7 +37,12 @@ def configure_logging() -> None:
 
 
 def build_server(
-    *, settings: ApiSettings, store: ModelStore, run_store: RunStore, session_store: SessionStore
+    *,
+    settings: ApiSettings,
+    store: ModelStore,
+    run_store: RunStore,
+    session_store: SessionStore,
+    arbitrator: ProfileArbitrator,
 ) -> WSGIServer:
     """Assemble the WSGI server around the application."""
     app = create_app(
@@ -45,6 +51,7 @@ def build_server(
         run_store=run_store,
         runner=None,
         session_store=session_store,
+        arbitrator=arbitrator,
     )
     return make_server(DEFAULT_HOST, DEFAULT_PORT, app)
 
@@ -55,11 +62,13 @@ def main() -> None:
     logger = structlog.get_logger(__name__)
     settings = ApiSettings()
     session_store = SessionStore(directory=Path(DEFAULT_SESSIONS_DIRECTORY))
+    arbitrator = ProfileArbitrator()
     server = build_server(
         settings=settings,
         store=ModelStore(),
         run_store=RunStore(),
         session_store=session_store,
+        arbitrator=arbitrator,
     )
     logger.info("api_server_started", host=DEFAULT_HOST, port=DEFAULT_PORT)
     server.serve_forever()  # pragma: no cover - the serving loop is the entry point
