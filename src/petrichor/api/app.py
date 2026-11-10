@@ -55,6 +55,7 @@ from petrichor.petri_canonical import (
 )
 from petrichor.pnml_import import PnmlImportError, import_pnml
 from petrichor.run_store import BudgetRefused, RunAdmission, RunStore
+from petrichor.session_store import SessionId, SessionStore
 
 if TYPE_CHECKING:
     from petrichor.api.settings import ApiSettings
@@ -68,6 +69,9 @@ MODELS_PATH = "/v1/models"
 MODEL_PATH_PREFIX = "/v1/models/"
 CHECKS_PATH_PREFIX = "/v1/checks/"
 RUNS_PATH_PREFIX = "/v1/runs/"
+SESSIONS_PATH = "/v1/sessions"
+SESSION_PATH_PREFIX = "/v1/sessions/"
+SESSION_JOURNAL_SUFFIX = "/journal"
 CONTENT_TYPE_PNML = "application/pnml+xml"
 CONTENT_TYPE_JSON = "application/json"
 CONTENT_TYPE_PETRI_JSON = "application/petri+json; version=1.0"
@@ -708,12 +712,237 @@ def _dispatch_checks_and_runs(
     return None
 
 
+def _post_session(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    store: ModelStore,
+    session_store: SessionStore,
+) -> Iterable[bytes]:
+    """Create a new session for a model: 201 + Location (spec §4)."""
+    content_type = _media_type(header_value=environ.get("CONTENT_TYPE"))
+    if content_type != CONTENT_TYPE_JSON:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+                reason="unsupported_media_type",
+                detail=f"POST {SESSIONS_PATH} expects Content-Type {CONTENT_TYPE_JSON}.",
+            ),
+        )
+    try:
+        length = int(environ.get("CONTENT_LENGTH", "") or 0)
+    except ValueError:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.BAD_REQUEST,
+                reason="invalid_content_length",
+                detail="The Content-Length header is not an integer.",
+            ),
+        )
+    body = environ["wsgi.input"].read(length)
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.UNPROCESSABLE_ENTITY,
+                reason="invalid_json",
+                detail=f"The body is not valid JSON: {error}",
+            ),
+        )
+    if not isinstance(payload, dict) or not isinstance(payload.get("model_id"), str):
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.UNPROCESSABLE_ENTITY,
+                reason="invalid_session_request",
+                detail='The body must be a JSON object with a "model_id" string field.',
+            ),
+        )
+    model_id = ModelId(payload["model_id"])
+    if store.get(model_id=model_id) is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="model_not_found",
+                detail=f"No model with id {model_id!r}.",
+            ),
+        )
+    session = session_store.create(model_id=model_id)
+    logger.debug("api_session_created", session_id=session.session_id, model_id=str(model_id))
+    body_out = json.dumps(session.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.CREATED,
+        content_type=CONTENT_TYPE_JSON,
+        body=body_out.encode("utf-8"),
+        extra_headers=[("Location", f"{SESSIONS_PATH}/{session.session_id}")],
+    )
+
+
+def _get_sessions(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    session_store: SessionStore,
+) -> Iterable[bytes]:
+    """List every session, in creation order (spec §4)."""
+    sessions = session_store.list_all()
+    logger.debug("api_sessions_listed", count=len(sessions))
+    body = json.dumps(
+        [s.model_dump(mode="json") for s in sessions], sort_keys=True, separators=(",", ":")
+    )
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.OK,
+        content_type=CONTENT_TYPE_JSON,
+        body=body.encode("utf-8"),
+    )
+
+
+def _get_session(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    session_store: SessionStore,
+    session_id: str,
+) -> Iterable[bytes]:
+    """Read one session with its full serialized state (spec §4)."""
+    session = session_store.get(session_id=SessionId(session_id))
+    if session is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="session_not_found",
+                detail=f"No session with id {session_id!r}.",
+            ),
+        )
+    logger.debug("api_session_read", session_id=session.session_id)
+    body = json.dumps(session.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.OK,
+        content_type=CONTENT_TYPE_JSON,
+        body=body.encode("utf-8"),
+    )
+
+
+def _get_session_journal(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    session_store: SessionStore,
+    session_id: str,
+) -> Iterable[bytes]:
+    """Export the append-only timestamped journal of one session (spec §4)."""
+    session = session_store.get(session_id=SessionId(session_id))
+    if session is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="session_not_found",
+                detail=f"No session with id {session_id!r}.",
+            ),
+        )
+    entries = session_store.journal(session_id=SessionId(session_id))
+    logger.debug("api_session_journal_exported", session_id=session_id, entries=len(entries))
+    body = json.dumps(
+        [e.model_dump(mode="json") for e in entries], sort_keys=True, separators=(",", ":")
+    )
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.OK,
+        content_type=CONTENT_TYPE_JSON,
+        body=body.encode("utf-8"),
+    )
+
+
+def _dispatch_sessions(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    method: str,
+    path: str,
+    store: ModelStore,
+    session_store: SessionStore,
+) -> Iterable[bytes] | None:
+    """Route the /v1/sessions resources, or return None when the path is not one."""
+    result: Iterable[bytes] | None = None
+    if path == SESSIONS_PATH:
+        if method == "POST":
+            result = _post_session(
+                environ=environ,
+                start_response=start_response,
+                store=store,
+                session_store=session_store,
+            )
+        elif method == "GET":
+            result = _get_sessions(
+                environ=environ, start_response=start_response, session_store=session_store
+            )
+        else:
+            result = _problem_response(
+                start_response=start_response,
+                environ=environ,
+                payload=_problem(
+                    status=HTTPStatus.METHOD_NOT_ALLOWED,
+                    reason="method_not_allowed",
+                    detail=f"{method} is not supported on {SESSIONS_PATH}.",
+                ),
+            )
+    elif path.startswith(SESSION_PATH_PREFIX):
+        remainder = path.removeprefix(SESSION_PATH_PREFIX)
+        if remainder.endswith(SESSION_JOURNAL_SUFFIX):
+            session_id = remainder[: -len(SESSION_JOURNAL_SUFFIX)]
+            if method == "GET" and session_id and "/" not in session_id:
+                result = _get_session_journal(
+                    environ=environ,
+                    start_response=start_response,
+                    session_store=session_store,
+                    session_id=session_id,
+                )
+        elif method == "GET" and remainder and "/" not in remainder:
+            result = _get_session(
+                environ=environ,
+                start_response=start_response,
+                session_store=session_store,
+                session_id=remainder,
+            )
+        if result is None:
+            result = _problem_response(
+                start_response=start_response,
+                environ=environ,
+                payload=_problem(
+                    status=(
+                        HTTPStatus.METHOD_NOT_ALLOWED if method != "GET" else HTTPStatus.NOT_FOUND
+                    ),
+                    reason=("method_not_allowed" if method != "GET" else "session_not_found"),
+                    detail=f"No resource at {path}.",
+                ),
+            )
+    return result
+
+
 def create_app(
     *,
     settings: ApiSettings,
     store: ModelStore,
     run_store: RunStore,
     runner: CheckRunner | None,
+    session_store: SessionStore | None = None,
 ) -> WSGIApp:
     """Build the WSGI application: auth first, then routing and negotiation."""
 
@@ -745,6 +974,15 @@ def create_app(
                 store=store,
                 run_store=run_store,
                 runner=runner,
+            )
+        if routed is None and session_store is not None:
+            routed = _dispatch_sessions(
+                environ=environ,
+                start_response=start_response,
+                method=method,
+                path=path,
+                store=store,
+                session_store=session_store,
             )
         if routed is not None:
             return routed
