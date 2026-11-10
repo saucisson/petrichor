@@ -61,3 +61,32 @@ services:
       retries: 3
       start_period: 2s
     restart: "no"
+  its-tools:
+    build:
+      context: .
+      dockerfile: Dockerfile.its-tools
+    image: petrichor-engine-its-tools:10052022
+    user: "65534:65534"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    ports:
+      - "127.0.0.1:${ITS_TOOLS_HOST_PORT:-18082}:8080"
+    environment:
+      ENGINE_TIMEOUT: ${ENGINE_TIMEOUT:-30}
+      PYTHONDONTWRITEBYTECODE: "1"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2)"
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 2s
+    restart: "no"
