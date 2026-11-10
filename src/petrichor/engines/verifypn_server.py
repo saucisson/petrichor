@@ -330,11 +330,16 @@ def handle_check(*, body: bytes, timeout_seconds: int) -> tuple[int, bytes]:
             raise HttpError(status=500, detail=detail) from error
         if returncode != 0:
             raise HttpError(status=500, detail=f"verifypn failed: {stderr.strip()[:500]}")
+        try:
+            output = build_normalized_output(
+                stdout=stdout, stderr=stderr, model=model, tool_seconds=tool_seconds
+            )
+        except QuestionError as error:
+            # Exit 0 with malformed stdout (no FORMULA line, inconsistent
+            # trace): an engine contract violation, never a dropped connection.
+            raise HttpError(status=500, detail=f"verifypn output invalid: {error}") from error
     except HttpError as error:
         return error.status, json.dumps({"detail": error.detail}).encode("utf-8")
-    output = build_normalized_output(
-        stdout=stdout, stderr=stderr, model=model, tool_seconds=tool_seconds
-    )
     return 200, json.dumps(output, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
