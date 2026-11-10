@@ -93,6 +93,7 @@ LOG_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 DEFAULT_MAXIMUM_SESSION_TURNS = 100
 DEFAULT_SESSION_TIME_LIMIT_SECONDS = 3600
 DEFAULT_SESSION_HEARTBEAT_SECONDS = 60
+HEARTBEAT_POLL_INTERVAL_SECONDS = 1
 DEFAULT_MAXIMUM_SESSIONS = 10
 DEFAULT_CANDIDATE_COUNT = 10
 OPEN_ISSUES_PAGE_SIZE = 100
@@ -535,7 +536,7 @@ def run_developer_session(
     if heartbeat_seconds > 0:
         next_heartbeat_at = time.monotonic() + heartbeat_seconds
         while process.poll() is None:
-            time.sleep(min(1, heartbeat_seconds))
+            time.sleep(min(HEARTBEAT_POLL_INTERVAL_SECONDS, heartbeat_seconds))
             if process.poll() is not None:
                 break
             if time.monotonic() >= next_heartbeat_at:

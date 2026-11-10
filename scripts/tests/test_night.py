@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import shutil
 import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -808,3 +809,64 @@ def test_run_explicit_directive_skips_issues_outside_the_milestones(
     )
     assert len(sessions) == 1
     assert any("not in the requested milestones" in result for result in journal.summary_lines)
+
+
+def test_describe_claimed_items_names_claimed_issues() -> None:
+    """Items that left the worklist and carry the claim label are named."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/issues/12" in request.url.path:
+            return httpx.Response(
+                200, json=issue_payload(number=12, labels=[{"name": "night-claimed"}])
+            )
+        return httpx.Response(200, json=issue_payload(number=13))
+
+    claimed = night.describe_claimed_items(
+        http_client=client_with(handler),
+        repository_slug="o/r",
+        keys={("issue", 12), ("issue", 13)},
+    )
+    assert claimed == ["#12"]
+
+
+def test_heartbeat_argument_defaults_to_60() -> None:
+    """The --heartbeat flag defaults to 60 seconds."""
+    arguments = parse_night_arguments([])
+    assert arguments.heartbeat == 60
+
+
+def test_heartbeat_argument_accepts_zero_to_disable() -> None:
+    """--heartbeat 0 disables the heartbeat."""
+    arguments = parse_night_arguments(["--heartbeat", "0"])
+    assert arguments.heartbeat == 0
+
+
+def test_run_uses_night_sessions_directory(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Session prompts are persisted under .night/sessions/<run>/, not a tempdir."""
+    captured: list[Path] = []
+
+    def fake_run_explicit(**kwargs: object) -> None:
+        prompt_directory = kwargs["prompt_directory"]
+        assert isinstance(prompt_directory, Path)
+        captured.append(prompt_directory)
+
+    monkeypatch.setattr(night, "run_explicit_directive", fake_run_explicit)
+    monkeypatch.setattr(night, "load_github_token", lambda: "token")
+    monkeypatch.setattr(night, "resolve_repository_slug", lambda: "o/r")
+    monkeypatch.setattr(night, "load_prompt_template", lambda *, template_path: "T {{issue}}")
+    monkeypatch.setattr(shutil, "which", lambda _: "/usr/bin/vibe")
+
+    class FakeClient:
+        def __enter__(self) -> FakeClient:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            pass
+
+    monkeypatch.setattr(night, "open_github_client", lambda *, token: FakeClient())  # noqa: PLW0108
+    monkeypatch.setattr(night, "REPOSITORY_ROOT", tmp_path)
+
+    arguments = parse_night_arguments(["--issues", "12"])
+    night.run(arguments=arguments)
+    assert len(captured) == 1
+    assert ".night/sessions" in str(captured[0])
