@@ -1,0 +1,46 @@
+# ITS-Tools engine image (spec §19.4; issue #21): built locally only
+# (GPL-3 engine, not redistributed), source pinned to the v10052022 tag,
+# non-root user, standard-library-only Python payload.
+# ITS-Tools embeds LTSmin and Spot — never paired with them in
+# cross-verification (spec §17.4). LTL queries are stutter-sensitive.
+# Built from source with Maven (Tycho) — ITS-Tools is an Eclipse RCP app.
+ARG ITS_TOOLS_TAG=v10052022
+
+FROM maven:3.9-eclipse-temurin-21 AS builder
+ARG ITS_TOOLS_TAG
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        git \
+    && rm -rf /var/lib/apt/lists/* \
+    && git clone --depth 1 --branch "${ITS_TOOLS_TAG}" \
+        https://github.com/yanntm/ITSTools.git /src/its-tools \
+    && cd /src/its-tools \
+    && mvn -q -DskipTests package \
+    && mkdir -p /opt/its-tools \
+    && find . -name "its*.jar" -path "*/target/*" -exec cp {} /opt/its-tools/ \; \
+    && cp -r plugins /opt/its-tools/ 2>/dev/null || true
+
+FROM python:3.15-slim AS runtime
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        default-jre-headless \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --uid 65534 nobody
+
+COPY --from=builder /opt/its-tools /opt/its-tools
+ENV PATH="/opt/its-tools/bin:${PATH}"
+ENV JAVA_HOME="/usr/lib/jvm/default-java"
+
+WORKDIR /app
+COPY src/petrichor/engines/its_tools_server.py /app/its_tools_server.py
+COPY src/petrichor/engines/pnml_export.py /app/pnml_export.py
+COPY src/petrichor/engines/__init__.py /app/__init__.py
+
+USER 65534:65534
+EXPOSE 8080
+HEALTHCHECK --interval=5s --timeout=3s --retries=3 --start-period=2s \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2)"
+CMD ["python", "-m", "its_tools_server"]
