@@ -34,11 +34,14 @@ on. The verdicts live in the repository (``WORKLOG.md``, the pull
 requests, the issues) for the morning audit.
 
 Output has two channels (ADR-0017): stdout is the short, readable
-summary - one line per session and one verdict at the end - and each
-session's final answer is printed as plain text, never as a JSON dump.
-The verbose trace (full candidate lists, anti-spin decisions, fetch
-warnings) lands in ``.night/night-loop.log`` (override it with
-``NIGHT_LOG_FILE``). The morning audit reads the terminal; the
+summary - one line per session (naming the item the session claimed)
+and one verdict at the end - while the verbose trace (full candidate
+lists, anti-spin decisions, fetch warnings, a heartbeat per running
+session) lands in ``.night/night-loop.log`` (override it with
+``NIGHT_LOG_FILE``). Every session prompt is kept under
+``.night/sessions/<run>/`` for the morning audit, and a running
+session logs a heartbeat every ``NIGHT_HEARTBEAT_SECONDS`` (default
+60, 0 disables it). The morning audit reads the terminal; the
 post-mortem reads the log.
 """
 
@@ -49,7 +52,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, NewType
@@ -85,15 +87,19 @@ SESSION_TIME_LIMIT_VARIABLE = "NIGHT_TIME_LIMIT_SECONDS"
 NIGHT_MAXIMUM_SESSIONS_VARIABLE = "NIGHT_MAX_SESSIONS"
 NIGHT_CANDIDATES_VARIABLE = "NIGHT_CANDIDATES"
 NIGHT_LOG_FILE_VARIABLE = "NIGHT_LOG_FILE"
+NIGHT_HEARTBEAT_VARIABLE = "NIGHT_HEARTBEAT_SECONDS"
 DEFAULT_NIGHT_LOG_FILE_NAME = ".night/night-loop.log"
 LOG_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 DEFAULT_MAXIMUM_SESSION_TURNS = 100
 DEFAULT_SESSION_TIME_LIMIT_SECONDS = 3600
+DEFAULT_SESSION_HEARTBEAT_SECONDS = 60
 DEFAULT_MAXIMUM_SESSIONS = 10
 DEFAULT_CANDIDATE_COUNT = 10
 OPEN_ISSUES_PAGE_SIZE = 100
 OPEN_PULL_REQUESTS_PAGE_SIZE = 100
 DAILY_BRANCH_NAME = "daily"
+PROMPTS_DIRECTORY_NAME = ".night/sessions"
+RUN_DIRECTORY_FORMAT = "%Y%m%d-%H%M%S"
 NIGHT_HEAD_BRANCH_PATTERN = re.compile(r"^(?:feat|fix)/(\d+)(?:-.*)?$", re.ASCII)
 TRIAGE_SKIP_LABELS = ("blocked", "needs-human", CLAIM_LABEL_NAME)
 OPEN_STATE_FILTER = "open"
@@ -434,6 +440,29 @@ def describe_auto_candidates(
     return ", ".join(descriptions)
 
 
+def describe_claimed_items(
+    *,
+    http_client: httpx.Client,
+    repository_slug: str,
+    keys: set[tuple[str, int]],
+) -> list[str]:
+    """Name the items a session claimed: they left the fresh worklist.
+
+    The result line names what the session actually did, so the
+    morning audit can follow one session without opening the log.
+    """
+    claimed: list[str] = []
+    for _kind, number in sorted(keys, key=lambda key: (key[0], key[1])):
+        item = fetch_issue(
+            http_client=http_client,
+            repository_slug=repository_slug,
+            issue_number=IssueIdentifier(number),
+        )
+        if item is not None and item_has_claim_label(item=item):
+            claimed.append(f"#{number}")
+    return claimed
+
+
 def load_prompt_template(*, template_path: str) -> str:
     """Load a versioned night-session prompt (ADR-0017); missing fails closed."""
     resolved_path = REPOSITORY_ROOT / template_path
@@ -453,18 +482,14 @@ def build_prompt(*, template: str, placeholder: str, replacement: str) -> str:
     return f"{template}\n\n{replacement}\n"
 
 
-def run_developer_session(
+def build_session_command(
     *,
     prompt_path: Path,
     maximum_session_turns: int,
     session_time_limit_seconds: int,
-) -> tuple[int, int]:
-    """Run one headless developer session; return (exit code, seconds).
-
-    The session's final answer lands on the loop's stdout as readable
-    text (``--output text``) - never as a JSON dump at the end.
-    """
-    command = [
+) -> list[str]:
+    """Build the headless session command: text output, bounded budget."""
+    return [
         DEVELOPER_CLI_COMMAND,
         "--prompt-file",
         str(prompt_path),
@@ -475,13 +500,56 @@ def run_developer_session(
         "--time-limit",
         str(session_time_limit_seconds),
     ]
+
+
+def run_developer_session(
+    *,
+    prompt_path: Path,
+    maximum_session_turns: int,
+    session_time_limit_seconds: int,
+    session_label: str,
+    journal: NightJournal,
+    heartbeat_seconds: int,
+) -> tuple[int, int]:
+    """Run one headless developer session; return (exit code, seconds).
+
+    The session runs with ``--output text``: only the final answer is
+    printed, as readable text - ``--output json`` would dump the whole
+    session as one JSON block on stdout, which the loop never parses.
+    The session's stdout is inherited: what the agent prints lands in
+    the loop's terminal as it happens. The heartbeat keeps the trace
+    alive while the session itself stays silent: every
+    ``heartbeat_seconds`` (0 disables it) the loop logs that the
+    session is still running and how much of its budget is spent.
+    """
+    command = build_session_command(
+        prompt_path=prompt_path,
+        maximum_session_turns=maximum_session_turns,
+        session_time_limit_seconds=session_time_limit_seconds,
+    )
     developer_model = os.environ.get(NIGHT_MODEL_VARIABLE, "").strip()
     if developer_model:
         command.extend(["--model", developer_model])
     started_at = time.monotonic()
-    completed_process = subprocess.run(command, cwd=REPOSITORY_ROOT, check=False)
+    process = subprocess.Popen(command, cwd=REPOSITORY_ROOT)
+    if heartbeat_seconds > 0:
+        next_heartbeat_at = time.monotonic() + heartbeat_seconds
+        while process.poll() is None:
+            time.sleep(min(1, heartbeat_seconds))
+            if process.poll() is not None:
+                break
+            if time.monotonic() >= next_heartbeat_at:
+                elapsed_seconds = int(time.monotonic() - started_at)
+                journal.log(
+                    text=(
+                        f"{session_label}: still running, {elapsed_seconds}s elapsed"
+                        f" (budget {session_time_limit_seconds}s)"
+                    ),
+                )
+                next_heartbeat_at = time.monotonic() + heartbeat_seconds
+    exit_code = process.wait()
     elapsed_seconds = int(time.monotonic() - started_at)
-    return completed_process.returncode, elapsed_seconds
+    return exit_code, elapsed_seconds
 
 
 def format_duration(*, seconds: int) -> str:
@@ -581,6 +649,18 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         ),
         help="Auto-discovery only: issues listed in each session's worklist.",
     )
+    subparser.add_argument(
+        "--heartbeat",
+        type=int,
+        default=read_integer_setting(
+            variable_name=NIGHT_HEARTBEAT_VARIABLE,
+            default_value=DEFAULT_SESSION_HEARTBEAT_SECONDS,
+        ),
+        help=(
+            "Seconds between 'still running' trace entries per session"
+            f" (0 disables it, default {DEFAULT_SESSION_HEARTBEAT_SECONDS})."
+        ),
+    )
     subparser.set_defaults(runner=run)
 
 
@@ -636,7 +716,21 @@ def run_explicit_directive(
             prompt_path=prompt_path,
             maximum_session_turns=arguments.max_turns,
             session_time_limit_seconds=arguments.time_limit,
+            session_label=f"issue #{issue_number}",
+            journal=journal,
+            heartbeat_seconds=arguments.heartbeat,
         )
+        fresh_issue = fetch_issue(
+            http_client=http_client,
+            repository_slug=repository_slug,
+            issue_number=issue_number,
+        )
+        claim_outcome = (
+            "claim label present after the session"
+            if fresh_issue is not None and item_has_claim_label(item=fresh_issue)
+            else "claim label NOT present after the session"
+        )
+        journal.log(text=f"issue #{issue_number}: {claim_outcome}")
         print(f"Session exited {exit_code} after {format_duration(seconds=elapsed_seconds)}.")
         journal.record(
             line=(
@@ -717,22 +811,11 @@ def run_auto_discovered_sessions(
             prompt_path=prompt_path,
             maximum_session_turns=arguments.max_turns,
             session_time_limit_seconds=arguments.time_limit,
+            session_label=f"session {sessions_started + 1}",
+            journal=journal,
+            heartbeat_seconds=arguments.heartbeat,
         )
         sessions_started += 1
-        print(
-            f"Session {sessions_started}: exit {exit_code}"
-            f" in {format_duration(seconds=elapsed_seconds)}."
-        )
-        journal.record(
-            line=(
-                f"Session {sessions_started}: exit {exit_code}"
-                f" in {format_duration(seconds=elapsed_seconds)}"
-            ),
-            text=(
-                f"session {sessions_started}: exit {exit_code}"
-                f" after {format_duration(seconds=elapsed_seconds)}"
-            ),
-        )
         fresh_issues = fetch_candidate_issues(
             http_client=http_client,
             repository_slug=repository_slug,
@@ -747,6 +830,26 @@ def run_auto_discovered_sessions(
         )
         candidate_keys = auto_candidate_keys(issues=issues, pull_requests=pull_requests)
         fresh_keys = auto_candidate_keys(issues=fresh_issues, pull_requests=fresh_pull_requests)
+        claimed_items = describe_claimed_items(
+            http_client=http_client,
+            repository_slug=repository_slug,
+            keys=candidate_keys - fresh_keys,
+        )
+        claimed_note = f" (claimed: {', '.join(claimed_items)})" if claimed_items else ""
+        print(
+            f"Session {sessions_started}: exit {exit_code}"
+            f" in {format_duration(seconds=elapsed_seconds)}{claimed_note}."
+        )
+        journal.record(
+            line=(
+                f"Session {sessions_started}: exit {exit_code}"
+                f" in {format_duration(seconds=elapsed_seconds)}{claimed_note}"
+            ),
+            text=(
+                f"session {sessions_started}: exit {exit_code}"
+                f" after {format_duration(seconds=elapsed_seconds)}{claimed_note}"
+            ),
+        )
         if candidate_keys.issubset(fresh_keys):
             # No item was claimed and none disappeared: the next session
             # would get the very same worklist. Stop instead of spinning
@@ -792,16 +895,18 @@ def run(*, arguments: argparse.Namespace) -> int:
             f", repository={repository_slug}"
         ),
     )
-    with (
-        open_github_client(token=github_token) as http_client,
-        tempfile.TemporaryDirectory(prefix="night-loop-") as prompt_directory,
-    ):
+    prompt_directory = (
+        REPOSITORY_ROOT / PROMPTS_DIRECTORY_NAME / time.strftime(RUN_DIRECTORY_FORMAT)
+    )
+    prompt_directory.mkdir(parents=True, exist_ok=True)
+    journal.log(text=f"session prompts: {prompt_directory}")
+    with open_github_client(token=github_token) as http_client:
         if arguments.issues:
             issue_numbers = parse_issue_list(raw_issue_list=arguments.issues)
             prompt_template = load_prompt_template(template_path=PROMPT_TEMPLATE_PATH)
             run_explicit_directive(
                 http_client=http_client,
-                prompt_directory=Path(prompt_directory),
+                prompt_directory=prompt_directory,
                 repository_slug=repository_slug,
                 issue_numbers=issue_numbers,
                 milestone_numbers=milestone_numbers,
@@ -813,7 +918,7 @@ def run(*, arguments: argparse.Namespace) -> int:
             prompt_template = load_prompt_template(template_path=AUTO_PROMPT_TEMPLATE_PATH)
             run_auto_discovered_sessions(
                 http_client=http_client,
-                prompt_directory=Path(prompt_directory),
+                prompt_directory=prompt_directory,
                 repository_slug=repository_slug,
                 milestone_numbers=milestone_numbers,
                 prompt_template=prompt_template,
