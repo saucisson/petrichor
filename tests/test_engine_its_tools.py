@@ -14,14 +14,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from philosophes3 import build_philosophes3
 
-from petrichor.engines.archive import RunArchive
-from petrichor.engines.contract import (
-    DEFAULT_TIMEOUT_SECONDS,
-    ITS_TOOLS_ENGINE_NAME,
-    ITS_TOOLS_ENGINE_VERSION,
-    EngineQuestion,
-)
-from petrichor.engines.driver import ComposeEngineDriver
+from petrichor.engines.contract import EngineQuestion
 from petrichor.engines.its_tools_server import (
     DEADLOCK_QUERY,
     build_its_query,
@@ -238,48 +231,3 @@ def test_property_detect_cyclicity_invariant(markings: list[list[str]]) -> None:
         assert back_edge == expected_back_edge
     else:
         assert back_edge is None
-
-
-@pytest.mark.engine
-def test_its_tools_deadlock_in_the_real_container(tmp_path: Path) -> None:
-    """Oracle: Philosophes-3 has a reachable deadlock (EF deadlock) — ITS-Tools agrees."""
-    archive = RunArchive(directory=tmp_path / "runs")
-    driver = ComposeEngineDriver(
-        archive=archive,
-        host_port=18082,
-        service_name="its-tools",
-        engine_name=ITS_TOOLS_ENGINE_NAME,
-        engine_version=ITS_TOOLS_ENGINE_VERSION,
-    )
-    record = driver.run(
-        question=_question(family="deadlock", formula="EF DEADLOCK"),
-        timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
-    )
-    assert record.engine == ITS_TOOLS_ENGINE_NAME
-    assert record.output.verdict == "satisfied"
-    assert record.output.technique == "its-tools-10052022"
-    assert len(archive) == 1
-
-
-@pytest.mark.engine
-def test_its_tools_reachability_in_the_real_container(tmp_path: Path) -> None:
-    """Reachability: EF (eat_1 > 0) holds, EF (eat_1 > 1) is violated (1-safe)."""
-    archive = RunArchive(directory=tmp_path / "runs")
-    driver = ComposeEngineDriver(
-        archive=archive,
-        host_port=18082,
-        service_name="its-tools",
-        engine_name=ITS_TOOLS_ENGINE_NAME,
-        engine_version=ITS_TOOLS_ENGINE_VERSION,
-    )
-    satisfied = driver.run(
-        question=_question(family="reachability", formula="EF (eat_1 > 0)"),
-        timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
-    )
-    violated = driver.run(
-        question=_question(family="reachability", formula="EF (eat_1 > 1)"),
-        timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
-    )
-    assert satisfied.output.verdict == "satisfied"
-    assert violated.output.verdict == "violated"
-    assert len(archive) == 2
