@@ -18,6 +18,7 @@ from uuid import uuid4
 import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
+from petrichor.checks import RunId
 from petrichor.petri_canonical import JsonValue, ModelId
 
 if TYPE_CHECKING:
@@ -69,7 +70,7 @@ class StoredSession(BaseModel):
     model_id: ModelId
     created_at: float = Field(gt=0)
     updated_at: float = Field(gt=0)
-    run_ids: list[str] = Field(default_factory=list)
+    run_ids: list[RunId] = Field(default_factory=list)
     """The runs attached to this session, in append order."""
 
 
@@ -173,7 +174,7 @@ class SessionStore:
         with self._lock:
             return sorted(self._sessions.values(), key=lambda s: s.created_at)
 
-    def append_run(self, *, session_id: SessionId, run_id: str) -> StoredSession | None:
+    def append_run(self, *, session_id: SessionId, run_id: RunId) -> StoredSession | None:
         """Attach a run to a session and journal the event; None if unknown session."""
         now = time.time()
         with self._lock:

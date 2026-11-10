@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import httpx
+import structlog.testing
 from pydantic import SecretStr
 
 from petrichor.api.app import create_app
@@ -72,10 +73,18 @@ def test_list_sessions_returns_all_in_creation_order(tmp_path: Path) -> None:
         client.post("/v1/sessions", json={"model_id": model_id}, headers=JSON_HEADERS)
     response = client.get("/v1/sessions", headers=AUTH_HEADERS)
     assert response.status_code == 200
-    sessions = response.json()
+    payload = response.json()
+    assert payload["total"] == 3
+    sessions = payload["sessions"]
     assert len(sessions) == 3
     created_ats = [s["created_at"] for s in sessions]
     assert created_ats == sorted(created_ats)
+
+    # Pagination: limit=2 returns 2 of 3
+    page = client.get("/v1/sessions?limit=2", headers=AUTH_HEADERS)
+    assert page.status_code == 200
+    assert len(page.json()["sessions"]) == 2
+    assert page.json()["total"] == 3
 
 
 def test_get_session_returns_full_state(tmp_path: Path) -> None:
@@ -137,3 +146,15 @@ def test_sessions_require_auth(tmp_path: Path) -> None:
     client = build_client(tmp_path)
     assert client.get("/v1/sessions").status_code == 401
     assert client.post("/v1/sessions", json={"model_id": "mdl_x"}).status_code == 401
+    assert client.get("/v1/sessions/ses_x").status_code == 401
+    assert client.get("/v1/sessions/ses_x/journal").status_code == 401
+
+
+def test_session_creation_is_narrated(tmp_path: Path) -> None:
+    """The session creation emits the api_session_created DEBUG event (ADR-0005)."""
+    client = build_client(tmp_path)
+    model_id = import_model(client)
+    with structlog.testing.capture_logs() as logs:
+        client.post("/v1/sessions", json={"model_id": model_id}, headers=JSON_HEADERS)
+    events = [log["event"] for log in logs]
+    assert "api_session_created" in events
