@@ -44,6 +44,16 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-10 - P20 verifypn complet adapter (issue #20, branch feat/20-verifypn-complet)
+
+- **Issue**: #20 (P20 · Adaptateur verifypn complet CTL/LTL/reachability/témoins, spec §17.2-3). Blocked-by #9 (merged).
+- **Done**: `verifypn_server.py` now supports all five families — `safety` (CTLCardinality, AG invariants), `liveness` (LTLCardinality), `recovery` (CTLCardinality, AG EF), plus the existing `deadlock` and `reachability`. CTL/LTL formulas pass through as PQL. New `detect_cyclicity()` detects repeated markings and reports the back-edge index; `build_normalized_output` now produces `counterexample` witnesses (with cyclic/back_edge) for violated verdicts with traces, and `trace` witnesses carry cyclicity fields too. Version pinned (verifypn 4.4.2, commit 0f4862d), image fingerprint in Dockerfile.verifypn, GPL-3 license documented (local build only, no redistribution). Tests: 7 new unit tests (CTL/LTL pass-through, cyclicity detection, counterexample witness shape) + 3 new @engine tests (safety CTL, liveness, recovery in the real container).
+- **Evidence**: run: `make check` green — ruff, mypy strict, import-linter, 522 tests passed (incl. 5 @engine in real container), coverage 93.33% >= 90%. Not run: CI until push.
+- **Judgement calls**: LTL formulas use CTL-compatible syntax (AG EF) because verifypn 4.4.2 rejects pure LTL `G F` with a CTL* translation error; recovery uses `or` instead of `->` because PQL does not accept the arrow operator. Both are documented in the test docstrings.
+- **Escalations**: none.
+
+---
+
 ## 2026-11-10 - P12 semantic profile arbitration and coverage groups (issue #12, branch feat/12-profil-semantique)
 
 - **Issue**: #12 (P12 · Profil sémantique et groupes de couverture, spec §14). Blocked-by #3, #8 (both merged).
