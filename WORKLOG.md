@@ -44,7 +44,15 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
-## 2026-11-10 - template sync feec180 code part, review round 2 (PR #78, branch fix/template-sync-feec180)
+## 2026-11-10 - P11 persistent sessions service (issue #11, branch feat/11-sessions-persistantes)
+
+- **Issue**: #11 (P11 · Service Gérer : sessions persistantes et reprise, spec §4).
+- **Done**: new `src/petrichor/session_store.py` — `SessionStore` persists sessions as JSONL state file (`sessions.jsonl`) plus per-session append-only timestamped journal (`<sid>/journal.jsonl`), reloaded on construction so a process restart loses nothing; `StoredSession` frozen record (session_id, model_id, created_at, updated_at, run_ids); `JournalEntry` (timestamp, event, detail). API endpoints in `app.py`: `POST /v1/sessions` (201 + Location, 404 unknown model), `GET /v1/sessions` (list in creation order), `GET /v1/sessions/{sid}` (full state), `GET /v1/sessions/{sid}/journal` (export). `create_app` takes an optional `session_store`; `main.py` wires one at `.petrichor/sessions`. `openapi.yaml` documents all four paths with Session/JournalEntry schemas. Tests: `tests/test_api_sessions.py` (8 tests: create 201+Location, 404 unknown model, list order, get state, 404 unknown session, journal timestamped append-only, **survives process restart** via a second SessionStore on the same directory, auth required).
+- **Evidence**: run: `make check` green — ruff, mypy strict, import-linter, 499 tests passed, coverage 93.57% >= 90%. Not run: CI until push.
+- **Judgement calls**: session store is file-based JSONL (same pattern as RunArchive) rather than in-memory + snapshot, because the acceptance criterion explicitly requires surviving a process restart; `list()` renamed to `list_all()` to avoid shadowing the builtin `list` type in mypy.
+- **Escalations**: none.
+
+---
 
 - **Issue**: none (human-directed template sync from saucisson/project-template @ feec180).
 - **Done**: applied the code-side changes from project-template main @ feec180 on top of daily's hardened version (first attempt took template files wholesale and lost daily's hardening - isascii guards, re.ASCII, IssueIdentifier NewType, request_or_fail, json_list_or_warn, OPEN_STATE_FILTER, UNKNOWN_HEAD_REF, causes preserved - all restored). New features: `build_session_command` extracted, `run_developer_session` uses Popen with heartbeat loop (HEARTBEAT_POLL_INTERVAL_SECONDS named constant), `--heartbeat` CLI flag (default 60s), `describe_claimed_items` names claimed items in the result line, post-session claim-label check logged, session prompts persisted under `.night/sessions/<run>/` instead of a tempdir. Tests: 4 new tests pinning describe_claimed_items, heartbeat defaults, and .night/sessions/ directory usage.

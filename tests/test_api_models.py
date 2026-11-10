@@ -26,6 +26,7 @@ from petrichor.model_store import ModelStore
 from petrichor.petri_canonical import ModelId
 from petrichor.pnml_import import import_pnml
 from petrichor.run_store import RunStore
+from petrichor.session_store import SessionStore
 
 if TYPE_CHECKING:
     from wsgiref.types import WSGIEnvironment
@@ -317,9 +318,14 @@ class TestEdgeBranches:
 
 
 class TestCompositionRoot:
-    def test_build_server_wires_the_app(self) -> None:
+    def test_build_server_wires_the_app(self, tmp_path: Path) -> None:
         settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
-        server = build_server(settings=settings, store=ModelStore(), run_store=RunStore())
+        server = build_server(
+            settings=settings,
+            store=ModelStore(),
+            run_store=RunStore(),
+            session_store=SessionStore(directory=tmp_path / "sessions"),
+        )
         assert isinstance(server.application, Callable)
         assert server.server_port == 8080
         server.server_close()

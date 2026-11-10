@@ -11,6 +11,7 @@ answers ``503 runner_not_configured``.
 """
 
 import logging
+from pathlib import Path
 from wsgiref.simple_server import WSGIServer, make_server
 
 import structlog
@@ -19,9 +20,11 @@ from petrichor.api import create_app
 from petrichor.api.settings import ApiSettings
 from petrichor.model_store import ModelStore
 from petrichor.run_store import RunStore
+from petrichor.session_store import SessionStore
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8080
+DEFAULT_SESSIONS_DIRECTORY = ".petrichor/sessions"
 
 
 def configure_logging() -> None:
@@ -32,9 +35,17 @@ def configure_logging() -> None:
     )
 
 
-def build_server(*, settings: ApiSettings, store: ModelStore, run_store: RunStore) -> WSGIServer:
+def build_server(
+    *, settings: ApiSettings, store: ModelStore, run_store: RunStore, session_store: SessionStore
+) -> WSGIServer:
     """Assemble the WSGI server around the application."""
-    app = create_app(settings=settings, store=store, run_store=run_store, runner=None)
+    app = create_app(
+        settings=settings,
+        store=store,
+        run_store=run_store,
+        runner=None,
+        session_store=session_store,
+    )
     return make_server(DEFAULT_HOST, DEFAULT_PORT, app)
 
 
@@ -43,7 +54,13 @@ def main() -> None:
     configure_logging()
     logger = structlog.get_logger(__name__)
     settings = ApiSettings()
-    server = build_server(settings=settings, store=ModelStore(), run_store=RunStore())
+    session_store = SessionStore(directory=Path(DEFAULT_SESSIONS_DIRECTORY))
+    server = build_server(
+        settings=settings,
+        store=ModelStore(),
+        run_store=RunStore(),
+        session_store=session_store,
+    )
     logger.info("api_server_started", host=DEFAULT_HOST, port=DEFAULT_PORT)
     server.serve_forever()  # pragma: no cover - the serving loop is the entry point
 
