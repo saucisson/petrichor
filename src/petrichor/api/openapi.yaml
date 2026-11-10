@@ -225,7 +225,7 @@ paths:
         "415":
           $ref: "#/components/responses/UnsupportedMediaType"
         "400":
-          description: The Content-Length header or a pagination parameter is not an integer.
+          description: The Content-Length header is not an integer.
           content:
             application/problem+json:
               schema:
@@ -270,8 +270,16 @@ paths:
                     type: integer
                   offset:
                     type: integer
+        "400":
+          description: A pagination parameter (limit/offset) is not an integer.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
   /sessions/{session_id}:
     get:
       summary: Read one session with its full serialized state
@@ -292,6 +300,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
   /sessions/{session_id}/journal:
     get:
       summary: Export the append-only timestamped journal of a session
@@ -314,6 +324,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
 components:
   securitySchemes:
     apiKey:
