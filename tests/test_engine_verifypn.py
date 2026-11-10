@@ -10,14 +10,29 @@ import stat
 from typing import TYPE_CHECKING
 
 import pytest
+import structlog.testing
 from philosophes3 import build_philosophes3
 
+from petrichor.checks import (
+    CheckCompleted,
+    CheckFailed,
+    CheckQuestion,
+    KindPattern,
+)
+from petrichor.engines.api_runner import VerifypnCheckRunner
 from petrichor.engines.archive import RunArchive
 from petrichor.engines.contract import (
     DEFAULT_TIMEOUT_SECONDS,
     VERIFYPN_ENGINE_NAME,
     VERIFYPN_ENGINE_VERSION,
+    Cost,
+    DriverError,
     EngineQuestion,
+    EngineTimeoutError,
+    InputHash,
+    NormalizedOutput,
+    RunRecord,
+    new_run_id,
     question_input_hash,
 )
 from petrichor.engines.driver import ComposeEngineDriver
@@ -67,6 +82,9 @@ esac
 def _question(*, family: str, formula: str) -> EngineQuestion:
     """A question carrying the Philosophes-3 model in its parameters."""
     return EngineQuestion(
+        # The helper takes any str on purpose: rejection paths (out-of-scope
+        # families) are exercised through it, and pydantic enforces the
+        # CheckFamily literal at runtime.
         family=family,  # type: ignore[arg-type]
         formula=formula,
         pattern=formula,
@@ -155,7 +173,7 @@ def test_export_pnml_rejects_non_pt_models() -> None:
 
 
 def test_build_normalized_output_satisfied_with_witness() -> None:
-    """Exit 0 + trace on stderr yields a satisfied verdict with a §16 witness."""
+    """A TRUE FORMULA line + trace on stderr yields a satisfied verdict with a §16 witness."""
     stderr = '<trace>\n<transition id="takeL_1" index="0">\n</transition>\n</trace>\n'
     output = build_normalized_output(
         stdout="FORMULA query.pql TRUE TECHNIQUES EXPLICIT\nexplored states:   14\n",
@@ -169,13 +187,15 @@ def test_build_normalized_output_satisfied_with_witness() -> None:
     assert witness["kind"] == "trace"
     steps = witness["steps"]
     assert isinstance(steps, list)
+    # steps is a plain list[dict] (JsonValue): the test pins the exact shape
+    # build_normalized_output produced two lines above.
     assert steps[1]["fired"] == "takeL_1"  # type: ignore[index]
     assert output["cost"] == {"tool_seconds": 0.5, "states_explored": 14}
     assert output["technique"] == "verifypn-4.4.2"
 
 
 def test_build_normalized_output_violated_without_witness() -> None:
-    """Exit 1 yields a violated verdict and no witness (the CLI prints no trace)."""
+    """A FALSE FORMULA line yields a violated verdict and no witness (no trace printed)."""
     output = build_normalized_output(
         stdout="FORMULA query.pql FALSE TECHNIQUES QUERY_REDUCTION\n",
         stderr="",
@@ -213,6 +233,8 @@ def test_handle_check_rejects_missing_model() -> None:
 def test_handle_check_rejects_out_of_scope_family() -> None:
     """A CTL family is outside the socle minimal scope: 422, never reinterpreted."""
     question = EngineQuestion(
+        # "liveness" is a valid CheckFamily but outside the socle-minimal
+        # SUPPORTED_FAMILIES: the point of this test is the 422 rejection.
         family="liveness",  # type: ignore[arg-type]
         formula="AG AF (eat_1 > 0)",
         pattern="liveness.unconditional",
@@ -221,6 +243,99 @@ def test_handle_check_rejects_out_of_scope_family() -> None:
     body = json.dumps(question.model_dump(mode="json"))
     status, _ = handle_check(body=body.encode("utf-8"), timeout_seconds=10)
     assert status == 422
+
+
+class _StubDriver:
+    """A driver stub programmed with one outcome, to exercise the runner paths."""
+
+    def __init__(self, *, outcome: RunRecord | Exception) -> None:
+        self._outcome = outcome
+
+    def run(self, *, question: EngineQuestion, timeout_seconds: int) -> RunRecord:
+        if isinstance(self._outcome, Exception):
+            raise self._outcome
+        return self._outcome
+
+
+def _check_question() -> CheckQuestion:
+    """A deadlock check question carrying the Philosophes-3 model."""
+    return CheckQuestion(
+        family="deadlock",
+        kind=KindPattern("deadlock"),
+        formula="EF DEADLOCK",
+        parameters={"model": MODEL},
+    )
+
+
+def _completed_record() -> RunRecord:
+    """The archived record of a successful run, as the driver would return it."""
+    return RunRecord(
+        run_id=new_run_id(),
+        engine=VERIFYPN_ENGINE_NAME,
+        engine_version=VERIFYPN_ENGINE_VERSION,
+        command=["docker", "compose", "run", "verifypn"],
+        timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
+        input_hash=InputHash("sha256:" + "0" * 64),
+        output=NormalizedOutput(
+            verdict="satisfied",
+            witness=None,
+            cost=Cost(tool_seconds=0.1, states_explored=14),
+            technique="verifypn-4.4.2",
+        ),
+        measured_seconds=0.2,
+        archived_at="2026-11-10T00:00:00+00:00",
+    )
+
+
+class TestVerifypnCheckRunnerNarration:
+    """The runner's log events are part of the narration contract: pinned here."""
+
+    def test_completed_run_is_narrated(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        runner = VerifypnCheckRunner(archive=RunArchive(directory=tmp_path / "runs"))
+        record = _completed_record()
+        monkeypatch.setattr(runner, "_driver", _StubDriver(outcome=record))
+        with structlog.testing.capture_logs() as events:
+            outcome = runner.run(question=_check_question(), timeout_seconds=30)
+        assert isinstance(outcome, CheckCompleted)
+        completed = [event for event in events if event["event"] == "runner_run_completed"]
+        assert len(completed) == 1
+        assert completed[0]["run_id"] == record.run_id
+        assert completed[0]["engine"] == VERIFYPN_ENGINE_NAME
+        assert completed[0]["verdict"] == "satisfied"
+
+    def test_timeout_is_narrated_as_a_warning(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        runner = VerifypnCheckRunner(archive=RunArchive(directory=tmp_path / "runs"))
+        monkeypatch.setattr(
+            runner, "_driver", _StubDriver(outcome=EngineTimeoutError("exceeded 30s"))
+        )
+        with structlog.testing.capture_logs() as events:
+            outcome = runner.run(question=_check_question(), timeout_seconds=30)
+        assert isinstance(outcome, CheckFailed)
+        assert outcome.kind == "timeout"
+        timeouts = [event for event in events if event["event"] == "runner_timeout"]
+        assert len(timeouts) == 1
+        assert timeouts[0]["family"] == "deadlock"
+        assert timeouts[0]["kind"] == "deadlock"
+
+    def test_driver_error_is_narrated_as_a_warning(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        runner = VerifypnCheckRunner(archive=RunArchive(directory=tmp_path / "runs"))
+        monkeypatch.setattr(
+            runner, "_driver", _StubDriver(outcome=DriverError("compose up failed"))
+        )
+        with structlog.testing.capture_logs() as events:
+            outcome = runner.run(question=_check_question(), timeout_seconds=30)
+        assert isinstance(outcome, CheckFailed)
+        assert outcome.kind == "engine_error"
+        errors = [event for event in events if event["event"] == "runner_engine_error"]
+        assert len(errors) == 1
+        assert errors[0]["family"] == "deadlock"
+        assert errors[0]["error"] == "compose up failed"
 
 
 @pytest.mark.engine

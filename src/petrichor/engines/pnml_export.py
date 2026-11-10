@@ -10,7 +10,7 @@ places and transitions by id in its PQL queries.
 """
 
 from dataclasses import dataclass
-from xml.sax.saxutils import escape, quoteattr
+from xml.sax.saxutils import quoteattr
 
 PNML_NAMESPACE = "http://www.pnml.org/version-2009/grammar/pnml"
 PNML_PT_NET_TYPE = "http://www.pnml.org/version-2009/grammar/pnml"
@@ -132,8 +132,3 @@ def export_pnml(*, model: dict[str, Json]) -> str:
     lines.append("  </net>")
     lines.append("</pnml>")
     return "\n".join(lines) + "\n"
-
-
-def escape_text(*, text: str) -> str:
-    """Escape a text node value (exposed for tests)."""
-    return escape(text)
