@@ -19,8 +19,18 @@ logger = structlog.get_logger(__name__)
 ArbitrationId = NewType("ArbitrationId", str)
 """An arbitration identifier, e.g. ``arb_7c2a9f``."""
 
+EntryId = NewType("EntryId", str)
+"""A semantic-profile entry identifier, e.g. ``think``."""
+
+GroupId = NewType("GroupId", str)
+"""A coverage-group identifier, e.g. ``grp_think``."""
+
+QuestionKind = NewType("QuestionKind", str)
+"""The kind of an arbitrated question covering a group, e.g. ``section_critique``."""
+
 ARBITRATION_ID_PREFIX = "arb_"
 ARBITRATION_ID_HEX_DIGITS = 6
+GROUP_ID_PREFIX = "grp_"
 
 
 class ArbitrationDecision(BaseModel):
@@ -28,7 +38,7 @@ class ArbitrationDecision(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    entry_id: str
+    entry_id: EntryId
     accepted: bool
     chosen_role: str = Field(min_length=1)
     """The role the human chose; equals the proposed role when accepted."""
@@ -39,10 +49,10 @@ class CoverageGroup(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    group_id: str
+    group_id: GroupId
     role: str
     elements: str
-    covered_by: tuple[str, ...] = ()
+    covered_by: tuple[QuestionKind, ...] = ()
     """The arbitrated questions covering this group, by their kind."""
 
 
@@ -55,7 +65,7 @@ class ProfileState(BaseModel):
     arbitrations: tuple[ArbitrationDecision, ...] = ()
     groups: tuple[CoverageGroup, ...] = ()
 
-    def is_arbitrated(self, *, entry_id: str) -> bool:
+    def is_arbitrated(self, *, entry_id: EntryId) -> bool:
         """Whether a proposed entry has been arbitrated by the human."""
         return any(a.entry_id == entry_id for a in self.arbitrations)
 
@@ -80,7 +90,7 @@ class ProfileArbitrator:
         """Register a proposed profile for a session; groups derived from entries."""
         groups = tuple(
             CoverageGroup(
-                group_id=f"grp_{entry.id}",
+                group_id=GroupId(f"{GROUP_ID_PREFIX}{entry.id}"),
                 role=entry.role,
                 elements=entry.elements,
             )
@@ -117,12 +127,12 @@ class ProfileArbitrator:
                         "role": next(
                             a.chosen_role
                             for a in new_arbitrations
-                            if a.entry_id == g.group_id.removeprefix("grp_")
+                            if a.entry_id == EntryId(g.group_id.removeprefix(GROUP_ID_PREFIX))
                         )
                     }
                 )
                 for g in state.groups
-                if g.group_id.removeprefix("grp_") in accepted_ids
+                if EntryId(g.group_id.removeprefix(GROUP_ID_PREFIX)) in accepted_ids
             )
             updated = ProfileState(
                 proposed=state.proposed,
@@ -143,7 +153,9 @@ class ProfileArbitrator:
         with self._lock:
             return self._states.get(session_id)
 
-    def mark_covered(self, *, session_id: str, group_id: str, question_kind: str) -> None:
+    def mark_covered(
+        self, *, session_id: str, group_id: GroupId, question_kind: QuestionKind
+    ) -> None:
         """Mark a coverage group as covered by an arbitrated question."""
         with self._lock:
             state = self._states.get(session_id)

@@ -5,13 +5,21 @@ from pathlib import Path
 
 import httpx
 import structlog.testing
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from pydantic import SecretStr
 
 from petrichor.api.app import create_app
 from petrichor.api.settings import ApiSettings
 from petrichor.llm.schemas import ProfileEntry, SemanticProfile
 from petrichor.model_store import ModelStore
-from petrichor.profile import ArbitrationDecision, ProfileArbitrator
+from petrichor.profile import (
+    ArbitrationDecision,
+    EntryId,
+    GroupId,
+    ProfileArbitrator,
+    QuestionKind,
+)
 from petrichor.run_store import RunStore
 from petrichor.session_store import SessionStore
 
@@ -121,7 +129,9 @@ def test_post_arbitration_accepts_role(tmp_path: Path) -> None:
     model_id = import_model(client)
     session_id = create_session(client, model_id)
     arbitrator.propose(session_id=session_id, profile=sample_profile())
-    decision = ArbitrationDecision(entry_id="eat", accepted=True, chosen_role="section critique")
+    decision = ArbitrationDecision(
+        entry_id=EntryId("eat"), accepted=True, chosen_role="section critique"
+    )
     response = client.post(
         f"/v1/sessions/{session_id}/profile/arbitrate",
         content=json.dumps(decision.model_dump(mode="json")),
@@ -140,7 +150,9 @@ def test_post_arbitration_rejects_wrong_role(tmp_path: Path) -> None:
     model_id = import_model(client)
     session_id = create_session(client, model_id)
     arbitrator.propose(session_id=session_id, profile=sample_profile())
-    decision = ArbitrationDecision(entry_id="think", accepted=False, chosen_role="etat d'automate")
+    decision = ArbitrationDecision(
+        entry_id=EntryId("think"), accepted=False, chosen_role="etat d'automate"
+    )
     response = client.post(
         f"/v1/sessions/{session_id}/profile/arbitrate",
         content=json.dumps(decision.model_dump(mode="json")),
@@ -190,7 +202,9 @@ def test_coverage_after_mark_covered(tmp_path: Path) -> None:
     session_id = create_session(client, model_id)
     arbitrator.propose(session_id=session_id, profile=sample_profile())
     arbitrator.mark_covered(
-        session_id=session_id, group_id="grp_eat", question_kind="section_critique"
+        session_id=session_id,
+        group_id=GroupId("grp_eat"),
+        question_kind=QuestionKind("section_critique"),
     )
     response = client.get(f"/v1/sessions/{session_id}/coverage", headers=AUTH_HEADERS)
     assert response.status_code == 200
@@ -253,3 +267,88 @@ def test_profile_narration_events(tmp_path: Path) -> None:
     assert "api_profile_read" in events
     assert "api_profile_arbitrated" in events
     assert "api_coverage_read" in events
+
+
+# --- Property-tier tests (ADR-0012) ---
+
+
+@given(
+    entries=st.lists(
+        st.builds(
+            ProfileEntry,
+            id=st.text(alphabet="abcdefghij", min_size=1, max_size=8),
+            elements=st.text(min_size=1, max_size=20),
+            role=st.text(min_size=1, max_size=20),
+            conf=st.floats(min_value=0.0, max_value=1.0),
+            evidence=st.text(min_size=1, max_size=30),
+        ),
+        min_size=1,
+        max_size=10,
+        unique_by=lambda e: e.id,
+    )
+)
+@settings(max_examples=50)
+def test_propose_creates_one_group_per_entry(entries: list[ProfileEntry]) -> None:
+    """Property: propose() always creates exactly one coverage group per profile entry."""
+    arbitrator = ProfileArbitrator()
+    profile = SemanticProfile(entries=tuple(entries))
+    state = arbitrator.propose(session_id="ses_test", profile=profile)
+    assert len(state.groups) == len(entries)
+    assert all(not g.covered_by for g in state.groups)
+
+
+@given(
+    accepted=st.booleans(),
+    entry_id=st.text(alphabet="abcdefghij", min_size=1, max_size=8),
+    chosen_role=st.text(min_size=1, max_size=20),
+)
+@settings(max_examples=50)
+def test_arbitrate_is_idempotent_for_same_entry(
+    *, accepted: bool, entry_id: str, chosen_role: str
+) -> None:
+    """Property: re-arbitrating the same entry does not add a second arbitration."""
+    arbitrator = ProfileArbitrator()
+    profile = SemanticProfile(
+        entries=(
+            ProfileEntry(
+                id=entry_id,
+                elements="e",
+                role="r",
+                conf=0.5,
+                evidence="ev",
+            ),
+        )
+    )
+    arbitrator.propose(session_id="ses_test", profile=profile)
+    decision = ArbitrationDecision(
+        entry_id=EntryId(entry_id), accepted=accepted, chosen_role=chosen_role
+    )
+    first = arbitrator.arbitrate(session_id="ses_test", decision=decision)
+    second = arbitrator.arbitrate(session_id="ses_test", decision=decision)
+    assert first is not None
+    assert second is not None
+    assert len(second.arbitrations) == 1
+
+
+@given(covered=st.booleans())
+@settings(max_examples=30)
+def test_uncovered_groups_inverse_of_covered(*, covered: bool) -> None:
+    """Property: a group is uncovered iff no question covers it."""
+    arbitrator = ProfileArbitrator()
+    profile = SemanticProfile(
+        entries=(ProfileEntry(id="x", elements="e", role="r", conf=0.5, evidence="ev"),)
+    )
+    arbitrator.propose(session_id="ses_test", profile=profile)
+    if covered:
+        arbitrator.mark_covered(
+            session_id="ses_test",
+            group_id=GroupId("grp_x"),
+            question_kind=QuestionKind("q"),
+        )
+    state = arbitrator.get(session_id="ses_test")
+    assert state is not None
+    uncovered = state.uncovered_groups()
+    if covered:
+        assert len(uncovered) == 0
+    else:
+        assert len(uncovered) == 1
