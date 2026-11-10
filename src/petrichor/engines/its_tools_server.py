@@ -398,13 +398,15 @@ class ItsToolsHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args: object) -> None:
         """Route http.server's access log into logging (no stdout writes, ADR-0005)."""
-        logger.debug("its_tools_engine_request", extra={"message": format % args})
+        logger.debug("its_tools_engine_request", extra={"access_log": format % args})
 
 
 def main() -> None:  # pragma: no cover - the container serving loop
     """Serve the ITS-Tools engine until the container stops."""
     timeout = float(os.environ.get(ENGINE_TIMEOUT_VARIABLE, DEFAULT_ENGINE_TIMEOUT_SECONDS))
     server = ThreadingHTTPServer((SERVER_HOST, SERVER_PORT), ItsToolsHandler)
+    # ThreadingHTTPServer declares no engine_timeout attribute; the handler
+    # reads it back with getattr(self.server, "engine_timeout", default).
     server.engine_timeout = timeout  # type: ignore[attr-defined]
     server.daemon_threads = True
     logger.info(

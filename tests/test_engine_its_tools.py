@@ -6,6 +6,7 @@ Philosophes-3 net: an engine failure is a CI failure, never a skip.
 """
 
 import json
+import logging
 import stat
 from typing import TYPE_CHECKING
 
@@ -17,6 +18,7 @@ from philosophes3 import build_philosophes3
 from petrichor.engines.contract import EngineQuestion
 from petrichor.engines.its_tools_server import (
     DEADLOCK_QUERY,
+    ItsToolsHandler,
     build_its_query,
     build_normalized_output,
     detect_cyclicity,
@@ -231,3 +233,11 @@ def test_property_detect_cyclicity_invariant(markings: list[list[str]]) -> None:
         assert back_edge == expected_back_edge
     else:
         assert back_edge is None
+
+
+def test_its_tools_narration_events(caplog: pytest.LogCaptureFixture) -> None:
+    """The engine server's access-log event is pinned (ADR-0005)."""
+    handler = ItsToolsHandler.__new__(ItsToolsHandler)
+    with caplog.at_level(logging.DEBUG, logger="petrichor.engines.its_tools_server"):
+        handler.log_message("GET /health 200")
+    assert any("its_tools_engine_request" in r.message for r in caplog.records)
