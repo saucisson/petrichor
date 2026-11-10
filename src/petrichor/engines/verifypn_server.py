@@ -9,10 +9,11 @@ Socle minimal (issue #9): the ``deadlock`` family (``EF deadlock``,
 GlobalProperties.ReachabilityDeadlock) and the ``reachability`` family
 (ReachabilityCardinality, the formula is PQL as-is). The model travels in
 ``parameters["model"]`` as the canonical `petri+json` document; it is
-exported to PNML, the question to a PQL query file, and verifypn answers
-with exit code 0 (satisfied) / 1 (violated) / 2 (unknown) / 3 (error).
-Its XML trace on stderr is replayed on the model to produce the §16
-witness.
+exported to PNML, the question to a PQL query file, and verifypn v4.4.2
+answers with exit code 0 on success - the verdict is read from the
+``FORMULA <file> TRUE|FALSE`` line on stdout (MAYBE maps to ``unknown``).
+Any non-zero exit code is an engine failure and maps to HTTP 500. The
+XML trace on stderr is replayed on the model to produce the §16 witness.
 """
 
 import json
@@ -47,7 +48,6 @@ MAX_BODY_BYTES = 1_048_576
 MODEL_PARAMETER = "model"
 SUPPORTED_FAMILIES = frozenset({"deadlock", "reachability"})
 DEADLOCK_PQL = "EF deadlock"
-EXIT_ERROR = 3
 FORMULA_VERDICT_PATTERN = re.compile(r"FORMULA \S+ (TRUE|FALSE)\b")
 MAYBE_PATTERN = re.compile(r"Query is MAYBE satisfied")
 STATES_EXPLORED_PATTERN = re.compile(r"explored states:\s+(\d+)")
