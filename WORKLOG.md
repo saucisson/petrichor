@@ -44,6 +44,16 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-10 - P21 ITS-Tools adapter (issue #21, branch feat/21-its-tools)
+
+- **Issue**: #21 (P21 · Adaptateur ITS-Tools toutes familles, LTL stutter, spec §17.2/§17.4). Blocked-by #4 (merged).
+- **Done**: new `src/petrichor/engines/its_tools_server.py` — HTTP engine server (stdlib-only) supporting all five families (deadlock, reachability, safety, liveness, recovery); CTL/LTL formulas pass through as ITS-Tools queries; `detect_cyclicity()` + counterexample/trace witnesses (spec §16); `replay_trace()` for §16 steps. New `Dockerfile.its-tools` (Maven/Tycho build from source, tag v10052022, GPL-3, local build only). New compose service `its-tools` on port 18082. Engine constants `ITS_TOOLS_ENGINE_NAME/VERSION/IMAGE` in contract.py. Tests: `tests/test_engine_its_tools.py` (14 unit tests + 2 @engine tests + 1 property test). LTL stutter-sensitivity documented in module docstring (spec §17.4). Embedded components (LTSmin, Spot) documented — never paired in cross-verification.
+- **Evidence**: run: ruff, mypy strict, import-linter green; 530 non-engine tests passed. @engine tests not run locally (ITS-Tools container build requires full Maven/Tycho toolchain — runs in CI). Not run: full make check with engine tier, CI until push.
+- **Judgement calls**: ITS-Tools version pinned to the v10052022 git tag (latest available); Dockerfile uses Maven builder stage since ITS-Tools publishes no binary releases. The adapter mirrors the verifypn server structure for consistency.
+- **Escalations**: none.
+
+---
+
 ## 2026-11-10 - P20 verifypn complet adapter (issue #20, branch feat/20-verifypn-complet)
 
 - **Issue**: #20 (P20 · Adaptateur verifypn complet CTL/LTL/reachability/témoins, spec §17.2-3). Blocked-by #9 (merged).
