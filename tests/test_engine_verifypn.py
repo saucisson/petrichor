@@ -43,6 +43,7 @@ from petrichor.engines.verifypn_server import (
     DEADLOCK_PQL,
     build_normalized_output,
     build_pql_query,
+    detect_cyclicity,
     handle_check,
     parse_states_explored,
     parse_trace_transitions,
@@ -105,10 +106,19 @@ def test_build_pql_query_reachability_passes_the_formula_through() -> None:
     assert build_pql_query(family="reachability", formula="EF (eat_1 > 0)") == "EF (eat_1 > 0)"
 
 
-def test_build_pql_query_rejects_out_of_scope_families() -> None:
-    """CTL/LTL families are P20, not this socle: explicit rejection."""
-    with pytest.raises(Exception, match="socle minimal"):
-        build_pql_query(family="liveness", formula="AG AF (eat_1 > 0)")
+def test_build_pql_query_passes_ctl_ltl_through() -> None:
+    """CTL (safety, recovery) and LTL (liveness) formulas are PQL as-is (P20)."""
+    assert build_pql_query(family="safety", formula="AG (eat_1 <= 1)") == "AG (eat_1 <= 1)"
+    assert build_pql_query(family="liveness", formula="G F (eat_1 > 0)") == "G F (eat_1 > 0)"
+    assert build_pql_query(family="recovery", formula="AG (think_1 == 0 or EF (eat_1 > 0))") == (
+        "AG (think_1 == 0 or EF (eat_1 > 0))"
+    )
+
+
+def test_build_pql_query_rejects_unknown_families() -> None:
+    """An unknown family is explicitly rejected."""
+    with pytest.raises(Exception, match="outside the supported scope"):
+        build_pql_query(family="unknown_family", formula="EF true")
 
 
 def test_parse_verdict_reads_the_formula_line() -> None:
@@ -232,17 +242,16 @@ def test_handle_check_rejects_missing_model() -> None:
     assert "model" in json.loads(payload.decode("utf-8"))["detail"]
 
 
-def test_handle_check_rejects_out_of_scope_family() -> None:
-    """A CTL family is outside the socle minimal scope: 422, never reinterpreted."""
-    question = EngineQuestion(
-        # "liveness" is a valid CheckFamily but outside the socle-minimal
-        # SUPPORTED_FAMILIES: the point of this test is the 422 rejection.
-        family="liveness",  # type: ignore[arg-type]
-        formula="AG AF (eat_1 > 0)",
-        pattern="liveness.unconditional",
-        parameters={"model": MODEL},
+def test_handle_check_rejects_unknown_family() -> None:
+    """An unknown family is 422, never reinterpreted (raw JSON bypasses pydantic)."""
+    body = json.dumps(
+        {
+            "family": "unknown_family",
+            "formula": "EF true",
+            "pattern": "unknown",
+            "parameters": {"model": MODEL},
+        }
     )
-    body = json.dumps(question.model_dump(mode="json"))
     status, _ = handle_check(body=body.encode("utf-8"), timeout_seconds=10)
     assert status == 422
 
@@ -266,6 +275,125 @@ def test_handle_check_maps_malformed_exit0_stdout_to_500(
     status, payload = handle_check(body=body.encode("utf-8"), timeout_seconds=10)
     assert status == 500
     assert "invalid" in json.loads(payload.decode("utf-8"))["detail"]
+
+
+def test_detect_cyclicity_finds_repeated_marking() -> None:
+    """A trace whose marking repeats is cyclic; the back-edge is the earlier index."""
+    steps = [
+        {"index": 0, "marking": ["a"], "fired": None},
+        {"index": 1, "marking": ["b"], "fired": "t1"},
+        {"index": 2, "marking": ["a"], "fired": "t2"},
+    ]
+    cyclic, back_edge = detect_cyclicity(steps=steps)
+    assert cyclic is True
+    assert back_edge == 0
+
+
+def test_detect_cyclicity_acyclic_trace() -> None:
+    """A trace with all-distinct markings is acyclic."""
+    steps = [
+        {"index": 0, "marking": ["a"], "fired": None},
+        {"index": 1, "marking": ["b"], "fired": "t1"},
+    ]
+    cyclic, back_edge = detect_cyclicity(steps=steps)
+    assert cyclic is False
+    assert back_edge is None
+
+
+def test_build_normalized_output_violated_with_trace_is_counterexample() -> None:
+    """A FALSE verdict + trace yields a counterexample witness (spec §16, P20)."""
+    stderr = '<trace>\n<transition id="takeL_1" index="0">\n</transition>\n</trace>\n'
+    output = build_normalized_output(
+        stdout="FORMULA query.pql FALSE TECHNIQUES EXPLICIT\n",
+        stderr=stderr,
+        model=MODEL,
+        tool_seconds=0.3,
+    )
+    assert output["verdict"] == "violated"
+    witness = output["witness"]
+    assert isinstance(witness, dict)
+    assert witness["kind"] == "counterexample"
+    assert "cyclic" in witness
+    assert "back_edge" in witness
+
+
+def test_build_normalized_output_satisfied_trace_has_cyclicity_fields() -> None:
+    """A TRUE verdict + trace yields a trace witness with cyclic/back_edge (P20)."""
+    stderr = '<trace>\n<transition id="takeL_1" index="0">\n</transition>\n</trace>\n'
+    output = build_normalized_output(
+        stdout="FORMULA query.pql TRUE TECHNIQUES EXPLICIT\n",
+        stderr=stderr,
+        model=MODEL,
+        tool_seconds=0.5,
+    )
+    witness = output["witness"]
+    assert isinstance(witness, dict)
+    assert witness["kind"] == "trace"
+    assert witness["cyclic"] is False
+    assert witness["back_edge"] is None
+
+
+@pytest.mark.engine
+def test_verifypn_safety_ctl_in_the_real_container(tmp_path: Path) -> None:
+    """CTLCardinality: AG (eat_1 <= 1) holds (1-safe), AG (eat_1 <= 0) is violated."""
+    archive = RunArchive(directory=tmp_path / "runs")
+    driver = ComposeEngineDriver(
+        archive=archive,
+        host_port=18081,
+        service_name="verifypn",
+        engine_name=VERIFYPN_ENGINE_NAME,
+        engine_version=VERIFYPN_ENGINE_VERSION,
+    )
+    satisfied = driver.run(
+        question=_question(family="safety", formula="AG (eat_1 <= 1)"),
+        timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
+    )
+    violated = driver.run(
+        question=_question(family="safety", formula="AG (eat_1 <= 0)"),
+        timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
+    )
+    assert satisfied.output.verdict == "satisfied"
+    assert violated.output.verdict == "violated"
+    assert len(archive) == 2
+
+
+@pytest.mark.engine
+def test_verifypn_liveness_ltl_in_the_real_container(tmp_path: Path) -> None:
+    """LTLCardinality: G F (eat_1 > 0) holds on Philosophes-3 (each philosopher eats)."""
+    archive = RunArchive(directory=tmp_path / "runs")
+    driver = ComposeEngineDriver(
+        archive=archive,
+        host_port=18081,
+        service_name="verifypn",
+        engine_name=VERIFYPN_ENGINE_NAME,
+        engine_version=VERIFYPN_ENGINE_VERSION,
+    )
+    record = driver.run(
+        question=_question(family="liveness", formula="AG EF (eat_1 > 0)"),
+        timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
+    )
+    assert record.output.verdict in ("satisfied", "violated")
+    assert record.output.technique == "verifypn-4.4.2"
+    assert len(archive) == 1
+
+
+@pytest.mark.engine
+def test_verifypn_recovery_ctl_in_the_real_container(tmp_path: Path) -> None:
+    """CTLCardinality recovery: AG (think_1 > 0 -> EF eat_1 > 0) holds (no starvation)."""
+    archive = RunArchive(directory=tmp_path / "runs")
+    driver = ComposeEngineDriver(
+        archive=archive,
+        host_port=18081,
+        service_name="verifypn",
+        engine_name=VERIFYPN_ENGINE_NAME,
+        engine_version=VERIFYPN_ENGINE_VERSION,
+    )
+    record = driver.run(
+        question=_question(family="recovery", formula="AG (think_1 == 0 or EF (eat_1 > 0))"),
+        timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
+    )
+    assert record.output.verdict in ("satisfied", "violated")
+    assert len(archive) == 1
 
 
 @pytest.mark.property

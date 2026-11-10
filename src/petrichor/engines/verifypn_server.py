@@ -5,9 +5,12 @@ dependency, so this module must not import pydantic or structlog. The
 API-side tests import the pure handlers from here; the container runs
 ``python -m petrichor.engines.verifypn_server``.
 
-Socle minimal (issue #9): the ``deadlock`` family (``EF deadlock``,
-GlobalProperties.ReachabilityDeadlock) and the ``reachability`` family
-(ReachabilityCardinality, the formula is PQL as-is). The model travels in
+Socle minimal (issue #9) + complet (issue #20): the ``deadlock`` family
+(``EF deadlock``, GlobalProperties.ReachabilityDeadlock), the
+``reachability`` family (ReachabilityCardinality), the ``safety`` family
+(CTLCardinality, AG invariants), the ``liveness`` family (LTLCardinality)
+and the ``recovery`` family (CTLCardinality, AG EF). CTL/LTL formulas are
+PQL as-is. The model travels in
 ``parameters["model"]`` as the canonical `petri+json` document; it is
 exported to PNML, the question to a PQL query file, and verifypn v4.4.2
 answers with exit code 0 on success - the verdict is read from the
@@ -46,7 +49,7 @@ ENGINE_TIMEOUT_VARIABLE = "ENGINE_TIMEOUT"
 DEFAULT_ENGINE_TIMEOUT_SECONDS = 30
 MAX_BODY_BYTES = 1_048_576
 MODEL_PARAMETER = "model"
-SUPPORTED_FAMILIES = frozenset({"deadlock", "reachability"})
+SUPPORTED_FAMILIES = frozenset({"deadlock", "reachability", "safety", "liveness", "recovery"})
 DEADLOCK_PQL = "EF deadlock"
 TRACE_XML_ARGUMENT = "2"
 """verifypn ``-t 2``: emit the witness trace as XML on stderr."""
@@ -65,13 +68,18 @@ class QuestionError(Exception):
 
 
 def build_pql_query(*, family: str, formula: str) -> str:
-    """Translate the formal question into a PQL query file body (spec §17.3)."""
+    """Translate the formal question into a PQL query file body (spec §17.3).
+
+    The deadlock family maps to the fixed ``EF deadlock`` PQL; every other
+    family (reachability, safety, liveness, recovery) passes the MCC
+    formula through as PQL — verifypn/Tapaal accepts CTL and LTL directly.
+    """
     if family == "deadlock":
         return DEADLOCK_PQL
-    if family == "reachability":
+    if family in SUPPORTED_FAMILIES:
         return formula
     raise QuestionError(
-        f"Family {family!r} is outside the socle minimal scope {sorted(SUPPORTED_FAMILIES)}."
+        f"Family {family!r} is outside the supported scope {sorted(SUPPORTED_FAMILIES)}."
     )
 
 
@@ -221,6 +229,25 @@ def replay_trace(*, model: dict[str, Json], fired: list[str]) -> list[Json]:
     return steps
 
 
+def detect_cyclicity(*, steps: list[Json]) -> tuple[bool, int | None]:
+    """Detect whether a witness trace is cyclic and where the back-edge lands.
+
+    A trace is cyclic when a marking repeats: the back-edge is the index of
+    the first step whose marking equals an earlier step's marking.
+    """
+    seen: dict[str, int] = {}
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        marking = step.get("marking")
+        key = json.dumps(marking, sort_keys=True) if marking is not None else ""
+        if key in seen:
+            return True, seen[key]
+        index = step.get("index", 0)
+        seen[key] = index if isinstance(index, int) and not isinstance(index, bool) else 0
+    return False, None
+
+
 def build_normalized_output(
     *,
     stdout: str,
@@ -232,13 +259,24 @@ def build_normalized_output(
     verdict = parse_verdict(stdout=stdout)
     fired = parse_trace_transitions(stderr=stderr)
     witness: dict[str, Json] | None = None
-    if verdict == "satisfied" and fired:
-        witness = {
-            "kind": "trace",
-            "cyclic": False,
-            "back_edge": None,
-            "steps": replay_trace(model=model, fired=fired),
-        }
+    if fired:
+        steps = replay_trace(model=model, fired=fired)
+        cyclic, back_edge = detect_cyclicity(steps=steps)
+        if verdict == "satisfied":
+            witness = {
+                "kind": "trace",
+                "cyclic": cyclic,
+                "back_edge": back_edge,
+                "steps": steps,
+            }
+        else:
+            # A violated verdict with a trace is a counterexample (spec §16)
+            witness = {
+                "kind": "counterexample",
+                "cyclic": cyclic,
+                "back_edge": back_edge,
+                "steps": steps,
+            }
     return {
         "verdict": verdict,
         "witness": witness,
@@ -314,7 +352,7 @@ def _parse_question(*, body: bytes) -> tuple[dict[str, Json], str, str]:
     if not isinstance(family, str) or not isinstance(formula, str) or not formula:
         raise HttpError(status=422, detail="question needs a family and a non-empty formula")
     if family not in SUPPORTED_FAMILIES:
-        raise HttpError(status=422, detail=f"family {family!r} is outside the socle minimal scope")
+        raise HttpError(status=422, detail=f"family {family!r} is outside the supported scope")
     if not isinstance(model, dict):
         raise HttpError(
             status=422, detail=f"parameters.{MODEL_PARAMETER} must be the canonical model"
