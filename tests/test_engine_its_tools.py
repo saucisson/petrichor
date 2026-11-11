@@ -1,8 +1,8 @@
 """Tests of the ITS-Tools engine adapter (issue #21, spec §17.2, §17.4, §19.4).
 
 The pure handlers of ``its_tools_server`` are unit-tested with a fake
-ITS-Tools binary; the ``@engine`` test runs the real container on the
-Philosophes-3 net: an engine failure is a CI failure, never a skip.
+ITS-Tools binary. Container (@engine) tests are deferred: the ITS-Tools
+image requires an Eclipse Tycho build, tracked separately.
 """
 
 import json
@@ -57,6 +57,8 @@ esac
 def _question(*, family: str, formula: str) -> EngineQuestion:
     """A question carrying the Philosophes-3 model in its parameters."""
     return EngineQuestion(
+        # The helper takes any str: rejection paths are exercised through it,
+        # and pydantic enforces the CheckFamily literal at runtime.
         family=family,  # type: ignore[arg-type]
         formula=formula,
         pattern=formula,
