@@ -19,6 +19,8 @@ from petrichor.engines.contract import EngineQuestion
 from petrichor.engines.its_tools_server import (
     DEADLOCK_QUERY,
     ItsToolsHandler,
+    QuestionError,
+    _pre_post_sets,
     build_its_query,
     build_normalized_output,
     detect_cyclicity,
@@ -268,3 +270,43 @@ def test_handle_health_returns_200() -> None:
     status, payload = handle_health()
     assert status == 200
     assert json.loads(payload.decode("utf-8")) == {"status": "ok"}
+
+
+def test_pre_post_sets_rejects_place_to_place_arc() -> None:
+    """An arc from a place to a place is a typed QuestionError, not a KeyError."""
+    model = {
+        "places": [{"name": "p1"}, {"name": "p2"}],
+        "transitions": [{"name": "t1"}],
+        "arcs": [{"source": "p1", "target": "p2", "weight": 1}],
+    }
+    with pytest.raises(QuestionError, match="place; arcs from a place must target a transition"):
+        _pre_post_sets(model=model)
+
+
+def test_pre_post_sets_rejects_transition_to_transition_arc() -> None:
+    """An arc from a transition to a transition is a typed QuestionError."""
+    model = {
+        "places": [{"name": "p1"}],
+        "transitions": [{"name": "t1"}, {"name": "t2"}],
+        "arcs": [{"source": "t1", "target": "t2", "weight": 1}],
+    }
+    with pytest.raises(
+        QuestionError, match="transition; arcs from a transition must target a place"
+    ):
+        _pre_post_sets(model=model)
+
+
+def test_do_post_rejects_non_integer_content_length() -> None:
+    """A non-numeric Content-Length header is a typed 422, not an uncaught ValueError."""
+    handler = ItsToolsHandler.__new__(ItsToolsHandler)
+    handler.headers = {"Content-Length": "not-a-number"}  # type: ignore[assignment]
+    answered: list[tuple[int, bytes]] = []
+
+    def fake_answer(status: int, body: bytes) -> None:
+        answered.append((status, body))
+
+    handler._answer = fake_answer  # type: ignore[method-assign]
+    handler.path = "/check"
+    handler.do_POST()
+    assert answered[0][0] == 422
+    assert "Content-Length" in json.loads(answered[0][1].decode("utf-8"))["detail"]
