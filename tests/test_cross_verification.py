@@ -4,11 +4,13 @@ import json
 from typing import TYPE_CHECKING
 
 import pytest
+import structlog.testing
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 from petrichor.engines.contract import (
+    CheckFamily,
     Cost,
     EngineError,
     EngineName,
@@ -58,8 +60,10 @@ class _StubDriver(EngineDriver):
         )
 
 
-def _question(*, family: str = "reachability", formula: str = "EF (eat_1 > 0)") -> EngineQuestion:
-    return EngineQuestion(family=family, formula=formula, pattern="reachability.ef", parameters={})  # type: ignore[arg-type]
+def _question(
+    *, family: CheckFamily = "reachability", formula: str = "EF (eat_1 > 0)"
+) -> EngineQuestion:
+    return EngineQuestion(family=family, formula=formula, pattern="reachability.ef", parameters={})
 
 
 class TestPairingMatrix:
@@ -108,6 +112,21 @@ class TestPairingMatrix:
     def test_load_missing_file_raises_engine_error(self, tmp_path: Path) -> None:
         with pytest.raises(EngineError, match="cannot read"):
             load_pairing_matrix(path=tmp_path / "missing.json")
+
+    def test_unconfigured_family_raises_typed_engine_error(self, tmp_path: Path) -> None:
+        payload = {
+            "version": "2.0",
+            "pairings": {
+                "reachability": {"primary": ["a", "b"]},
+            },
+        }
+        path = tmp_path / "pairing.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        matrix = load_pairing_matrix(path=path)
+        with pytest.raises(EngineError, match="no pairing configured for family 'safety'"):
+            matrix.pair_for(family="safety")
+        with pytest.raises(EngineError, match="no pairing configured for family 'safety'"):
+            matrix.differential_for(family="safety")
 
 
 class TestOrchestratorConcordance:
@@ -184,6 +203,7 @@ class TestOrchestratorDiscordance:
         orchestrator = CrossVerificationOrchestrator(pairing=pairing, drivers=drivers)
         result = orchestrator.verify(question=_question(), timeout_seconds=5)
         assert result.status == "concordant"
+        assert result.concordance == 1.0
         assert result.arbitration.status == "resolved"
         assert result.arbitration.verdict == "satisfied"
 
@@ -245,6 +265,129 @@ class TestResultSerialization:
         assert payload["status"] == "concordant"
         assert payload["verified_by"] == 2
         assert len(payload["verdicts"]) == 2
+
+
+def _stub_drivers(*, verdicts: dict[str, list[Verdict]]) -> dict[EngineName, _StubDriver]:
+    return {
+        EngineName(name): _StubDriver(engine=EngineName(name), verdicts=script)
+        for name, script in verdicts.items()
+    }
+
+
+class TestNarration:
+    """The module's log events are part of the narration contract: pinned here (ADR-0005)."""
+
+    def test_matrix_loading_is_narrated(self, tmp_path: Path) -> None:
+        path = tmp_path / "pairing.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "version": "9.9",
+                    "pairings": {
+                        family: {"primary": ["a", "b"]}
+                        for family in default_pairing_matrix().pairings
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        with structlog.testing.capture_logs() as events:
+            matrix = load_pairing_matrix(path=path)
+        loading = [event for event in events if event["event"] == "pairing_matrix_loading"]
+        assert len(loading) == 1
+        assert loading[0]["path"] == str(path)
+        loaded = [event for event in events if event["event"] == "pairing_matrix_loaded"]
+        assert len(loaded) == 1
+        assert loaded[0]["version"] == matrix.version == "9.9"
+
+    def test_concordance_path_is_narrated(self) -> None:
+        orchestrator = CrossVerificationOrchestrator(
+            pairing=default_pairing_matrix(),
+            drivers=_stub_drivers(verdicts={"verifypn": ["satisfied"], "its-tools": ["satisfied"]}),
+        )
+        with structlog.testing.capture_logs() as events:
+            result = orchestrator.verify(question=_question(), timeout_seconds=5)
+        assert result.status == "concordant"
+        started = [event for event in events if event["event"] == "cross_verification_started"]
+        assert len(started) == 1
+        assert started[0]["family"] == "reachability"
+        assert started[0]["pair"] == ["verifypn", "its-tools"]
+        engine_runs = [
+            event for event in events if event["event"] == "cross_verification_engine_run"
+        ]
+        assert [event["engine"] for event in engine_runs] == ["verifypn", "its-tools"]
+        assert all(event["verdict"] == "satisfied" for event in engine_runs)
+        concordant = [
+            event for event in events if event["event"] == "cross_verification_concordant"
+        ]
+        assert len(concordant) == 1
+        assert concordant[0]["verdict"] == "satisfied"
+        assert concordant[0]["verified_by"] == 2
+        assert not [event for event in events if "arbitration" in event["event"]]
+
+    def test_arbitration_resolved_path_is_narrated(self) -> None:
+        orchestrator = CrossVerificationOrchestrator(
+            pairing=default_pairing_matrix(),
+            drivers=_stub_drivers(
+                verdicts={
+                    "verifypn": ["satisfied", "satisfied"],
+                    "its-tools": ["violated", "satisfied"],
+                }
+            ),
+        )
+        with structlog.testing.capture_logs() as events:
+            result = orchestrator.verify(question=_question(), timeout_seconds=5)
+        assert result.status == "concordant"
+        arbitration_started = [
+            event for event in events if event["event"] == "cross_verification_arbitration_started"
+        ]
+        assert len(arbitration_started) == 1
+        assert arbitration_started[0]["pair"] == ["verifypn", "its-tools"]
+        resolved = [
+            event for event in events if event["event"] == "cross_verification_arbitration_resolved"
+        ]
+        assert len(resolved) == 1
+        assert resolved[0]["verdict"] == "satisfied"
+        after = [
+            event
+            for event in events
+            if event["event"] == "cross_verification_concordant_after_arbitration"
+        ]
+        assert len(after) == 1
+        assert after[0]["verdict"] == "satisfied"
+
+    def test_persistent_discordance_path_is_narrated(self) -> None:
+        orchestrator = CrossVerificationOrchestrator(
+            pairing=default_pairing_matrix(),
+            drivers=_stub_drivers(
+                verdicts={
+                    "verifypn": ["satisfied", "satisfied"],
+                    "its-tools": ["violated", "violated"],
+                }
+            ),
+        )
+        with structlog.testing.capture_logs() as events:
+            result = orchestrator.verify(question=_question(), timeout_seconds=5)
+        assert result.status == "controversial"
+        persistent = [
+            event
+            for event in events
+            if event["event"] == "cross_verification_arbitration_persistent"
+        ]
+        assert len(persistent) == 1
+        assert persistent[0]["first_engine"] == "verifypn"
+        assert persistent[0]["first_verdict"] == "satisfied"
+        assert persistent[0]["second_engine"] == "its-tools"
+        assert persistent[0]["second_verdict"] == "violated"
+        controversial = [
+            event for event in events if event["event"] == "cross_verification_controversial"
+        ]
+        assert len(controversial) == 1
+        assert controversial[0]["family"] == "reachability"
+        assert controversial[0]["verdicts"] == [
+            ("verifypn", "satisfied"),
+            ("its-tools", "violated"),
+        ]
 
 
 if __name__ == "__main__":
