@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 
 import pytest
+import structlog.testing
 
 from petrichor.engines.archive import RunArchive
 from petrichor.engines.contract import (
@@ -49,12 +50,17 @@ ALL_FAMILIES = {"reachability", "safety", "liveness", "recovery", "deadlock"}
 def _oracle(
     *, family: str = "deadlock", expected_verdict: str = "violated", formula: str = "EF DEADLOCK"
 ) -> MccOracle:
-    """One oracle on a minimal model payload."""
+    """One oracle on a minimal model payload.
+
+    The helpers take plain strings on purpose: the Literal-typed fields are
+    exercised with arbitrary values here, and pydantic enforces the closed
+    sets at runtime - the ignores are safe because validation still happens.
+    """
     return MccOracle(
         instance_id="test-instance",
-        family=family,  # type: ignore[arg-type]
+        family=family,  # type: ignore[arg-type] - pydantic validates the literal at runtime
         formula=formula,
-        expected_verdict=expected_verdict,  # type: ignore[arg-type]
+        expected_verdict=expected_verdict,  # type: ignore[arg-type] - pydantic validates at runtime
         model={"places": []},
     )
 
@@ -69,7 +75,7 @@ def _record(*, verdict: str, question: EngineQuestion) -> RunRecord:
         timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
         input_hash="sha256:00",
         output=NormalizedOutput(
-            verdict=verdict,  # type: ignore[arg-type]
+            verdict=verdict,  # type: ignore[arg-type] - pydantic validates the literal at runtime
             witness=Witness(
                 kind="counterexample",
                 cyclic=False,
@@ -138,6 +144,11 @@ class TestQualificationRegistry:
         reloaded = QualificationRegistry(directory=tmp_path)
         assert reloaded.is_qualified(engine=EngineName("verifypn"), family="liveness") is True
         assert reloaded.snapshot() == {"verifypn": {"liveness": "qualified"}}
+
+    def test_corrupt_registry_file_is_a_typed_error(self, tmp_path: Path) -> None:
+        (tmp_path / "qualification.json").write_text("{not json", encoding="utf-8")
+        with pytest.raises(EngineError, match="malformed qualification registry"):
+            QualificationRegistry(directory=tmp_path)
 
 
 class TestReplayOracle:
@@ -213,51 +224,121 @@ class TestEngineQualificationLookup:
         assert lookup.snapshot() == {"verifypn": {"safety": "qualified"}}
 
 
-def _engine_marked_functions() -> list[tuple[Path, ast.FunctionDef]]:
-    """Every test function decorated with ``@pytest.mark.engine`` under tests/."""
-    marked: list[tuple[Path, ast.FunctionDef]] = []
+class TestQualificationNarration:
+    """The module's log events are part of the narration contract: pinned here (ADR-0005)."""
+
+    def test_oracles_loading_is_narrated(self) -> None:
+        with structlog.testing.capture_logs() as events:
+            oracles = load_oracles(path=ORACLES_PATH)
+        loaded = [event for event in events if event["event"] == "qualification_oracles_loaded"]
+        assert len(loaded) == 1
+        assert loaded[0]["oracle_count"] == len(oracles) == 6
+
+    def test_record_and_persist_are_narrated(self, tmp_path: Path) -> None:
+        registry = QualificationRegistry(directory=tmp_path)
+        with structlog.testing.capture_logs() as events:
+            registry.record(engine=EngineName("verifypn"), family="deadlock", state="qualified")
+        recorded = [event for event in events if event["event"] == "qualification_recorded"]
+        assert len(recorded) == 1
+        assert recorded[0]["engine"] == "verifypn"
+        assert recorded[0]["family"] == "deadlock"
+        assert recorded[0]["state"] == "qualified"
+        persisted = [
+            event for event in events if event["event"] == "qualification_registry_persisted"
+        ]
+        assert len(persisted) == 1
+
+    def test_replay_and_engine_completion_are_narrated(self, tmp_path: Path) -> None:
+        registry = QualificationRegistry(directory=tmp_path)
+        driver = FakeDriver(verdicts=["violated"])
+        with structlog.testing.capture_logs() as events:
+            qualify_engine(
+                driver=driver,
+                engine=EngineName("fake"),
+                oracles=[_oracle()],
+                registry=registry,
+            )
+        replayed = [event for event in events if event["event"] == "qualification_oracle_replayed"]
+        assert len(replayed) == 1
+        assert replayed[0]["reproduced"] is True
+        assert replayed[0]["expected_verdict"] == "violated"
+        completed = [
+            event for event in events if event["event"] == "qualification_engine_completed"
+        ]
+        assert len(completed) == 1
+        assert completed[0]["families"] == {"deadlock": "qualified"}
+
+    def test_clause_support_check_is_narrated(self) -> None:
+        registry = QualificationRegistry()
+        with structlog.testing.capture_logs() as events:
+            check_clause_support(
+                registry=registry,
+                engine=EngineName("dummy"),
+                family="deadlock",
+                corroborating_adapters=1,
+            )
+        checked = [
+            event for event in events if event["event"] == "qualification_clause_support_checked"
+        ]
+        assert len(checked) == 1
+        assert checked[0]["qualified"] is False
+        assert checked[0]["corroborating_adapters"] == 1
+
+
+def _is_pytest_mark(decorator: ast.expr, *, mark: str) -> bool:
+    """Whether a decorator is ``@pytest.mark.<mark>`` (optionally called)."""
+    target = decorator.func if isinstance(decorator, ast.Call) else decorator
+    return (
+        isinstance(target, ast.Attribute)
+        and target.attr == mark
+        and isinstance(target.value, ast.Attribute)
+        and target.value.attr == "mark"
+        and isinstance(target.value.value, ast.Name)
+        and target.value.value.id == "pytest"
+    )
+
+
+def _engine_marked_nodes() -> list[tuple[Path, str, ast.AST]]:
+    """Every test function or class decorated with ``@pytest.mark.engine`` under tests/."""
+    marked: list[tuple[Path, str, ast.AST]] = []
     for path in sorted(TESTS_DIR.glob("test_*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
-            if not isinstance(node, ast.FunctionDef):
+            if not isinstance(node, ast.FunctionDef | ast.ClassDef):
                 continue
-            for decorator in node.decorator_list:
-                if (
-                    isinstance(decorator, ast.Attribute)
-                    and decorator.attr == "engine"
-                    and isinstance(decorator.value, ast.Attribute)
-                    and decorator.value.attr == "mark"
-                ):
-                    marked.append((path, node))
+            if any(_is_pytest_mark(decorator, mark="engine") for decorator in node.decorator_list):
+                marked.append((path, node.name, node))
     return marked
+
+
+def _is_pytest_skip_reference(node: ast.AST) -> bool:
+    """Whether a node references ``pytest.skip``/``pytest.skipif`` in any form.
+
+    Covers the call ``pytest.skip(...)``, the decorator ``@pytest.mark.skip``
+    and the conditional decorator ``@pytest.mark.skipif(...)``: all three
+    contain an attribute access ending in ``skip``/``skipif`` rooted at pytest.
+    """
+    if not isinstance(node, ast.Attribute) or node.attr not in {"skip", "skipif"}:
+        return False
+    root: ast.expr = node
+    while isinstance(root, ast.Attribute):
+        root = root.value
+    return isinstance(root, ast.Name) and root.id == "pytest"
 
 
 def test_engine_suite_is_never_empty() -> None:
     """Positive control: the scan actually finds the @engine tests."""
-    assert len(_engine_marked_functions()) >= 1
+    assert len(_engine_marked_nodes()) >= 1
 
 
 def test_no_engine_test_ever_skips() -> None:
     """An engine failure is a CI failure, never a skip (spec §19.4): no @engine
-    test may call pytest.skip or carry a skipif marker."""
+    test - function or class level - may reference pytest.skip or skipif."""
     offenders: list[str] = []
-    for path, node in _engine_marked_functions():
+    for path, name, node in _engine_marked_nodes():
         for child in ast.walk(node):
-            is_pytest_skip_call = (
-                isinstance(child, ast.Call)
-                and isinstance(child.func, ast.Attribute)
-                and child.func.attr in {"skip", "skipif"}
-                and isinstance(child.func.value, ast.Name)
-                and child.func.value.id == "pytest"
-            )
-            if (
-                is_pytest_skip_call
-                and isinstance(child, ast.Call)
-                and isinstance(child.func, ast.Attribute)
-            ):
-                offenders.append(f"{path.name}:{node.name} calls pytest.{child.func.attr}")
-            if isinstance(child, ast.Attribute) and child.attr == "skipif":
-                offenders.append(f"{path.name}:{node.name} carries a skipif marker")
+            if _is_pytest_skip_reference(child):
+                offenders.append(f"{path.name}:{name} references a pytest skip marker")
     assert offenders == []
 
 
