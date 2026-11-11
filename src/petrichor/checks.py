@@ -29,6 +29,9 @@ type RunStatus = Literal["running", "done", "error"]
 type RunErrorKind = Literal["engine_error", "timeout"]
 """The explicit failure kinds of a run - never a default verdict (issue #6)."""
 
+type QualificationState = Literal["qualified", "unqualified"]
+"""The qualification state of an adapter for one family (spec §17.5, issue #22)."""
+
 RunId = NewType("RunId", str)
 """A run identifier, e.g. ``run_7c2a9f``."""
 
@@ -119,6 +122,24 @@ class CheckRunner(Protocol):
 
     def run(self, *, question: CheckQuestion, timeout_seconds: int) -> CheckOutcome:
         """Execute one check question within the timeout."""
+        ...
+
+
+class QualificationLookup(Protocol):
+    """The qualification port: the orchestrator reads adapter qualification (issue #22).
+
+    The verdict lock (spec §19.4) keeps the qualification data inside
+    ``petrichor.engines``; this port is the opaque window the API layer
+    reads through, exactly like `CheckRunner` carries opaque outputs.
+    An adapter absent from the snapshot is unqualified for every family.
+    """
+
+    def is_qualified(self, *, family: CheckFamilyName) -> bool:
+        """Whether the adapter behind this lookup is qualified for the family."""
+        ...
+
+    def snapshot(self) -> dict[str, dict[str, QualificationState]]:
+        """The full qualification status per adapter and family."""
         ...
 
 
