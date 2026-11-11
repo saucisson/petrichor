@@ -8,7 +8,7 @@ image requires an Eclipse Tycho build, tracked separately.
 import json
 import logging
 import stat
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from hypothesis import given, settings
@@ -299,14 +299,36 @@ def test_pre_post_sets_rejects_transition_to_transition_arc() -> None:
 def test_do_post_rejects_non_integer_content_length() -> None:
     """A non-numeric Content-Length header is a typed 422, not an uncaught ValueError."""
     handler = ItsToolsHandler.__new__(ItsToolsHandler)
-    handler.headers = {"Content-Length": "not-a-number"}  # type: ignore[assignment]
+    # ADR-0006 escape: BaseHTTPRequestHandler.headers is an email.message.Message,
+    # not a plain dict; the test injects a raw mapping to simulate a malformed header.
+    cast("Any", handler).headers = {"Content-Length": "not-a-number"}
     answered: list[tuple[int, bytes]] = []
 
     def fake_answer(status: int, body: bytes) -> None:
         answered.append((status, body))
 
-    handler._answer = fake_answer  # type: ignore[method-assign]
+    # ADR-0006 escape: _answer is a concrete method on the handler; the test
+    # replaces it to capture the response without a socket.
+    cast("Any", handler)._answer = fake_answer
     handler.path = "/check"
     handler.do_POST()
     assert answered[0][0] == 422
     assert "Content-Length" in json.loads(answered[0][1].decode("utf-8"))["detail"]
+
+
+def test_do_post_rejects_negative_content_length() -> None:
+    """A negative Content-Length is a typed 422; the size cap must bound it."""
+    handler = ItsToolsHandler.__new__(ItsToolsHandler)
+    # ADR-0006 escape: see test_do_post_rejects_non_integer_content_length.
+    cast("Any", handler).headers = {"Content-Length": "-1"}
+    answered: list[tuple[int, bytes]] = []
+
+    def fake_answer(status: int, body: bytes) -> None:
+        answered.append((status, body))
+
+    # ADR-0006 escape: see test_do_post_rejects_non_integer_content_length.
+    cast("Any", handler)._answer = fake_answer
+    handler.path = "/check"
+    handler.do_POST()
+    assert answered[0][0] == 422
+    assert "negative" in json.loads(answered[0][1].decode("utf-8"))["detail"]

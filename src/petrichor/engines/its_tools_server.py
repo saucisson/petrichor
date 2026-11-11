@@ -431,6 +431,10 @@ class ItsToolsHandler(BaseHTTPRequestHandler):
             detail = json.dumps({"detail": "Content-Length is not an integer"}).encode("utf-8")
             self._answer(422, detail)
             return
+        if length < 0:
+            detail = json.dumps({"detail": "Content-Length is negative"}).encode("utf-8")
+            self._answer(422, detail)
+            return
         if length > MAX_BODY_BYTES:
             self._answer(413, json.dumps({"detail": "body too large"}).encode("utf-8"))
             return
