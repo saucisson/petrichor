@@ -25,6 +25,7 @@ import tempfile
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Literal
 
 from petrichor.engines.pnml_export import PnmlExportError, export_pnml
 
@@ -75,7 +76,11 @@ def build_its_query(*, family: str, formula: str) -> str:
     )
 
 
-def parse_verdict(*, stdout: str) -> str:
+Verdict = Literal["satisfied", "violated", "unknown"]
+"""The closed set of normalized verdicts (ADR-0006)."""
+
+
+def parse_verdict(*, stdout: str) -> Verdict:
     """The normalized verdict from the ITS-Tools stdout."""
     if MAYBE_PATTERN.search(stdout):
         return "unknown"
@@ -109,6 +114,52 @@ def _element_name(*, element: Json, kind: str) -> str:
     return name
 
 
+def _arc_endpoints(*, arc: Json) -> tuple[str, str, int]:
+    """The validated (source, target, weight) of one arc payload."""
+    if not isinstance(arc, dict):
+        raise QuestionError("Every arc must be a JSON object.")
+    source = arc.get("source")
+    target = arc.get("target")
+    weight = arc.get("weight", 1)
+    if not isinstance(source, str) or not isinstance(target, str):
+        raise QuestionError("Every arc needs string source and target names.")
+    if not isinstance(weight, int) or isinstance(weight, bool) or weight < 1:
+        raise QuestionError("Every arc needs a positive integer weight.")
+    return source, target, weight
+
+
+def _apply_arc(
+    *,
+    pre_post: dict[str, tuple[dict[str, int], dict[str, int]]],
+    place_names: set[str],
+    source: str,
+    target: str,
+    weight: int,
+) -> None:
+    """Fold one validated arc into the pre/post sets, rejecting malformed directions."""
+    if source not in pre_post and source not in place_names:
+        raise QuestionError(f"Arc source {source!r} is an unknown element name.")
+    if target not in pre_post and target not in place_names:
+        raise QuestionError(f"Arc target {target!r} is an unknown element name.")
+    if source in place_names:
+        if target not in pre_post:
+            raise QuestionError(
+                f"Arc target {target!r} is a place; arcs from a place must target a transition."
+            )
+        pre, post = pre_post[target]
+        pre[source] = pre.get(source, 0) + weight
+        pre_post[target] = (pre, post)
+    else:
+        if target not in place_names:
+            raise QuestionError(
+                f"Arc target {target!r} is a transition; "
+                "arcs from a transition must target a place."
+            )
+        pre, post = pre_post[source]
+        post[target] = post.get(target, 0) + weight
+        pre_post[source] = (pre, post)
+
+
 def _pre_post_sets(*, model: dict[str, Json]) -> dict[str, tuple[dict[str, int], dict[str, int]]]:
     """Per transition name, the weighted pre- and post-sets over place names."""
     places = model.get("places")
@@ -125,27 +176,14 @@ def _pre_post_sets(*, model: dict[str, Json]) -> dict[str, tuple[dict[str, int],
     for transition in transitions:
         pre_post[_element_name(element=transition, kind="transition")] = ({}, {})
     for arc in arcs:
-        if not isinstance(arc, dict):
-            raise QuestionError("Every arc must be a JSON object.")
-        source = arc.get("source")
-        target = arc.get("target")
-        weight = arc.get("weight", 1)
-        if not isinstance(source, str) or not isinstance(target, str):
-            raise QuestionError("Every arc needs string source and target names.")
-        if source not in pre_post and source not in place_names:
-            raise QuestionError(f"Arc source {source!r} is an unknown element name.")
-        if target not in pre_post and target not in place_names:
-            raise QuestionError(f"Arc target {target!r} is an unknown element name.")
-        if not isinstance(weight, int) or isinstance(weight, bool) or weight < 1:
-            raise QuestionError("Every arc needs a positive integer weight.")
-        if source in place_names:
-            pre, post = pre_post[target]
-            pre[source] = pre.get(source, 0) + weight
-            pre_post[target] = (pre, post)
-        else:
-            pre, post = pre_post[source]
-            post[target] = post.get(target, 0) + weight
-            pre_post[source] = (pre, post)
+        source, target, weight = _arc_endpoints(arc=arc)
+        _apply_arc(
+            pre_post=pre_post,
+            place_names=place_names,
+            source=source,
+            target=target,
+            weight=weight,
+        )
     return pre_post
 
 
@@ -386,7 +424,13 @@ class ItsToolsHandler(BaseHTTPRequestHandler):
         if self.path != CHECK_PATH:
             self._answer(404, json.dumps({"detail": "not found"}).encode("utf-8"))
             return
-        length = int(self.headers.get("Content-Length", "0"))
+        raw_length = self.headers.get("Content-Length", "0")
+        try:
+            length = int(raw_length)
+        except ValueError:
+            detail = json.dumps({"detail": "Content-Length is not an integer"}).encode("utf-8")
+            self._answer(422, detail)
+            return
         if length > MAX_BODY_BYTES:
             self._answer(413, json.dumps({"detail": "body too large"}).encode("utf-8"))
             return
