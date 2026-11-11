@@ -1,0 +1,251 @@
+"""Unit tests for the cross-verification orchestrator (spec §17.4, issue #23)."""
+
+import json
+from typing import TYPE_CHECKING
+
+import pytest
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+from petrichor.engines.contract import (
+    Cost,
+    EngineError,
+    EngineName,
+    EngineQuestion,
+    EngineVersion,
+    InputHash,
+    NormalizedOutput,
+    RunId,
+    RunRecord,
+    Verdict,
+)
+from petrichor.engines.cross_verification import (
+    CrossVerificationOrchestrator,
+    default_pairing_matrix,
+    load_pairing_matrix,
+)
+from petrichor.engines.driver import EngineDriver
+
+
+class _StubDriver(EngineDriver):
+    """A driver stub returning a scripted sequence of verdicts."""
+
+    def __init__(self, *, engine: EngineName, verdicts: list[Verdict]) -> None:
+        self._engine = engine
+        self._verdicts = list(verdicts)
+        self.run_count = 0
+
+    def run(self, *, question: EngineQuestion, timeout_seconds: int) -> RunRecord:
+        verdict = self._verdicts[min(self.run_count, len(self._verdicts) - 1)]
+        self.run_count += 1
+        output = NormalizedOutput(
+            verdict=verdict,
+            witness=None,
+            cost=Cost(tool_seconds=0.5, states_explored=10),
+            technique="stub",
+        )
+        return RunRecord(
+            run_id=RunId(f"run_stub{self.run_count:04d}"),
+            engine=self._engine,
+            engine_version=EngineVersion("1.0.0"),
+            command=["stub", "run"],
+            timeout_seconds=timeout_seconds,
+            input_hash=InputHash("sha256:stub"),
+            output=output,
+            measured_seconds=0.5,
+            archived_at="2026-11-11T00:00:00+00:00",
+        )
+
+
+def _question(*, family: str = "reachability", formula: str = "EF (eat_1 > 0)") -> EngineQuestion:
+    return EngineQuestion(family=family, formula=formula, pattern="reachability.ef", parameters={})  # type: ignore[arg-type]
+
+
+class TestPairingMatrix:
+    def test_default_matrix_loads(self) -> None:
+        matrix = default_pairing_matrix()
+        assert matrix.version == "1.0"
+        assert set(matrix.pairings) == {
+            "reachability",
+            "safety",
+            "liveness",
+            "recovery",
+            "deadlock",
+        }
+
+    def test_pair_for_returns_two_distinct_engines(self) -> None:
+        matrix = default_pairing_matrix()
+        for family in matrix.pairings:
+            pair = matrix.pair_for(family=family)
+            assert len(pair) == 2
+            assert pair[0] != pair[1]
+
+    def test_load_from_custom_path(self, tmp_path: Path) -> None:
+        payload = {
+            "version": "2.0",
+            "description": "custom",
+            "pairings": {
+                "reachability": {"primary": ["a", "b"], "differential": ["c"], "note": "test"},
+                "safety": {"primary": ["a", "b"], "differential": [], "note": ""},
+                "liveness": {"primary": ["a", "b"], "differential": [], "note": ""},
+                "recovery": {"primary": ["a", "b"], "differential": [], "note": ""},
+                "deadlock": {"primary": ["a", "b"], "differential": [], "note": ""},
+            },
+        }
+        path = tmp_path / "pairing.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        matrix = load_pairing_matrix(path=path)
+        assert matrix.version == "2.0"
+        assert matrix.differential_for(family="reachability") == [EngineName("c")]
+
+    def test_load_malformed_raises_engine_error(self, tmp_path: Path) -> None:
+        path = tmp_path / "bad.json"
+        path.write_text("{not json", encoding="utf-8")
+        with pytest.raises(EngineError, match="cannot read"):
+            load_pairing_matrix(path=path)
+
+    def test_load_missing_file_raises_engine_error(self, tmp_path: Path) -> None:
+        with pytest.raises(EngineError, match="cannot read"):
+            load_pairing_matrix(path=tmp_path / "missing.json")
+
+
+class TestOrchestratorConcordance:
+    def test_both_engines_agree_satisfied(self) -> None:
+        pairing = default_pairing_matrix()
+        drivers = {
+            EngineName("verifypn"): _StubDriver(
+                engine=EngineName("verifypn"), verdicts=["satisfied"]
+            ),
+            EngineName("its-tools"): _StubDriver(
+                engine=EngineName("its-tools"), verdicts=["satisfied"]
+            ),
+        }
+        orchestrator = CrossVerificationOrchestrator(pairing=pairing, drivers=drivers)
+        result = orchestrator.verify(question=_question(), timeout_seconds=5)
+        assert result.status == "concordant"
+        assert result.concordance == 1.0
+        assert result.verified_by == 2
+        assert result.arbitration.status == "not_needed"
+        assert len(result.verdicts) == 2
+        assert all(v.verdict == "satisfied" for v in result.verdicts)
+
+    def test_both_engines_agree_violated(self) -> None:
+        pairing = default_pairing_matrix()
+        drivers = {
+            EngineName("verifypn"): _StubDriver(
+                engine=EngineName("verifypn"), verdicts=["violated"]
+            ),
+            EngineName("its-tools"): _StubDriver(
+                engine=EngineName("its-tools"), verdicts=["violated"]
+            ),
+        }
+        orchestrator = CrossVerificationOrchestrator(pairing=pairing, drivers=drivers)
+        result = orchestrator.verify(
+            question=_question(family="deadlock", formula="EF deadlock"), timeout_seconds=5
+        )
+        assert result.status == "concordant"
+        assert result.verified_by == 2
+        assert all(v.verdict == "violated" for v in result.verdicts)
+
+
+class TestOrchestratorDiscordance:
+    def test_persistent_discordance_is_controversial(self) -> None:
+        pairing = default_pairing_matrix()
+        drivers = {
+            EngineName("verifypn"): _StubDriver(
+                engine=EngineName("verifypn"), verdicts=["satisfied", "satisfied"]
+            ),
+            EngineName("its-tools"): _StubDriver(
+                engine=EngineName("its-tools"), verdicts=["violated", "violated"]
+            ),
+        }
+        orchestrator = CrossVerificationOrchestrator(pairing=pairing, drivers=drivers)
+        result = orchestrator.verify(question=_question(), timeout_seconds=5)
+        assert result.status == "controversial"
+        assert result.concordance == 0.0
+        assert result.verified_by == 0
+        assert result.arbitration.status == "persistent"
+        assert result.arbitration.verdict is None
+        # Both initial runs + both arbitration runs happened
+        assert drivers[EngineName("verifypn")].run_count == 2
+        assert drivers[EngineName("its-tools")].run_count == 2
+
+    def test_arbitration_resolves_discordance(self) -> None:
+        pairing = default_pairing_matrix()
+        drivers = {
+            EngineName("verifypn"): _StubDriver(
+                engine=EngineName("verifypn"), verdicts=["satisfied", "satisfied"]
+            ),
+            EngineName("its-tools"): _StubDriver(
+                engine=EngineName("its-tools"), verdicts=["violated", "satisfied"]
+            ),
+        }
+        orchestrator = CrossVerificationOrchestrator(pairing=pairing, drivers=drivers)
+        result = orchestrator.verify(question=_question(), timeout_seconds=5)
+        assert result.status == "concordant"
+        assert result.arbitration.status == "resolved"
+        assert result.arbitration.verdict == "satisfied"
+
+    def test_unknown_verdict_counts_as_discordance(self) -> None:
+        pairing = default_pairing_matrix()
+        drivers = {
+            EngineName("verifypn"): _StubDriver(
+                engine=EngineName("verifypn"), verdicts=["satisfied", "satisfied"]
+            ),
+            EngineName("its-tools"): _StubDriver(
+                engine=EngineName("its-tools"), verdicts=["unknown", "unknown"]
+            ),
+        }
+        orchestrator = CrossVerificationOrchestrator(pairing=pairing, drivers=drivers)
+        result = orchestrator.verify(question=_question(), timeout_seconds=5)
+        assert result.status == "controversial"
+        assert result.verified_by == 0
+
+
+class TestOrchestratorErrors:
+    def test_missing_driver_raises_engine_error(self) -> None:
+        pairing = default_pairing_matrix()
+        drivers: dict[EngineName, _StubDriver] = {}  # no drivers wired
+        orchestrator = CrossVerificationOrchestrator(pairing=pairing, drivers=drivers)
+        with pytest.raises(EngineError, match="no driver wired"):
+            orchestrator.verify(question=_question(), timeout_seconds=5)
+
+    def test_driver_error_propagates(self) -> None:
+        class _FailingDriver:
+            def run(self, *, question: EngineQuestion, timeout_seconds: int) -> RunRecord:
+                raise EngineError("engine exploded")
+
+        pairing = default_pairing_matrix()
+        drivers = {
+            EngineName("verifypn"): _FailingDriver(),
+            EngineName("its-tools"): _StubDriver(
+                engine=EngineName("its-tools"), verdicts=["satisfied"]
+            ),
+        }
+        orchestrator = CrossVerificationOrchestrator(pairing=pairing, drivers=drivers)
+        with pytest.raises(EngineError, match="engine exploded"):
+            orchestrator.verify(question=_question(), timeout_seconds=5)
+
+
+class TestResultSerialization:
+    def test_result_is_json_serializable(self) -> None:
+        pairing = default_pairing_matrix()
+        drivers = {
+            EngineName("verifypn"): _StubDriver(
+                engine=EngineName("verifypn"), verdicts=["satisfied"]
+            ),
+            EngineName("its-tools"): _StubDriver(
+                engine=EngineName("its-tools"), verdicts=["satisfied"]
+            ),
+        }
+        orchestrator = CrossVerificationOrchestrator(pairing=pairing, drivers=drivers)
+        result = orchestrator.verify(question=_question(), timeout_seconds=5)
+        payload = json.loads(result.model_dump_json())
+        assert payload["status"] == "concordant"
+        assert payload["verified_by"] == 2
+        assert len(payload["verdicts"]) == 2
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

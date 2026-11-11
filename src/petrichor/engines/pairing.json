@@ -1,0 +1,31 @@
+{
+  "version": "1.0",
+  "description": "Cross-verification pairing matrix per check family (spec §17.4, issue #23). Two engines per run, chosen for technological distance; never two instances of the same brick.",
+  "pairings": {
+    "reachability": {
+      "primary": ["verifypn", "its-tools"],
+      "differential": ["smpt"],
+      "note": "Tapaal × ITS-Tools; smpt as 3rd SMT differential for critical or discordant properties."
+    },
+    "safety": {
+      "primary": ["verifypn", "its-tools"],
+      "differential": ["smpt"],
+      "note": "Same pairing as reachability, plus dialect counter-variant (Reachability vs CTL) on one of the two."
+    },
+    "liveness": {
+      "primary": ["verifypn", "its-tools"],
+      "differential": ["ty"],
+      "note": "Tapaal × ITS-Tools in CTLCardinality; TY as 3rd. LTL path semantics (GF φ) is a distinct examination, never merged with the CTL verdict."
+    },
+    "recovery": {
+      "primary": ["verifypn", "its-tools"],
+      "differential": ["ty"],
+      "note": "Tapaal × ITS-Tools in CTLCardinality; TY as 3rd."
+    },
+    "deadlock": {
+      "primary": ["verifypn", "its-tools"],
+      "differential": [],
+      "note": "GlobalProperties.ReachabilityDeadlock at 2 tools; random-walk probe is a fast unreliable detection, never alone in a contract."
+    }
+  }
+}
