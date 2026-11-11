@@ -237,7 +237,7 @@ class TestOrchestratorErrors:
                 raise EngineError("engine exploded")
 
         pairing = default_pairing_matrix()
-        drivers = {
+        drivers: dict[EngineName, EngineDriver] = {
             EngineName("verifypn"): _FailingDriver(),
             EngineName("its-tools"): _StubDriver(
                 engine=EngineName("its-tools"), verdicts=["satisfied"]
