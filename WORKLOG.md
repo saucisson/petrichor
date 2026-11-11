@@ -500,3 +500,4 @@ One entry per commit or pull request:
 - **Judgement calls**: chose `--output text` over `--output streaming` (which emits JSON lines all run long) to keep stdout readable per ADR-0017's two-channel design; ADR-0017's decision text still names `--output json` but the decision (process boundary = context reset) is unchanged, and `docs/decisions/` was left untouched.
 - **Escalations**: none.
 
+
