@@ -334,8 +334,10 @@ def _parse_question(*, body: bytes) -> tuple[dict[str, Json], str, str]:
 
 def handle_check(*, body: bytes, timeout_seconds: int) -> tuple[int, bytes]:
     """Validate a question payload, run ITS-Tools, answer with the normalized output."""
+    logger.debug("its_tools_check_received", extra={"body_bytes": len(body)})
     try:
         model, family, formula = _parse_question(body=body)
+        logger.debug("its_tools_question_parsed", extra={"family": family})
         try:
             query = build_its_query(family=family, formula=formula)
             model_pnml = export_pnml(model=model)
@@ -350,6 +352,10 @@ def handle_check(*, body: bytes, timeout_seconds: int) -> tuple[int, bytes]:
         except OSError as error:
             detail = f"ITS-Tools could not be executed: {error}"
             raise HttpError(status=500, detail=detail) from error
+        logger.debug(
+            "its_tools_run_completed",
+            extra={"returncode": returncode, "tool_seconds": tool_seconds},
+        )
         if returncode != 0:
             raise HttpError(status=500, detail=f"ITS-Tools failed: {stderr.strip()[:500]}")
         try:
