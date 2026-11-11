@@ -28,10 +28,10 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         default-jre-headless \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --create-home --uid 65534 nobody
 
 COPY --from=builder /opt/its-tools /opt/its-tools
-ENV PATH="/opt/its-tools/bin:${PATH}"
+RUN mkdir -p /usr/local/bin     && printf '#!/bin/sh\nexec java -jar /opt/its-tools/its-tools.jar "$@"\n' > /usr/local/bin/its \
+    && chmod +x /usr/local/bin/its
 ENV JAVA_HOME="/usr/lib/jvm/default-java"
 
 WORKDIR /app
