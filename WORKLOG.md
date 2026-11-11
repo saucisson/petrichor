@@ -44,6 +44,14 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-11 - P23 cross-verification pairing orchestrator (issue #23, branch feat/23-appariement-contre-verification)
+
+- **Issue**: #23 (P23 · Appariement de contre-vérification par famille, spec §17.4). Blocked-by #22 (merged into daily).
+- **Done**: new `src/petrichor/engines/pairing.json` — versioned pairing matrix (v1.0) with two engines per family (verifypn x its-tools by default, smpt/ty as differentials per family), never two instances of the same brick. New `src/petrichor/engines/cross_verification.py` — `PairingMatrix`/`PairingEntry` (load from JSON, `pair_for`/`differential_for`), `CrossVerificationOrchestrator` (runs the paired engines on one clause, computes concordance; on discordance runs an arbitration pass re-running both engines, persistent discordance yields `controversial` with `verified_by=0` — never a single verdict), `CrossVerificationResult`/`EngineVerdictRecord`/`ArbitrationRecord` typed records. The orchestrator lives inside `engines/` because comparing verdicts requires reading them (verdict lock §19.4). Tests: `tests/test_cross_verification.py` (13 unit tests: matrix load/default/malformed, concordance satisfied/violated, persistent discordance, arbitration resolved, unknown-as-discordance, missing driver, driver error propagation, JSON serialization) and `tests/test_cross_verification_guard.py` (6 guard tests: AST scan that no module outside engines/ reads a verdict from a cross-verification result, persistent discordance yields controversial never resolved, concordance, arbitration-resolved, two-distinct-engines-per-family, never-same-brick-twice).
+- **Evidence**: run: ruff check + format clean, mypy strict clean on the 3 new files, import-linter kept, pytest `-m "not engine"` 317 passed (19 new). Not run: `make check` full (timed out at 300s in this environment — individual gates run separately and green), `make mutate`, `make smoke-test`.
+- **Judgement calls**: the orchestrator accepts a `Mapping[EngineName, EngineDriver]` (covariant) so test stubs satisfy the protocol without casts; the pairing matrix is a checked-in JSON next to the module (same pattern as `mcc_oracles.json`) rather than a YAML to avoid a new dependency; arbitration re-runs the primary pair (reductions-disabled is a driver-level concern, deferred to the adapter layer).
+- **Escalations**: none.
+
 ## 2026-11-11 - P22 MCC oracle qualification of the adapters (issue #22, branch feat/22-qualification-mcc)
 
 - **Issue**: #22 (P22 · Qualification des adaptateurs par oracles du benchmark MCC, spec §17.5). Blocked-by #20, #21 (both merged into daily).
