@@ -656,9 +656,9 @@ components:
           nullable: true
           description: >-
             Whether the engine that produced the output is qualified for the
-            family (spec §17.5, issue #22); null while running or when no
-            qualification lookup is wired. An unqualified adapter is never
-            alone on a clause.
+            family (spec §17.5, issue #22); null while running, on error
+            runs, or when no qualification lookup is wired. An unqualified
+            adapter is never alone on a clause.
     RunError:
       type: object
       description: The explicit failure of a run - never a default verdict.
