@@ -499,3 +499,4 @@ One entry per commit or pull request:
 - **Evidence**: run: `make check` (ruff, mypy strict, import-linter, pytest 319 passed, coverage 96.64%); the three vibe output modes (`text`/`json`/`streaming`) compared with a live one-turn headless run. Not run: a full `make night` end to end.
 - **Judgement calls**: chose `--output text` over `--output streaming` (which emits JSON lines all run long) to keep stdout readable per ADR-0017's two-channel design; ADR-0017's decision text still names `--output json` but the decision (process boundary = context reset) is unchanged, and `docs/decisions/` was left untouched.
 - **Escalations**: none.
+
