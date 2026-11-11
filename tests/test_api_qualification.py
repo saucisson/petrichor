@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 
 import httpx
+import structlog.testing
 from pydantic import SecretStr
 
 from petrichor.api import create_app
@@ -108,9 +109,13 @@ def test_qualification_endpoint_without_lookup_returns_503() -> None:
 
 def test_qualification_endpoint_serves_the_snapshot() -> None:
     client, _ = build_client(FakeQualificationLookup(qualified=True))
-    response = client.get("/v1/qualification", headers=AUTH_HEADERS)
+    with structlog.testing.capture_logs() as events:
+        response = client.get("/v1/qualification", headers=AUTH_HEADERS)
     assert response.status_code == 200
     assert response.json() == {"engines": {"fake": {"deadlock": "qualified"}}}
+    reads = [event for event in events if event["event"] == "api_qualification_read"]
+    assert len(reads) == 1
+    assert reads[0]["engines"] == 1
 
 
 def test_qualification_endpoint_rejects_post() -> None:
@@ -128,15 +133,20 @@ def test_qualification_endpoint_requires_the_api_key() -> None:
 
 def test_done_run_carries_engine_qualified_true_when_qualified() -> None:
     client, model_id = build_client(FakeQualificationLookup(qualified=True))
-    response = client.post(
-        "/v1/checks/deadlock",
-        json={"model_id": model_id, "kind": "deadlock", "formula": "EF DEADLOCK"},
-        headers=JSON_HEADERS,
-    )
+    with structlog.testing.capture_logs() as events:
+        response = client.post(
+            "/v1/checks/deadlock",
+            json={"model_id": model_id, "kind": "deadlock", "formula": "EF DEADLOCK"},
+            headers=JSON_HEADERS,
+        )
+        run = wait_terminal(client, response.json()["run_id"])
     assert response.status_code == 202
-    run = wait_terminal(client, response.json()["run_id"])
     assert run["status"] == "done"
     assert run["engine_qualified"] is True
+    narrated = [event for event in events if event["event"] == "check_run_engine_qualification"]
+    assert len(narrated) == 1
+    assert narrated[0]["engine_qualified"] is True
+    assert narrated[0]["family"] == "deadlock"
 
 
 def test_done_run_carries_engine_qualified_false_when_unqualified() -> None:

@@ -108,10 +108,12 @@ class QualificationRegistry:
         if not path.exists():
             logger.debug("qualification_registry_empty", path=str(path))
             return
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        self._states = {
-            EngineName(engine): dict(families) for engine, families in payload["engines"].items()
-        }
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            engines = payload["engines"].items()
+            self._states = {EngineName(engine): dict(families) for engine, families in engines}
+        except (OSError, json.JSONDecodeError, KeyError, TypeError, AttributeError) as error:
+            raise EngineError(f"malformed qualification registry at {path}: {error}") from error
         logger.debug("qualification_registry_loaded", path=str(path), engines=len(self._states))
 
     def _persist(self) -> None:
