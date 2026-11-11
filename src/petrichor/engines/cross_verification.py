@@ -72,14 +72,21 @@ class PairingMatrix(BaseModel):
     description: str = ""
     pairings: dict[CheckFamily, PairingEntry]
 
+    def _entry_for(self, *, family: CheckFamily) -> PairingEntry:
+        """The pairing entry of one family, or raise a typed error when unconfigured."""
+        entry = self.pairings.get(family)
+        if entry is None:
+            raise EngineError(f"no pairing configured for family {family!r}")
+        return entry
+
     def pair_for(self, *, family: CheckFamily) -> EnginePair:
         """The primary engine pair for one family."""
-        entry = self.pairings[family]
+        entry = self._entry_for(family=family)
         return EnginePair((entry.primary[0], entry.primary[1]))
 
     def differential_for(self, *, family: CheckFamily) -> list[EngineName]:
         """The optional differential engines for one family."""
-        return list(self.pairings[family].differential)
+        return list(self._entry_for(family=family).differential)
 
 
 def load_pairing_matrix(*, path: Path) -> PairingMatrix:
@@ -282,6 +289,7 @@ class CrossVerificationOrchestrator:
             )
             if arbitration.status == "resolved":
                 status = "concordant"
+                concordance = 1.0
                 verified_by = len(verdicts)
                 logger.info(
                     "cross_verification_concordant_after_arbitration",

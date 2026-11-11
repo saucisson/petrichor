@@ -19,8 +19,11 @@ import ast
 from pathlib import Path
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from petrichor.engines.contract import (
+    CheckFamily,
     Cost,
     EngineName,
     EngineQuestion,
@@ -33,6 +36,7 @@ from petrichor.engines.contract import (
 )
 from petrichor.engines.cross_verification import (
     CrossVerificationOrchestrator,
+    PairingMatrix,
     default_pairing_matrix,
 )
 
@@ -70,36 +74,76 @@ class _MockDriver:
         )
 
 
+def _imports_cross_verification(tree: ast.AST) -> bool:
+    """Whether the module imports the cross_verification module in any form.
+
+    Catches ``from petrichor.engines.cross_verification import X``,
+    ``from petrichor.engines import cross_verification`` and
+    ``import petrichor.engines.cross_verification`` alike.
+    """
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.module is not None and node.module.endswith("cross_verification"):
+                return True
+            if any(alias.name == "cross_verification" for alias in node.names):
+                return True
+        elif isinstance(node, ast.Import) and any(
+            name.name.endswith("cross_verification") for name in node.names
+        ):
+            return True
+    return False
+
+
+def _chain_names(expression: ast.expr) -> list[str]:
+    """Every identifier in an attribute/subscript/call chain.
+
+    ``result.verdicts[0].verdict`` yields ``["result"]``;
+    ``payload.result.verdict`` yields ``["payload", "result"]``; a bare
+    ``verdict`` attribute on a call yields the call's func name.
+    """
+    names: list[str] = []
+    current = expression
+    while True:
+        if isinstance(current, ast.Name):
+            names.append(current.id)
+            return names
+        if isinstance(current, ast.Attribute):
+            names.append(current.attr)
+            current = current.value
+        elif isinstance(current, ast.Subscript):
+            current = current.value
+        elif isinstance(current, ast.Call):
+            current = current.func
+        else:
+            return names
+
+
 def test_no_module_outside_engines_produces_a_single_verdict_on_discordance() -> None:
     """AST guard: no module outside engines/ imports CrossVerificationResult and emits a verdict.
 
     The verdict lock (spec §19.4) plus the cross-verification rule (spec
     §17.4): on discordance the only legal outcome is ``controversial``.
     A module outside ``engines/`` that reads ``CrossVerificationResult``
-    and produces a bare ``Verdict`` would violate both.
+    and produces a bare ``Verdict`` would violate both. The scan flags any
+    ``.verdict`` attribute access whose expression chain roots in a name
+    containing ``result`` — covering ``result.verdict`` and
+    ``result.verdicts[0].verdict`` alike.
     """
     offenders: list[str] = []
     for path in sorted(SRC_ROOT.rglob("*.py")):
         if ENGINES_PACKAGE in path.parents or path == ENGINES_PACKAGE / "__init__.py":
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        imports_cross_verification = any(
-            isinstance(node, ast.ImportFrom)
-            and node.module is not None
-            and "cross_verification" in node.module
-            for node in ast.walk(tree)
-        )
-        if not imports_cross_verification:
+        if not _imports_cross_verification(tree):
             continue
         # If a module outside engines/ imports cross_verification, it must
-        # not assign a bare Verdict from a result field — flag any
-        # ``.verdict`` attribute access on a CrossVerificationResult.
+        # not read a verdict from a cross-verification result — flag any
+        # ``.verdict`` attribute access rooted in a ``*result*`` name.
         for node in ast.walk(tree):
             if (
                 isinstance(node, ast.Attribute)
                 and node.attr == "verdict"
-                and isinstance(node.value, ast.Name)
-                and "result" in node.value.id.lower()
+                and any("result" in name.lower() for name in _chain_names(node.value))
             ):
                 offenders.append(f"{path}:{node.lineno}")
     assert not offenders, (
@@ -224,6 +268,49 @@ def test_pairing_matrix_never_pairs_same_brick_twice() -> None:
     for family, entry in matrix.pairings.items():
         assert entry.primary[0] != entry.primary[1], (
             f"family {family}: primary pair {entry.primary} repeats the same engine"
+        )
+
+
+FAMILIES: list[CheckFamily] = ["reachability", "safety", "liveness", "recovery", "deadlock"]
+
+
+@pytest.mark.property
+@settings(deadline=None, max_examples=50)
+@given(
+    engines=st.lists(
+        st.text(alphabet="abcdefgh", min_size=1, max_size=6),
+        unique=True,
+        min_size=3,
+        max_size=6,
+    )
+)
+def test_property_pairing_invariants_hold_for_any_matrix(engines: list[str]) -> None:
+    """Property: any valid matrix pairs two distinct engines per family, never the same brick twice.
+
+    The primary pair is two distinct engines and every differential engine
+    is distinct from the primary pair and from the other differentials —
+    a malformed future matrix edit is caught for arbitrary shapes, not
+    just the five hard-coded families (ADR-0012).
+    """
+    payload = {
+        "version": "0.0-test",
+        "pairings": {
+            family: {
+                "primary": [engines[0], engines[1]],
+                "differential": engines[2:],
+            }
+            for family in FAMILIES
+        },
+    }
+    matrix = PairingMatrix.model_validate(payload)
+    for family in FAMILIES:
+        pair = matrix.pair_for(family=family)
+        assert len(pair) == 2
+        assert pair[0] != pair[1]
+        entry = matrix.pairings[family]
+        all_engines = [*entry.primary, *entry.differential]
+        assert len(set(all_engines)) == len(all_engines), (
+            f"family {family}: the same brick appears twice in {all_engines}"
         )
 
 
