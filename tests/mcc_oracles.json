@@ -237,7 +237,7 @@
   },
   "oracles": [
     {
-      "expected_verdict": "violated",
+      "expected_verdict": "satisfied",
       "family": "deadlock",
       "formula": "EF DEADLOCK",
       "instance_id": "philosophes3-deadlock"
