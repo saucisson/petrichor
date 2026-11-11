@@ -23,6 +23,7 @@ from petrichor.engines.its_tools_server import (
     build_normalized_output,
     detect_cyclicity,
     handle_check,
+    handle_health,
     parse_states_explored,
     parse_trace_transitions,
     parse_verdict,
@@ -243,3 +244,27 @@ def test_its_tools_narration_events(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.DEBUG, logger="petrichor.engines.its_tools_server"):
         handler.log_message("GET /health 200")
     assert any("its_tools_engine_request" in r.message for r in caplog.records)
+
+
+def test_handle_check_narration_events(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The handle_check DEBUG narration events are pinned (ADR-0005)."""
+    fake = tmp_path / "its"
+    fake.write_text(FAKE_ITS, encoding="utf-8")
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setenv("ITS_TOOLS_BINARY", str(fake))
+    body = json.dumps(_question(family="deadlock", formula="EF DEADLOCK").model_dump(mode="json"))
+    with caplog.at_level(logging.DEBUG, logger="petrichor.engines.its_tools_server"):
+        handle_check(body=body.encode("utf-8"), timeout_seconds=10)
+    messages = [r.message for r in caplog.records]
+    assert "its_tools_check_received" in messages
+    assert "its_tools_question_parsed" in messages
+    assert "its_tools_run_completed" in messages
+
+
+def test_handle_health_returns_200() -> None:
+    """The healthcheck handler answers 200 ok."""
+    status, payload = handle_health()
+    assert status == 200
+    assert json.loads(payload.decode("utf-8")) == {"status": "ok"}
