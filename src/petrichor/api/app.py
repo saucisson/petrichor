@@ -16,6 +16,10 @@
   engine errors and timeouts are explicit error states, never a default verdict.
   Every run is archived with its command, tool version, timeout, input hash
   and measured cost (spec §12.5) - and no API or code path ever deletes a run.
+- ``GET /v1/qualification`` exposes the stored qualification status per
+  (adapter, family) to the orchestrator (spec §17.5, issue #22); a done run
+  also carries ``engine_qualified``, whether its engine is qualified for the
+  family - an unqualified adapter is never alone on a clause.
 - Every request is authenticated with the ``X-API-Key`` header before it is
   parsed deeply; every error is an RFC 7807 ``application/problem+json``
   payload of the same shape.
@@ -43,6 +47,7 @@ from petrichor.checks import (
     CheckQuestion,
     CheckRequest,
     CheckRunner,
+    QualificationLookup,
     RunId,
     run_key,
 )
@@ -70,6 +75,7 @@ MODELS_PATH = "/v1/models"
 MODEL_PATH_PREFIX = "/v1/models/"
 CHECKS_PATH_PREFIX = "/v1/checks/"
 RUNS_PATH_PREFIX = "/v1/runs/"
+QUALIFICATION_PATH = "/v1/qualification"
 SESSIONS_PATH = "/v1/sessions"
 SESSION_PATH_PREFIX = "/v1/sessions/"
 SESSION_JOURNAL_SUFFIX = "/journal"
@@ -369,6 +375,7 @@ def _execute_run(
     question: CheckQuestion,
     timeout_seconds: int,
     started_monotonic: float,
+    qualification: QualificationLookup | None,
 ) -> None:
     """Run one check on a background thread and record its explicit outcome.
 
@@ -392,11 +399,23 @@ def _execute_run(
         return
     measured_seconds = time.monotonic() - started_monotonic
     if isinstance(outcome, CheckCompleted):
+        engine_qualified = (
+            qualification.is_qualified(family=question.family)
+            if qualification is not None
+            else None
+        )
+        logger.debug(
+            "check_run_engine_qualification",
+            run_id=run_id,
+            family=question.family,
+            engine_qualified=engine_qualified,
+        )
         run_store.mark_done(
             run_id=run_id,
             output=outcome.output,
             command=outcome.command,
             measured_seconds=measured_seconds,
+            engine_qualified=engine_qualified,
         )
         logger.debug(
             "check_run_finished", run_id=run_id, status="done", measured_seconds=measured_seconds
@@ -444,6 +463,7 @@ def _post_check(
     runner: CheckRunner | None,
     family: CheckFamilyName,
     settings: ApiSettings,
+    qualification: QualificationLookup | None,
 ) -> Iterable[bytes]:
     """Accept a check question: 202 + Location, idempotent by (model, question) hash.
 
@@ -558,6 +578,7 @@ def _post_check(
                 "question": question,
                 "timeout_seconds": timeout_seconds,
                 "started_monotonic": started_monotonic,
+                "qualification": qualification,
             },
             daemon=True,
         )
@@ -622,6 +643,34 @@ def _get_run(
     )
 
 
+def _get_qualification(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    qualification: QualificationLookup | None,
+) -> Iterable[bytes]:
+    """Expose the stored qualification status per (adapter, family) (spec §17.5, issue #22)."""
+    if qualification is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+                reason="qualification_not_configured",
+                detail="No qualification lookup is wired into this server yet (issue #22).",
+            ),
+        )
+    snapshot = qualification.snapshot()
+    logger.debug("api_qualification_read", engines=len(snapshot))
+    body = json.dumps({"engines": snapshot}, sort_keys=True, separators=(",", ":"))
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.OK,
+        content_type=CONTENT_TYPE_JSON,
+        body=body.encode("utf-8"),
+    )
+
+
 def _dispatch_models(
     *,
     environ: WSGIEnvironment,
@@ -664,7 +713,33 @@ def _dispatch_models(
     return None
 
 
-def _dispatch_checks_and_runs(
+def _dispatch_qualification(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    method: str,
+    path: str,
+    qualification: QualificationLookup | None,
+) -> Iterable[bytes] | None:
+    """Route /v1/qualification, or return None when the path is not it."""
+    if path != QUALIFICATION_PATH:
+        return None
+    if method == "GET":
+        return _get_qualification(
+            environ=environ, start_response=start_response, qualification=qualification
+        )
+    return _problem_response(
+        start_response=start_response,
+        environ=environ,
+        payload=_problem(
+            status=HTTPStatus.METHOD_NOT_ALLOWED,
+            reason="method_not_allowed",
+            detail=f"No resource at {path}.",
+        ),
+    )
+
+
+def _dispatch_checks_and_runs(  # noqa: PLR0913 - one keyword per routed dependency (ADR-0003)
     *,
     environ: WSGIEnvironment,
     start_response: StartResponse,
@@ -674,6 +749,7 @@ def _dispatch_checks_and_runs(
     store: ModelStore,
     run_store: RunStore,
     runner: CheckRunner | None,
+    qualification: QualificationLookup | None,
 ) -> Iterable[bytes] | None:
     """Route /v1/checks/{family} and /v1/runs/{run_id}, or return None."""
     if path.startswith(CHECKS_PATH_PREFIX):
@@ -687,6 +763,7 @@ def _dispatch_checks_and_runs(
                 runner=runner,
                 family=family,
                 settings=settings,
+                qualification=qualification,
             )
         return _problem_response(
             start_response=start_response,
@@ -1161,6 +1238,7 @@ def create_app(
     runner: CheckRunner | None,
     session_store: SessionStore | None = None,
     arbitrator: ProfileArbitrator | None = None,
+    qualification: QualificationLookup | None = None,
 ) -> WSGIApp:
     """Build the WSGI application: auth first, then routing and negotiation."""
 
@@ -1183,6 +1261,14 @@ def create_app(
             environ=environ, start_response=start_response, method=method, path=path, store=store
         )
         if routed is None:
+            routed = _dispatch_qualification(
+                environ=environ,
+                start_response=start_response,
+                method=method,
+                path=path,
+                qualification=qualification,
+            )
+        if routed is None:
             routed = _dispatch_checks_and_runs(
                 environ=environ,
                 start_response=start_response,
@@ -1192,6 +1278,7 @@ def create_app(
                 store=store,
                 run_store=run_store,
                 runner=runner,
+                qualification=qualification,
             )
         if routed is None and session_store is not None:
             routed = _dispatch_sessions(

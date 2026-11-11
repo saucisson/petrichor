@@ -1,0 +1,276 @@
+{
+  "description": "Bounded MCC oracle sample (issue #22, spec \u00a717.5): Philosophes-3 instances with expected verdicts, one per check family.",
+  "model": {
+    "arcs": [
+      {
+        "source": "eat_1",
+        "target": "rel_1",
+        "weight": 1
+      },
+      {
+        "source": "eat_2",
+        "target": "rel_2",
+        "weight": 1
+      },
+      {
+        "source": "eat_3",
+        "target": "rel_3",
+        "weight": 1
+      },
+      {
+        "source": "fork_1",
+        "target": "takeL_1",
+        "weight": 1
+      },
+      {
+        "source": "fork_1",
+        "target": "takeR_3",
+        "weight": 1
+      },
+      {
+        "source": "fork_2",
+        "target": "takeL_2",
+        "weight": 1
+      },
+      {
+        "source": "fork_2",
+        "target": "takeR_1",
+        "weight": 1
+      },
+      {
+        "source": "fork_3",
+        "target": "takeL_3",
+        "weight": 1
+      },
+      {
+        "source": "fork_3",
+        "target": "takeR_2",
+        "weight": 1
+      },
+      {
+        "source": "hasL_1",
+        "target": "takeR_1",
+        "weight": 1
+      },
+      {
+        "source": "hasL_2",
+        "target": "takeR_2",
+        "weight": 1
+      },
+      {
+        "source": "hasL_3",
+        "target": "takeR_3",
+        "weight": 1
+      },
+      {
+        "source": "rel_1",
+        "target": "fork_1",
+        "weight": 1
+      },
+      {
+        "source": "rel_1",
+        "target": "fork_2",
+        "weight": 1
+      },
+      {
+        "source": "rel_1",
+        "target": "think_1",
+        "weight": 1
+      },
+      {
+        "source": "rel_2",
+        "target": "fork_2",
+        "weight": 1
+      },
+      {
+        "source": "rel_2",
+        "target": "fork_3",
+        "weight": 1
+      },
+      {
+        "source": "rel_2",
+        "target": "think_2",
+        "weight": 1
+      },
+      {
+        "source": "rel_3",
+        "target": "fork_1",
+        "weight": 1
+      },
+      {
+        "source": "rel_3",
+        "target": "fork_3",
+        "weight": 1
+      },
+      {
+        "source": "rel_3",
+        "target": "think_3",
+        "weight": 1
+      },
+      {
+        "source": "takeL_1",
+        "target": "hasL_1",
+        "weight": 1
+      },
+      {
+        "source": "takeL_2",
+        "target": "hasL_2",
+        "weight": 1
+      },
+      {
+        "source": "takeL_3",
+        "target": "hasL_3",
+        "weight": 1
+      },
+      {
+        "source": "takeR_1",
+        "target": "eat_1",
+        "weight": 1
+      },
+      {
+        "source": "takeR_2",
+        "target": "eat_2",
+        "weight": 1
+      },
+      {
+        "source": "takeR_3",
+        "target": "eat_3",
+        "weight": 1
+      },
+      {
+        "source": "think_1",
+        "target": "takeL_1",
+        "weight": 1
+      },
+      {
+        "source": "think_2",
+        "target": "takeL_2",
+        "weight": 1
+      },
+      {
+        "source": "think_3",
+        "target": "takeL_3",
+        "weight": 1
+      }
+    ],
+    "color_domain": null,
+    "formalism": "pt",
+    "places": [
+      {
+        "initial_marking": 0,
+        "name": "eat_1"
+      },
+      {
+        "initial_marking": 0,
+        "name": "eat_2"
+      },
+      {
+        "initial_marking": 0,
+        "name": "eat_3"
+      },
+      {
+        "initial_marking": 1,
+        "name": "fork_1"
+      },
+      {
+        "initial_marking": 1,
+        "name": "fork_2"
+      },
+      {
+        "initial_marking": 1,
+        "name": "fork_3"
+      },
+      {
+        "initial_marking": 0,
+        "name": "hasL_1"
+      },
+      {
+        "initial_marking": 0,
+        "name": "hasL_2"
+      },
+      {
+        "initial_marking": 0,
+        "name": "hasL_3"
+      },
+      {
+        "initial_marking": 1,
+        "name": "think_1"
+      },
+      {
+        "initial_marking": 1,
+        "name": "think_2"
+      },
+      {
+        "initial_marking": 1,
+        "name": "think_3"
+      }
+    ],
+    "transitions": [
+      {
+        "name": "rel_1"
+      },
+      {
+        "name": "rel_2"
+      },
+      {
+        "name": "rel_3"
+      },
+      {
+        "name": "takeL_1"
+      },
+      {
+        "name": "takeL_2"
+      },
+      {
+        "name": "takeL_3"
+      },
+      {
+        "name": "takeR_1"
+      },
+      {
+        "name": "takeR_2"
+      },
+      {
+        "name": "takeR_3"
+      }
+    ]
+  },
+  "oracles": [
+    {
+      "expected_verdict": "violated",
+      "family": "deadlock",
+      "formula": "EF DEADLOCK",
+      "instance_id": "philosophes3-deadlock"
+    },
+    {
+      "expected_verdict": "satisfied",
+      "family": "reachability",
+      "formula": "EF (eat_1 > 0)",
+      "instance_id": "philosophes3-reachability-eat"
+    },
+    {
+      "expected_verdict": "satisfied",
+      "family": "safety",
+      "formula": "AG (eat_1 <= 1)",
+      "instance_id": "philosophes3-safety-1safe"
+    },
+    {
+      "expected_verdict": "violated",
+      "family": "safety",
+      "formula": "AG (eat_1 <= 0)",
+      "instance_id": "philosophes3-safety-noeat"
+    },
+    {
+      "expected_verdict": "violated",
+      "family": "liveness",
+      "formula": "AG EF (eat_1 > 0)",
+      "instance_id": "philosophes3-liveness-eat"
+    },
+    {
+      "expected_verdict": "satisfied",
+      "family": "recovery",
+      "formula": "AG (think_1 == 0 or EF (eat_1 > 0))",
+      "instance_id": "philosophes3-recovery-eat"
+    }
+  ]
+}

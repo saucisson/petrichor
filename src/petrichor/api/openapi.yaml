@@ -190,6 +190,41 @@ paths:
           $ref: "#/components/responses/NotFound"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+  /qualification:
+    get:
+      summary: Qualification status per adapter and family
+      description: >-
+        The stored qualification status of every adapter for every check
+        family (spec §17.5, issue #22), exposed to the orchestrator. An
+        adapter absent from the snapshot is unqualified for every family:
+        qualification is earned by replaying the MCC benchmark oracles, never
+        assumed.
+      responses:
+        "200":
+          description: The qualification snapshot.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [engines]
+                properties:
+                  engines:
+                    type: object
+                    additionalProperties:
+                      type: object
+                      additionalProperties:
+                        type: string
+                        enum: [qualified, unqualified]
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "503":
+          description: No qualification lookup wired into this server yet (issue #22).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /sessions:
     post:
       summary: Create a resumable session for a model
@@ -571,7 +606,7 @@ components:
         command, tool version, timeout, input hash and measured cost.
         Runs are never deleted - no API or code path removes one.
         output is the normalized engine output served verbatim.
-      required: [run_id, status, family, kind, formula, model_id, input_hash, timeout_seconds, tool_version, command, measured_seconds, output, error]
+      required: [run_id, status, family, kind, formula, model_id, input_hash, timeout_seconds, tool_version, command, measured_seconds, output, error, engine_qualified]
       properties:
         run_id:
           type: string
@@ -616,6 +651,14 @@ components:
         error:
           nullable: true
           $ref: "#/components/schemas/RunError"
+        engine_qualified:
+          type: boolean
+          nullable: true
+          description: >-
+            Whether the engine that produced the output is qualified for the
+            family (spec §17.5, issue #22); null while running or when no
+            qualification lookup is wired. An unqualified adapter is never
+            alone on a clause.
     RunError:
       type: object
       description: The explicit failure of a run - never a default verdict.
