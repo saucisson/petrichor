@@ -44,6 +44,14 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-11 - P22 MCC oracle qualification of the adapters (issue #22, branch feat/22-qualification-mcc)
+
+- **Issue**: #22 (P22 · Qualification des adaptateurs par oracles du benchmark MCC, spec §17.5). Blocked-by #20, #21 (both merged into daily).
+- **Done**: new `src/petrichor/engines/qualification.py` — `MccOracle` + `load_oracles()` (bounded on-disk sample `tests/mcc_oracles.json`: Philosophes-3, 6 oracles covering all 5 families with expected verdicts), `QualificationRegistry` (per (adapter, family) state, persisted as `qualification.json`, unknown = unqualified), `replay_oracle()` (driver errors propagate, never swallowed), `qualify_engine()` (qualified iff every oracle of the family replays true), `check_clause_support()` guard raising `UnqualifiedSoleSupportError` when a clause would rest on a single unqualified adapter, and `EngineQualificationLookup` implementing the new `QualificationLookup` port in `checks.py` (verdict lock: the API reads qualification only through this opaque port). API: `GET /v1/qualification` serves the snapshot (503 `qualification_not_configured` when unwired), done runs carry `engine_qualified` (`StoredRun` field, `mark_done` kwarg); `openapi.yaml` updated. Tests: `tests/test_engine_qualification.py` (registry persist/reload, replay match/mismatch/error-propagation, per-family qualification, guard accept/reject, lookup, AST guard that no `@engine` test ever calls `pytest.skip`/`skipif`, plus the `@engine` test replaying the whole sample on the real verifypn container) and `tests/test_api_qualification.py` (endpoint 200/503/405/401, per-run flag true/false/null). `test_run_payload_shape_is_stable` extended with the new `engine_qualified` key.
+- **Evidence**: run: ruff check + ruff format clean, mypy strict clean (28 files), pytest `-m "not engine"` 559 passed. @engine test `test_mcc_sample_replays_on_verifypn_in_the_real_container` runs the real verifypn container (cold image build ~10 min) — result recorded in the PR body. Not run: `make mutate` (EOD on daily), `make smoke-test` (no notify config in this environment).
+- **Judgement calls**: the MCC sites block automatic access (spec §17), so the "bounded disk sample" is a checked-in JSON derived from Philosophes-3 with verdicts grounded in the existing verifypn `@engine` tests, not a download of the official benchmark; ITS-Tools is qualified through the same code path but its container build stays deferred (P21), so the `@engine` replay runs on verifypn only. Qualification exposure goes through a port in `checks.py` rather than an import, per the verdict lock (spec §19.4).
+- **Escalations**: none.
+
 ## 2026-11-10 - P21 ITS-Tools adapter (issue #21, branch feat/21-its-tools)
 
 - **Issue**: #21 (P21 · Adaptateur ITS-Tools toutes familles, LTL stutter, spec §17.2/§17.4). Blocked-by #4 (merged).

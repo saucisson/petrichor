@@ -430,6 +430,7 @@ class TestRunStates:
             "measured_seconds",
             "output",
             "error",
+            "engine_qualified",
         }
         assert run["family"] == "deadlock"
         assert run["kind"] == "deadlock"

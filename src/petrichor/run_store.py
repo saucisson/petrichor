@@ -69,6 +69,10 @@ class StoredRun(BaseModel):
     measured_seconds: float | None = Field(default=None, ge=0)
     output: dict[str, JsonValue] | None = None
     error: RunError | None = None
+    engine_qualified: bool | None = None
+    """Whether the engine that produced the output is qualified for the family
+    (spec §17.5, issue #22); None while the run is not done or no qualification
+    lookup is wired."""
 
 
 class RunAdmission(BaseModel):
@@ -223,6 +227,7 @@ class RunStore:
         output: dict[str, JsonValue],
         command: list[str],
         measured_seconds: float,
+        engine_qualified: bool | None = None,
     ) -> None:
         """Move a running run to the ``done`` state with its normalized output."""
         with self._lock:
@@ -237,6 +242,7 @@ class RunStore:
                     "output": output,
                     "command": command,
                     "measured_seconds": measured_seconds,
+                    "engine_qualified": engine_qualified,
                 }
             )
         logger.debug(
