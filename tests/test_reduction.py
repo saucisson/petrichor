@@ -84,6 +84,49 @@ class TestTokenElimination:
                 reduced_marking={ElementName("think_1"): -1},
             )
 
+    def test_rejects_marking_above_original(self) -> None:
+        model = build_philosophes3()
+        with pytest.raises(UncertifiedReductionError, match="exceeds original"):
+            reduce_marking_token_elimination(
+                model=model,
+                reduced_marking={ElementName("think_1"): 3},
+            )
+
+    def test_rejection_warning_events_pinned(self) -> None:
+        model = build_philosophes3()
+        with (
+            structlog.testing.capture_logs() as logs,
+            pytest.raises(UncertifiedReductionError),
+        ):
+            reduce_marking_token_elimination(
+                model=model,
+                reduced_marking={ElementName("ghost"): 0},
+            )
+        event_names = [entry["event"] for entry in logs]
+        assert "reduction_rejected_unknown_place" in event_names
+
+        with (
+            structlog.testing.capture_logs() as logs,
+            pytest.raises(UncertifiedReductionError),
+        ):
+            reduce_marking_token_elimination(
+                model=model,
+                reduced_marking={ElementName("think_1"): -1},
+            )
+        event_names = [entry["event"] for entry in logs]
+        assert "reduction_rejected_negative_marking" in event_names
+
+        with (
+            structlog.testing.capture_logs() as logs,
+            pytest.raises(UncertifiedReductionError),
+        ):
+            reduce_marking_token_elimination(
+                model=model,
+                reduced_marking={ElementName("think_1"): 5},
+            )
+        event_names = [entry["event"] for entry in logs]
+        assert "reduction_rejected_marking_increase" in event_names
+
     def test_empty_reduction_is_allowed(self) -> None:
         model = build_philosophes3()
         reduced = reduce_marking_token_elimination(model=model, reduced_marking={})
@@ -158,12 +201,17 @@ class TestWitnessReplay:
             back_edge=None,
             steps=[WitnessStep(index=0, marking=["ghost_place"], fired=None)],
         )
-        with pytest.raises(WitnessReplayError, match="unknown place"):
+        with (
+            structlog.testing.capture_logs() as logs,
+            pytest.raises(WitnessReplayError, match="unknown place"),
+        ):
             replay_witness_on_original(
                 witness=witness,
                 original_model=model,
                 element_map=element_map,
             )
+        event_names = [entry["event"] for entry in logs]
+        assert "witness_replay_failed_unknown_place" in event_names
 
     def test_replay_rejects_unknown_transition(self) -> None:
         model = build_philosophes3()
@@ -174,12 +222,17 @@ class TestWitnessReplay:
             back_edge=None,
             steps=[WitnessStep(index=0, marking=["think_1"], fired="ghost_transition")],
         )
-        with pytest.raises(WitnessReplayError, match="unknown transition"):
+        with (
+            structlog.testing.capture_logs() as logs,
+            pytest.raises(WitnessReplayError, match="unknown transition"),
+        ):
             replay_witness_on_original(
                 witness=witness,
                 original_model=model,
                 element_map=element_map,
             )
+        event_names = [entry["event"] for entry in logs]
+        assert "witness_replay_failed_unknown_transition" in event_names
 
     def test_reformat_witness_maps_names(self) -> None:
         element_map = ElementMap(
@@ -237,4 +290,6 @@ class TestReductionErrorHierarchy:
             element_map=ElementMap(mapping={}),
         )
         with pytest.raises(ValidationError):
+            # frozen pydantic model: assignment is a deliberate type error to
+            # prove the model is immutable (ADR-0006 inline justification)
             certificate.saved_states = 5  # type: ignore[misc]

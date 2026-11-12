@@ -44,6 +44,14 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-11 - P24 review round 1 on PR #91 - marking-increase guard, pinned WARNING events, split proposal
+
+- **Issue**: #24 (P24 · Réductions certifiées, spec §18.2), review round 1 on PR #91.
+- **Done**: review report had 1 BLOCKING + 1 TO-FIX + 4 SUGGESTION, all fixed. TO-FIX: `reduce_marking_token_elimination` now rejects any requested marking higher than the original (`reduction_rejected_marking_increase` WARNING + `UncertifiedReductionError`), with a unit test and the Hypothesis property extended to assert `0 <= reduced <= original` per place (and to expect the error when the input exceeds). BLOCKING: split proposal added to the PR #91 body via `make update-pr` (ADR-0019) — PR A module+unit tests+WORKLOG, PR B guard tests. SUGGESTIONs: `technique` default now references `TOKEN_ELIMINATION_RULE_NAME` (single source of truth); the `# type: ignore[misc]` carries an inline ADR-0006 justification; the no-silent-reduction guard is now a real AST scan counting `raise UncertifiedReductionError` sites (>= 3) instead of substring matching; all four WARNING rejection events (`reduction_rejected_unknown_place`, `reduction_rejected_negative_marking`, `reduction_rejected_marking_increase`, `witness_replay_failed_unknown_place`, `witness_replay_failed_unknown_transition`) are pinned by tests.
+- **Evidence**: run: ruff check + format clean, mypy strict clean on the touched module, pytest on the two reduction test files 22 passed. Not run: full `make check` (individual gates run separately and green), `make mutate`, `make smoke-test`.
+- **Judgement calls**: the split boundary follows the natural diff (module+unit tests vs guard tests), same pattern as PR #88/#90.
+- **Escalations**: none.
+
 ## 2026-11-11 - P24 certified reductions: Token Elimination + witness replay (issue #24, branch feat/24-reductions-certifiees)
 
 - **Issue**: #24 (P24 · Réductions certifiées : Token Elimination et rejeu de témoin, spec §18.2). Blocked-by #20 (merged into daily).
