@@ -20,26 +20,37 @@ from petrichor.petri_canonical import ElementName
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPO_ROOT / "src" / "petrichor"
 ENGINES_PACKAGE = SRC_ROOT / "engines"
+SCAN_ROOTS = [REPO_ROOT / "src", REPO_ROOT / "scripts", REPO_ROOT / "tools"]
+"""Scan roots for the import guard: tests/ is excluded — test files legitimately
+import the module under test."""
 
 
 def _python_files(*, root: Path) -> list[Path]:
     return sorted(root.rglob("*.py"))
 
 
+def _imports_reduction(*, tree: ast.AST, path: Path) -> list[str]:
+    """Return the line numbers where the AST imports the reduction module."""
+    hits: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module and "reduction" in node.module:
+            hits.append(f"{path.relative_to(REPO_ROOT)}:{node.lineno}")
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if "reduction" in alias.name:
+                    hits.append(f"{path.relative_to(REPO_ROOT)}:{node.lineno}")
+    return hits
+
+
 def test_no_module_outside_engines_imports_reduction() -> None:
     """Only petrichor.engines may import the reduction module (verdict-lock style)."""
     offenders: list[str] = []
-    for path in _python_files(root=SRC_ROOT):
-        if ENGINES_PACKAGE in path.parents:
-            continue
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.module and "reduction" in node.module:
-                offenders.append(f"{path.relative_to(REPO_ROOT)}:{node.lineno}")
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    if "reduction" in alias.name:
-                        offenders.append(f"{path.relative_to(REPO_ROOT)}:{node.lineno}")
+    for scan_root in SCAN_ROOTS:
+        for path in _python_files(root=scan_root):
+            if ENGINES_PACKAGE in path.parents:
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            offenders.extend(_imports_reduction(tree=tree, path=path))
     assert offenders == [], f"reduction imported outside engines/: {offenders}"
 
 
@@ -58,8 +69,8 @@ def test_reduction_module_defines_certified_entry_point() -> None:
 def test_reduction_module_rejects_uncertified_reduction() -> None:
     """The reduction module must raise UncertifiedReductionError on bad input.
 
-    AST scan: the function reduce_marking_token_elimination contains at least
-    one ``raise UncertifiedReductionError`` — deleting them would fail this test.
+    AST scan across the whole module: at least 3 ``raise UncertifiedReductionError``
+    sites must exist — deleting them would fail this test.
     """
     path = ENGINES_PACKAGE / "reduction.py"
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
