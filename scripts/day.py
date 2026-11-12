@@ -86,12 +86,21 @@ def changed_files_since(*, tag_name: str) -> int:
     return len(changed_paths)
 
 
+def worklog_entries_since(*, tag_name: str) -> list[str]:
+    """List the worklog entries changed since the tag (ADR-0022)."""
+    git_output = run_git(
+        arguments=["diff", "--name-only", f"{tag_name}..HEAD", "--", "docs/worklog"]
+    )
+    return [line for line in git_output.splitlines() if line.strip()]
+
+
 def render_report(
     *,
     tag_name: str,
     merge_commits: Sequence[str],
     commit_count: int,
     changed_file_count: int,
+    worklog_entries: Sequence[str],
 ) -> str:
     """Assemble the Markdown day report."""
     today = date.today().isoformat()
@@ -108,6 +117,14 @@ def render_report(
     else:
         report_sections.append("- No merges since the baseline tag.")
     report_sections.append("")
+    report_sections.append("## Worklog entries of the day")
+    report_sections.append("")
+    if worklog_entries:
+        for entry in worklog_entries:
+            report_sections.append(f"- `{entry}`")
+    else:
+        report_sections.append("- No worklog entries since the baseline tag.")
+    report_sections.append("")
     report_sections.append("## Activity summary")
     report_sections.append("")
     report_sections.append(f"- Commits since baseline: {commit_count}")
@@ -120,9 +137,9 @@ def render_report(
         " approving the merge of `daily` into `main`."
     )
     report_sections.append(
-        "- Read `WORKLOG.md`: the day's agent-written audit trail - every"
-        " entry should match a merge above, and no merge above without an"
-        " entry."
+        "- Audit the worklog entries listed above in `docs/worklog/` -"
+        " every entry should match a merge above, and no merge above"
+        " without an entry."
     )
     report_sections.append("")
     return "\n".join(report_sections)
@@ -158,6 +175,7 @@ def run_day_report(*, arguments: argparse.Namespace) -> int:
         merge_commits=merges_since(tag_name=tag_name),
         commit_count=commits_since(tag_name=tag_name),
         changed_file_count=changed_files_since(tag_name=tag_name),
+        worklog_entries=worklog_entries_since(tag_name=tag_name),
     )
     print(markdown_report)
     return EXIT_CODE_SUCCESS

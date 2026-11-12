@@ -343,3 +343,55 @@ def test_fetch_issue_undecodable_json_is_protocol_failure() -> None:
             item_number=59,
         )
     assert excinfo.value.code == _shared.EXIT_CODE_PROTOCOL_FAILURE
+
+
+def test_extract_issue_number_finds_first_reference() -> None:
+    """The first #N in the body is the issue reference."""
+    assert pulls.extract_issue_number(body="Closes #24\n\nSee also #99") == "24"
+
+
+def test_extract_issue_number_returns_none_without_reference() -> None:
+    """No #N in the body: no issue line."""
+    assert pulls.extract_issue_number(body="No issue here") is None
+
+
+def test_write_worklog_entry_creates_index_card(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The worklog entry is written with the PR number, title, branch, issue, URL."""
+    monkeypatch.setattr(pulls, "REPOSITORY_ROOT", tmp_path)
+    entry_path = pulls.write_worklog_entry(
+        pull_request_number=91,
+        title="feat(P24): certified reductions",
+        head_branch="feat/24-reductions",
+        body="Closes #24",
+        repository_slug="saucisson/petrichor",
+    )
+    content = entry_path.read_text(encoding="utf-8")
+    assert "# PR #91 : feat(P24): certified reductions" in content
+    assert "- Branche : feat/24-reductions" in content
+    assert "- Issue : #24" in content
+    assert "https://github.com/saucisson/petrichor/pull/91" in content
+    assert entry_path.name.endswith("-pr-91.md")
+
+
+def test_write_worklog_entry_is_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A second call for the same PR does not overwrite the existing file."""
+    monkeypatch.setattr(pulls, "REPOSITORY_ROOT", tmp_path)
+    first = pulls.write_worklog_entry(
+        pull_request_number=91,
+        title="first title",
+        head_branch="b",
+        body="",
+        repository_slug="o/r",
+    )
+    first.write_text("custom content", encoding="utf-8")
+    second = pulls.write_worklog_entry(
+        pull_request_number=91,
+        title="second title",
+        head_branch="b",
+        body="",
+        repository_slug="o/r",
+    )
+    assert second == first
+    assert second.read_text(encoding="utf-8") == "custom content"
