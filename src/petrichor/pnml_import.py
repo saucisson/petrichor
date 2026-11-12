@@ -15,6 +15,7 @@ from pydantic import ValidationError
 
 from petrichor.petri_canonical import (
     HASH_PREFIX,
+    INHIBITOR_ARC_ANNOTATION_KEY,
     Arc,
     CanonicalModel,
     ElementId,
@@ -214,7 +215,9 @@ def _parse_arc(
     )
     arc_type = element.get("type")
     annotations: dict[str, JsonValue] = (
-        {"inhibitor": True} if arc_type is not None and arc_type.lower() == "inhibitor" else {}
+        {INHIBITOR_ARC_ANNOTATION_KEY: True}
+        if arc_type is not None and arc_type.lower() == INHIBITOR_ARC_ANNOTATION_KEY
+        else {}
     )
     return Arc(
         id=ElementId(f"{ARC_ID_PREFIX}{raw_id}"),
