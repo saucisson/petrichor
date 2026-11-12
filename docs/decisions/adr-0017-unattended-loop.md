@@ -74,9 +74,9 @@ claims before working**. The claim (a `night-claimed` label, set by
   (`blocked`/`needs-human` labels, structured comment, worklog entry)
   - never an obstacle to route around. Unattended honesty is the same
   honesty, with nobody watching.
-- The morning audit is unchanged: `WORKLOG.md`, the pull requests, the
-  `needs-human` issues, and the claimed-but-unmerged issues tell the
-  night's story (orchestration §7).
+- The morning audit is unchanged: the day's `docs/worklog/` entries
+  (ADR-0022), the pull requests, the `needs-human` issues, and the
+  claimed-but-unmerged issues tell the night's story (orchestration §7).
 
 ## Consequences
 
@@ -114,7 +114,8 @@ any work, with the same guards (kind must match, no double claim).
 The session then resumes it: diagnose with `make wait-ci PR=N`, a
 local `make check`, and a full read of the diff and review comments;
 fix; push; review; merge - the recovery contract is the developer
-contract, with a `WORKLOG.md` entry naming the resumption.
+contract, with the resumption named honestly on the pull request
+(ADR-0022).
 
 Consequences of the amendment:
 

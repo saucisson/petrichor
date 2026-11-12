@@ -35,8 +35,8 @@ Constitutional document (ADR-0009). Changing it requires a human decision.
      (ADR-0010),
    - the change is not on the escalation list (`docs/agents/escalation.md`).
 5. **End of day** - freeze merges, `make day-report`, `make smoke-test`,
-   then the human tests, audits `WORKLOG.md`, and merges `daily` into
-   `main`.
+   then the human tests, audits the day's entries in `docs/worklog/`
+   (listed by `make day-report`), and merges `daily` into `main`.
 6. **Mutation testing** runs on `daily` at EOD (`make mutate`, workflow
    `mutation.yml`) - surviving mutants become issues (ADR-0012).
 

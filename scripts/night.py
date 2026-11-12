@@ -30,7 +30,7 @@ an obstacle to route around.
 The loop itself is honest glue: it fetches the issues and the
 recoverable pull requests, applies the triage gate, renders the
 versioned prompt, runs the session, records the exit code, and moves
-on. The verdicts live in the repository (``WORKLOG.md``, the pull
+on. The verdicts live in the repository (``docs/worklog/``, the pull
 requests, the issues) for the morning audit.
 
 Output has two channels (ADR-0017): stdout is the short, readable
@@ -929,7 +929,10 @@ def run(*, arguments: argparse.Namespace) -> int:
     print("\n=== Night summary ===")
     for result in journal.summary_lines:
         print(f"- {result}")
-    print("Morning audit: WORKLOG.md, the pull requests, and every issue labeled needs-human.")
+    print(
+        "Morning audit: docs/worklog/ entries (via `make day-report`),"
+        " the pull requests, and every issue labeled needs-human."
+    )
     journal.log(
         text=f"night loop finished: {len(journal.summary_lines)} result line(s) on stdout",
     )

@@ -18,8 +18,8 @@ contract exactly:
 1. Branch from `daily` (`feat/<issue>` or `fix/<issue>`, ADR-0009).
 2. Implement, with tests the runner collects.
 3. Full `make check` green on the final state.
-4. Append your `WORKLOG.md` entry.
-5. Open the pull request via `make pr TITLE="..." BODY_FILE=...`
+4. Open the pull request via `make pr TITLE="..." BODY_FILE=...`
+   (the driver generates the `docs/worklog/` entry automatically).
    (the only creation path - never `gh`, never the API by hand).
 6. Push, then block on `make wait-ci PR=N` - the active CI wait
    (ADR-0018). NEVER end the session "waiting for CI": nobody will
@@ -37,8 +37,7 @@ contract exactly:
 
 If anything blocks you - the triage gate, a denied call, a third
 failed attempt, an escalation-list file - label the issue (`blocked`,
-`needs-human`), write the structured comment on it, append the honest
-`WORKLOG.md` entry, and STOP. A stalled issue is the honest state; a
-bypassed gate is not.
+`needs-human`), write the structured comment on it, and STOP. A
+stalled issue is the honest state; a bypassed gate is not.
 
 {{issue}}
