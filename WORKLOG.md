@@ -44,6 +44,14 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-12 - P24 PR B: reduction guard tests (issue #24 follow-up, branch feat/24b-reduction-guard-tests)
+
+- **Issue**: #24 (P24 · Réductions certifiées, spec §18.2) — follow-up PR B per the ADR-0019 split applied in PR #91.
+- **Done**: `tests/test_reduction_guard.py` restored — 4 guard tests: AST scan that no module outside engines/ imports the reduction module; AST scan that the module exposes the certified entry point and typed errors; AST scan counting `raise UncertifiedReductionError` sites (>= 3, fails if the no-silent-reduction property regresses); Hypothesis property test over arbitrary markings asserting structure preservation, `0 <= reduced <= original` per place, and `UncertifiedReductionError` when the input exceeds the original.
+- **Evidence**: run: ruff check + format clean, pytest on the guard file 4 passed. Not run: full `make check` (individual gates green), `make mutate`, `make smoke-test`.
+- **Judgement calls**: none — pure test file, no production code touched.
+- **Escalations**: none.
+
 ## 2026-11-11 - P24 review round 2 on PR #91 - split applied, typed RuleName/Technique, strict element map, WORKLOG counts
 
 - **Issue**: #24 (P24 · Réductions certifiées, spec §18.2), review round 2 on PR #91.
