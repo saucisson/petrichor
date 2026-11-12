@@ -42,6 +42,8 @@ HEX_DIGITS_PER_HASH = 64
 CONTENT_HASH_PATTERN = re.compile(rf"{HASH_ALGORITHM_NAME}:[0-9a-f]{{{HEX_DIGITS_PER_HASH}}}")
 CANONICAL_JSON_SEPARATORS = (",", ":")
 PLACEHOLDER_CONTENT_HASH = ContentHash(f"{HASH_PREFIX}{'0' * HEX_DIGITS_PER_HASH}")
+INHIBITOR_ARC_ANNOTATION_KEY = "inhibitor"
+"""The arc annotation key marking an inhibitor (negative) arc, set by the PNML importer."""
 
 
 class PetriCanonicalError(Exception):

@@ -443,6 +443,73 @@ class TestCrossCheckAgainstOracle:
             assert cross_check_unfold_against_oracle(unfolded=unfolded, oracle_pt=oracle) is True
         assert "unfold_cross_check_matched" in [entry["event"] for entry in logs]
 
+    def test_cross_check_pins_mismatch_event(self) -> None:
+        symmetric = _symmetric_model(
+            model_id="mdl_event_mismatch",
+            places=[("p", "A", 1), ("q", "B", 0)],
+            transitions=["t"],
+            arcs=[("p", "t"), ("t", "q")],
+        )
+        unfolded = unfold_symmetric_to_pt(model=symmetric).model
+        oracle = _oracle_model(
+            model_id="mdl_event_mismatch_oracle",
+            places=[("p", "A", 0), ("q", "B", 0)],
+            transitions=["t"],
+            arcs=[("p", "t"), ("t", "q")],
+        )
+        with structlog.testing.capture_logs() as logs:
+            assert cross_check_unfold_against_oracle(unfolded=unfolded, oracle_pt=oracle) is False
+        assert "unfold_cross_check_mismatch" in [entry["event"] for entry in logs]
+
+    def test_cross_check_pins_rejected_non_pt_event(self) -> None:
+        symmetric = _symmetric_model(
+            model_id="mdl_event_nonpt",
+            places=[("p", "A", 1)],
+            transitions=["t"],
+            arcs=[("p", "t")],
+        )
+        with structlog.testing.capture_logs() as logs:
+            assert (
+                cross_check_unfold_against_oracle(unfolded=symmetric, oracle_pt=symmetric) is False
+            )
+        assert "unfold_cross_check_rejected_non_pt" in [entry["event"] for entry in logs]
+
+    def test_cross_check_rejects_self_loop_swapped_for_cross_arc(self) -> None:
+        # Review-round regression: equal element/arc counts, but the source has
+        # a self-loop p→p where the oracle has q→t — not equal up to renaming.
+        symmetric = _symmetric_model(
+            model_id="mdl_selfloop",
+            places=[("p", "A", 1), ("q", "B", 0)],
+            transitions=["t"],
+            arcs=[("p", "t"), ("p", "p")],
+        )
+        unfolded = unfold_symmetric_to_pt(model=symmetric).model
+        oracle = _oracle_model(
+            model_id="mdl_selfloop_oracle",
+            places=[("p", "A", 1), ("q", "B", 0)],
+            transitions=["t"],
+            arcs=[("p", "t"), ("q", "t")],
+        )
+        assert cross_check_unfold_against_oracle(unfolded=unfolded, oracle_pt=oracle) is False
+
+    def test_cross_check_rejects_parallel_arc_mismatch(self) -> None:
+        # Equal arc counts, but the source has two parallel p→t arcs where the
+        # oracle has p→t and t→p — the arc multiset differs, not a renaming.
+        symmetric = _symmetric_model(
+            model_id="mdl_parallel",
+            places=[("p", "A", 1)],
+            transitions=["t"],
+            arcs=[("p", "t"), ("p", "t")],
+        )
+        unfolded = unfold_symmetric_to_pt(model=symmetric).model
+        oracle = _oracle_model(
+            model_id="mdl_parallel_oracle",
+            places=[("p", "A", 1)],
+            transitions=["t"],
+            arcs=[("p", "t"), ("t", "p")],
+        )
+        assert cross_check_unfold_against_oracle(unfolded=unfolded, oracle_pt=oracle) is False
+
 
 class TestElementMapStrictness:
     """An incomplete element map never silently passes through as identity."""
