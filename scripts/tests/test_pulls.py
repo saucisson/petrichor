@@ -409,7 +409,11 @@ def test_commit_and_push_worklog_entry_commits_and_pushes(
 
     def fake_try_git(*, arguments: list[str]) -> subprocess.CompletedProcess[str]:
         calls.append(arguments)
-        return subprocess.CompletedProcess(args=arguments, returncode=0, stdout="", stderr="")
+        # diff --cached --quiet exits 1 when something IS staged
+        returncode = 1 if arguments[:3] == ["diff", "--cached", "--quiet"] else 0
+        return subprocess.CompletedProcess(
+            args=arguments, returncode=returncode, stdout="", stderr=""
+        )
 
     monkeypatch.setattr(pulls, "run_git", fake_run_git)
     monkeypatch.setattr(pulls, "try_git", fake_try_git)
@@ -426,7 +430,7 @@ def test_commit_and_push_worklog_entry_commits_and_pushes(
 def test_commit_and_push_worklog_entry_idempotent_when_nothing_to_commit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """When git commit exits nonzero (nothing to commit), no push happens, returns False."""
+    """When nothing is staged (diff --cached --quiet exits 0), no commit/push, returns False."""
     calls: list[list[str]] = []
 
     def fake_run_git(*, arguments: list[str]) -> str:
@@ -435,7 +439,8 @@ def test_commit_and_push_worklog_entry_idempotent_when_nothing_to_commit(
 
     def fake_try_git(*, arguments: list[str]) -> subprocess.CompletedProcess[str]:
         calls.append(arguments)
-        returncode = 1 if arguments[:1] == ["commit"] else 0
+        # diff --cached --quiet exits 0 when nothing is staged
+        returncode = 0 if arguments[:3] == ["diff", "--cached", "--quiet"] else 1
         return subprocess.CompletedProcess(
             args=arguments, returncode=returncode, stdout="", stderr=""
         )
@@ -447,3 +452,4 @@ def test_commit_and_push_worklog_entry_idempotent_when_nothing_to_commit(
     result = pulls.commit_and_push_worklog_entry(entry_path=entry, pull_request_number=94)
     assert result is False
     assert ["push"] not in calls
+    assert not any(call[:1] == ["commit"] for call in calls)
