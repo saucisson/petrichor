@@ -71,7 +71,8 @@ claims before working**. The claim (a `night-claimed` label, set by
   the same token as the review and merge drivers - so the unattended
   flow needs no `gh` and no allowlist widening (ADR-0015).
 - A denied or pending tool call is a stop signal the session escalates
-  (`blocked`/`needs-human` labels, structured comment, worklog entry)
+  (`blocked`/`needs-human` labels, structured comment; ADR-0022 supersedes
+  the worklog entry with the PR comment)
   - never an obstacle to route around. Unattended honesty is the same
   honesty, with nobody watching.
 - The morning audit is unchanged: the day's `docs/worklog/` entries

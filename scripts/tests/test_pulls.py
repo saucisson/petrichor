@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from scripts import _shared, pulls
+from scripts._shared import REPOSITORY_ROOT
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -453,3 +454,48 @@ def test_commit_and_push_worklog_entry_idempotent_when_nothing_to_commit(
     assert result is False
     assert ["push"] not in calls
     assert not any(call[:1] == ["commit"] for call in calls)
+
+
+def test_run_pr_wires_worklog_entry_generation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """run_pr calls write_worklog_entry and commit_and_push_worklog_entry (criterion 2).
+
+    Deleting the wiring from run_pr must fail this test.
+    """
+    calls: list[str] = []
+
+    def fake_write_worklog_entry(**kwargs: object) -> Path:
+        calls.append("write_worklog_entry")
+        return REPOSITORY_ROOT / "docs/worklog/2026-11-12-pr-94.md"
+
+    def fake_commit_and_push(*, entry_path: Path, pull_request_number: int) -> bool:
+        calls.append("commit_and_push_worklog_entry")
+        return True
+
+    monkeypatch.setattr(pulls, "write_worklog_entry", fake_write_worklog_entry)
+    monkeypatch.setattr(pulls, "commit_and_push_worklog_entry", fake_commit_and_push)
+    monkeypatch.setattr(pulls, "load_github_token", lambda: "token")
+    monkeypatch.setattr(pulls, "resolve_repository_slug", lambda: "o/r")
+    monkeypatch.setattr(pulls, "current_branch", lambda: "feat/x")
+    monkeypatch.setattr(pulls, "read_pull_request_body", lambda *, body_file: "body")
+
+    def fake_open_pr(**kwargs: object) -> dict[str, object]:
+        return {"number": 94, "html_url": "https://example.com/pr/94"}
+
+    monkeypatch.setattr(pulls, "open_pull_request", fake_open_pr)
+
+    class _FakeClient:
+        def __enter__(self) -> _FakeClient:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+    monkeypatch.setattr(pulls, "open_github_client", lambda token: _FakeClient())
+
+    arguments = argparse.Namespace(title="t", body_file="", head="", base="daily")
+    exit_code = pulls.run_pr(arguments=arguments)
+    assert exit_code == 0
+    assert "write_worklog_entry" in calls
+    assert "commit_and_push_worklog_entry" in calls
