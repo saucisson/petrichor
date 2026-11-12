@@ -51,6 +51,7 @@ EXIT_CODE_OPENED = EXIT_CODE_SUCCESS  # a subcommand-local alias, same protocol 
 EXIT_CODE_UPDATED = EXIT_CODE_SUCCESS  # a subcommand-local alias, same protocol code
 WORKLOG_DIR = Path("docs/worklog")
 ISSUE_REFERENCE_PATTERN = re.compile(r"#(\d+)")
+CLOSES_ISSUE_PATTERN = re.compile(r"(?:closes|fixes|resolves)\s+#(\d+)", re.IGNORECASE)
 
 
 def current_branch() -> str:
@@ -158,9 +159,16 @@ def register_pr(subparsers: argparse._SubParsersAction[argparse.ArgumentParser])
 
 
 def extract_issue_number(*, body: str) -> str | None:
-    """Extract the first #N issue reference from the pull request body."""
-    match = ISSUE_REFERENCE_PATTERN.search(body)
-    return match.group(1) if match else None
+    """Extract the issue closed by the pull request body.
+
+    Prefers a ``Closes #N`` / ``Fixes #N`` / ``Resolves #N`` anchor;
+    falls back to the first ``#N`` reference.
+    """
+    closes_match = CLOSES_ISSUE_PATTERN.search(body)
+    if closes_match:
+        return closes_match.group(1)
+    fallback = ISSUE_REFERENCE_PATTERN.search(body)
+    return fallback.group(1) if fallback else None
 
 
 def write_worklog_entry(

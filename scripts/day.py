@@ -53,6 +53,7 @@ if TYPE_CHECKING:
 MERGE_COMMIT_FORMAT = "%h %s"
 DAILY_BRANCH_NAME = "daily"
 MAIN_REMOTE_REFERENCE = "origin/main"
+WORKLOG_PATH = "docs/worklog"
 EXIT_CODE_FAILURE = EXIT_CODE_CRITERIA_UNMET  # local alias: the report never started
 EXIT_CODE_REFUSED = 1
 EXIT_CODE_PROTOCOL_FAILURE = 2
@@ -88,9 +89,7 @@ def changed_files_since(*, tag_name: str) -> int:
 
 def worklog_entries_since(*, tag_name: str) -> list[str]:
     """List the worklog entries changed since the tag (ADR-0022)."""
-    git_output = run_git(
-        arguments=["diff", "--name-only", f"{tag_name}..HEAD", "--", "docs/worklog"]
-    )
+    git_output = run_git(arguments=["diff", "--name-only", f"{tag_name}..HEAD", "--", WORKLOG_PATH])
     return [line for line in git_output.splitlines() if line.strip()]
 
 
