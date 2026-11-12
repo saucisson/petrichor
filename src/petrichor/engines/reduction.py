@@ -83,7 +83,7 @@ class ReductionCertificate(BaseModel):
     saved_states: int = Field(ge=0)
     saved_seconds: float = Field(ge=0)
     element_map: ElementMap
-    technique: str = Field(min_length=1, default="token-elimination")
+    technique: str = Field(min_length=1, default=TOKEN_ELIMINATION_RULE_NAME)
 
 
 class ReducedModel(BaseModel):
@@ -114,17 +114,30 @@ def reduce_marking_token_elimination(
     initial marking of the places listed in ``reduced_marking`` is lowered.
     The ``element_map`` is the identity on every element name (spec §18.2).
 
-    Raises ``UncertifiedReductionError`` when a place name is unknown or a
-    marking is negative — a reduction without a valid certificate is refused.
+    Raises ``UncertifiedReductionError`` when a place name is unknown, a
+    marking is negative, or a marking exceeds the original — a reduction
+    without a valid certificate is refused.
     """
-    place_names = {place.name for place in model.places}
+    place_by_name = {place.name: place for place in model.places}
     for name, marking in reduced_marking.items():
-        if name not in place_names:
+        place = place_by_name.get(name)
+        if place is None:
             logger.warning("reduction_rejected_unknown_place", place_name=name)
             raise UncertifiedReductionError(f"unknown place {name!r} in reduced marking")
         if marking < 0:
             logger.warning("reduction_rejected_negative_marking", place_name=name, marking=marking)
             raise UncertifiedReductionError(f"negative marking {marking} for place {name!r}")
+        if marking > place.initial_marking:
+            logger.warning(
+                "reduction_rejected_marking_increase",
+                place_name=name,
+                original=place.initial_marking,
+                requested=marking,
+            )
+            raise UncertifiedReductionError(
+                f"marking {marking} for place {name!r} exceeds original"
+                f" {place.initial_marking} — Token Elimination only lowers"
+            )
 
     original_total = sum(place.initial_marking for place in model.places)
     reduced_total = sum(
