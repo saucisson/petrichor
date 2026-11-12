@@ -11,8 +11,8 @@ l'humain qui relit la journée avant de merger `daily` dans `main`.
 - `YYYY-MM-DD-direct-<slug>.md` : une entrée par commit direct sur `daily`
   (revert, correction docs-only, hotfix), créée depuis `_template.md`
   dans le même commit.
-- `archive-2026-11-12.md` : l'ancien `WORKLOG.md` monolithique, archivé
-  inchangé lors de la migration vers le worklog v2 (ADR-0022).
+- `archive-2026-11-12.md` : l'ancien fichier monolithique d'audit,
+  archivé inchangé lors de la migration vers le worklog v2 (ADR-0022).
 
 ## Règles
 
