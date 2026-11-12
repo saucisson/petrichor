@@ -199,16 +199,18 @@ def write_worklog_entry(
 def commit_and_push_worklog_entry(*, entry_path: Path, pull_request_number: int) -> bool:
     """Commit the worklog entry on the current branch and push (ADR-0022).
 
-    Returns True when a commit was created, False when the entry was
-    already committed (idempotent re-run).
+    Returns True when a commit was created and pushed, False when the
+    entry was already committed (idempotent re-run). A real commit error
+    (failing hook, missing identity) is not swallowed: it propagates as
+    a protocol failure.
     """
     run_git(arguments=["add", str(entry_path)])
-    commit_result = try_git(arguments=["commit", "-m", f"worklog: PR #{pull_request_number}"])
-    if commit_result.returncode != 0:
-        # Nothing to commit: the entry was already committed (idempotent re-run)
-        return False
-    run_git(arguments=["push"])
-    return True
+    staged = try_git(arguments=["diff", "--cached", "--quiet"])
+    if staged.returncode != 0:
+        run_git(arguments=["commit", "-m", f"worklog: PR #{pull_request_number}"])
+        run_git(arguments=["push"])
+        return True
+    return False
 
 
 def run_pr(*, arguments: argparse.Namespace) -> int:
