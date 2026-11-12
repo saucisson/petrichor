@@ -44,6 +44,14 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-12 - P24 PR B review round 2 on PR #92 - ImportFrom alias scan, honest docstring
+
+- **Issue**: #24 follow-up PR B, review round 2 on PR #92.
+- **Done**: 1 BLOCKING + 2 SUGGESTION fixed. BLOCKING: `_imports_reduction` now also checks `node.names` for ImportFrom, catching `from petrichor.engines import reduction` (verified with a throwaway counterexample in scripts/ that the test now fails on). SUGGESTION: the raise-count docstring now states the threshold honestly (catches wholesale removal, tolerates partial down to 3).
+- **Evidence**: run: ruff clean, pytest on the guard file 4 passed, counterexample verified to fail the test. Not run: full `make check`, `make mutate`, `make smoke-test`.
+- **Judgement calls**: dynamic `importlib.import_module` is out of AST scope — noted as a known limit, not a silent pass.
+- **Escalations**: none.
+
 ## 2026-11-12 - P24 PR B review round 1 on PR #92 - nesting depth, scan roots, docstring
 
 - **Issue**: #24 follow-up PR B, review round 1 on PR #92.
