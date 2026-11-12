@@ -395,3 +395,55 @@ def test_write_worklog_entry_is_idempotent(tmp_path: Path, monkeypatch: pytest.M
     )
     assert second == first
     assert second.read_text(encoding="utf-8") == "custom content"
+
+
+def test_commit_and_push_worklog_entry_commits_and_pushes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fresh entry is added, committed with 'worklog: PR #N', and pushed."""
+    calls: list[list[str]] = []
+
+    def fake_run_git(*, arguments: list[str]) -> str:
+        calls.append(arguments)
+        return ""
+
+    def fake_try_git(*, arguments: list[str]) -> subprocess.CompletedProcess[str]:
+        calls.append(arguments)
+        return subprocess.CompletedProcess(args=arguments, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(pulls, "run_git", fake_run_git)
+    monkeypatch.setattr(pulls, "try_git", fake_try_git)
+    entry = tmp_path / "docs/worklog/2026-11-12-pr-94.md"
+    entry.parent.mkdir(parents=True)
+    entry.write_text("card", encoding="utf-8")
+    result = pulls.commit_and_push_worklog_entry(entry_path=entry, pull_request_number=94)
+    assert result is True
+    assert ["add", str(entry)] in calls
+    assert ["commit", "-m", "worklog: PR #94"] in calls
+    assert ["push"] in calls
+
+
+def test_commit_and_push_worklog_entry_idempotent_when_nothing_to_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When git commit exits nonzero (nothing to commit), no push happens, returns False."""
+    calls: list[list[str]] = []
+
+    def fake_run_git(*, arguments: list[str]) -> str:
+        calls.append(arguments)
+        return ""
+
+    def fake_try_git(*, arguments: list[str]) -> subprocess.CompletedProcess[str]:
+        calls.append(arguments)
+        returncode = 1 if arguments[:1] == ["commit"] else 0
+        return subprocess.CompletedProcess(
+            args=arguments, returncode=returncode, stdout="", stderr=""
+        )
+
+    monkeypatch.setattr(pulls, "run_git", fake_run_git)
+    monkeypatch.setattr(pulls, "try_git", fake_try_git)
+    entry = tmp_path / "entry.md"
+    entry.write_text("card", encoding="utf-8")
+    result = pulls.commit_and_push_worklog_entry(entry_path=entry, pull_request_number=94)
+    assert result is False
+    assert ["push"] not in calls

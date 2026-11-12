@@ -36,6 +36,7 @@ from scripts._shared import (
     load_github_token,
     resolve_repository_slug,
     run_git,
+    try_git,
 )
 
 if TYPE_CHECKING:
@@ -195,11 +196,19 @@ def write_worklog_entry(
     return entry_path
 
 
-def commit_and_push_worklog_entry(*, entry_path: Path, pull_request_number: int) -> None:
-    """Commit the worklog entry on the current branch and push (ADR-0022)."""
+def commit_and_push_worklog_entry(*, entry_path: Path, pull_request_number: int) -> bool:
+    """Commit the worklog entry on the current branch and push (ADR-0022).
+
+    Returns True when a commit was created, False when the entry was
+    already committed (idempotent re-run).
+    """
     run_git(arguments=["add", str(entry_path)])
-    run_git(arguments=["commit", "-m", f"worklog: PR #{pull_request_number}"])
+    commit_result = try_git(arguments=["commit", "-m", f"worklog: PR #{pull_request_number}"])
+    if commit_result.returncode != 0:
+        # Nothing to commit: the entry was already committed (idempotent re-run)
+        return False
     run_git(arguments=["push"])
+    return True
 
 
 def run_pr(*, arguments: argparse.Namespace) -> int:
@@ -233,8 +242,12 @@ def run_pr(*, arguments: argparse.Namespace) -> int:
         body=body,
         repository_slug=repository_slug,
     )
-    commit_and_push_worklog_entry(entry_path=entry_path, pull_request_number=pull_request_number)
+    committed = commit_and_push_worklog_entry(
+        entry_path=entry_path, pull_request_number=pull_request_number
+    )
     print(f"Worklog entry written: {entry_path.relative_to(REPOSITORY_ROOT)}")
+    if not committed:
+        print("Worklog entry already committed (idempotent re-run).")
     return EXIT_CODE_OPENED
 
 

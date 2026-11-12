@@ -377,3 +377,19 @@ def test_run_sync_daily_rebases_when_diverged(monkeypatch: pytest.MonkeyPatch) -
         == _shared.EXIT_CODE_SUCCESS
     )
     assert seen == [("abc", 3)]
+
+
+def test_worklog_entries_since_filters_docs_worklog(monkeypatch: pytest.MonkeyPatch) -> None:
+    """worklog_entries_since returns only docs/worklog/ paths from the git diff."""
+
+    def fake_run_git(*, arguments: list[str]) -> str:
+        assert "--" in arguments
+        assert "docs/worklog" in arguments
+        return "docs/worklog/2026-11-12-pr-94.md\ndocs/worklog/2026-11-12-direct-fix.md\n"
+
+    monkeypatch.setattr(day, "run_git", fake_run_git)
+    entries = day.worklog_entries_since(tag_name="daily-2026-11-12")
+    assert entries == [
+        "docs/worklog/2026-11-12-pr-94.md",
+        "docs/worklog/2026-11-12-direct-fix.md",
+    ]
