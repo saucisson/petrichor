@@ -44,6 +44,14 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-11 - P24 certified reductions: Token Elimination + witness replay (issue #24, branch feat/24-reductions-certifiees)
+
+- **Issue**: #24 (P24 · Réductions certifiées : Token Elimination et rejeu de témoin, spec §18.2). Blocked-by #20 (merged into daily).
+- **Done**: new `src/petrichor/engines/reduction.py` — `ReductionRule`/`ReductionCertificate`/`ElementMap`/`ReducedModel` typed records; `reduce_marking_token_elimination()` reduces the initial marking only (net structure intact, `element_map` = identity on every element name, per spec §18.2); `replay_witness_on_original()` validates a witness produced on the reduced net against the original net (raises `WitnessReplayError` on unknown place/transition); `reformat_witness_for_original()` maps witness steps back through the element map. Typed errors: `ReductionError` base, `UncertifiedReductionError` (unknown place, negative marking — a reduction without a certificate is refused), `WitnessReplayError`. The certificate always carries the applied rules, saved cost and the mandatory `element_map` — never a silent reduction. Tests: `tests/test_reduction.py` (14 unit tests: marking reduction, identity element map, certificate contents, rejection of unknown/negative, derivation stamp, narration events pinned, witness replay valid/reject, reformat, frozen model, error hierarchy) and `tests/test_reduction_guard.py` (4 guard tests: AST scan that no module outside engines/ imports reduction, certified entry point exists, no silent reduction, Hypothesis property test over arbitrary markings — structure preserved, no negative marking, identity map).
+- **Evidence**: run: ruff check + format clean, mypy strict clean on the new module, import-linter kept (14 files, 15 dependencies), pytest `-m "not engine"` 609 passed (20 new), coverage 91.82% >= 90%. Not run: `make mutate`, `make smoke-test`, @engine tests (Token Elimination is a marking-only reduction, no container needed).
+- **Judgement calls**: Token Elimination is implemented as a marking-only reduction (net intact) per spec §18.2 — the `element_map` is the identity by construction, which is the most certificate-compatible family; net-rewriting rules (verifypn/ITS-Tools) are deferred to P25/P26 adapters. The derived model id is `{parent_id}_te` and carries a `derivation` entry of kind `reduction`.
+- **Escalations**: none.
+
 ## 2026-11-11 - P23 review round 1 on PR #90 - narration pinned, guard widened, typed pairing errors, split proposal
 
 - **Issue**: #23 (P23 · Appariement de contre-vérification par famille, spec §17.4), review round 1 on PR #90.
