@@ -272,6 +272,22 @@ class TestUnfoldService:
         assert unfolded.model.id == f"{symmetric.id}_unfolded"
         assert unfolded.model.derivations[0]["kind"] == "unfold"
 
+    def test_transition_color_class_is_dropped(self) -> None:
+        payload = _symmetric_payload(
+            model_id="mdl_tr_color",
+            places=[("p", "A", 1), ("q", "B", 0)],
+            transitions=["t"],
+            arcs=[("p", "t"), ("t", "q")],
+        )
+        transitions = payload["transitions"]
+        assert isinstance(transitions, list)
+        transitions[0]["annotations"] = {"color_class": "A", "note": "kept"}
+        symmetric = build_canonical_model(payload=payload)
+        assert symmetric.transitions[0].annotations["color_class"] == "A"
+        unfolded = unfold_symmetric_to_pt(model=symmetric)
+        assert "color_class" not in unfolded.model.transitions[0].annotations
+        assert unfolded.model.transitions[0].annotations["note"] == "kept"
+
     def test_certificate_carries_element_map_and_oracle(self) -> None:
         symmetric = import_pnml(
             text=(FIXTURES / "philosophes3-symmetric.pnml").read_text(encoding="utf-8")
