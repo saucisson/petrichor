@@ -212,12 +212,16 @@ def _parse_arc(
         default=DEFAULT_ARC_WEIGHT,
         minimum=1,
     )
+    arc_type = element.get("type")
+    annotations: dict[str, JsonValue] = (
+        {"inhibitor": True} if arc_type is not None and arc_type.lower() == "inhibitor" else {}
+    )
     return Arc(
         id=ElementId(f"{ARC_ID_PREFIX}{raw_id}"),
         source=endpoints[0],
         target=endpoints[1],
         weight=weight,
-        annotations={},
+        annotations=annotations,
     )
 
 
