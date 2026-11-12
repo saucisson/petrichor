@@ -37,4 +37,15 @@ Aucun agent ne lit `docs/worklog/`. L'audit du soir passe par
 ## Préséance
 
 Cet ADR prend la préséance sur les clauses worklog des ADR-0009, ADR-0010
-et ADR-0017.
+et ADR-0017, ainsi que sur toute clause des fichiers constitutionnels
+suivants qui ordonne d'écrire ou de lire `WORKLOG.md` :
+
+- `AGENTS.md` (honesty rules, session context, end-of-day audit)
+- `docs/agents/developer.md` (reporting section, session continuity, recovery)
+- `docs/agents/orchestration.md` (§3, §7, §8)
+- `docs/branching.md` (end-of-day step)
+- `docs/review-checklist.md` (§7)
+- `.vibe/prompts/night-issue.md`, `.vibe/prompts/night-auto.md`
+
+Accord humain : directive de session du 2026-11-12 (partie 3 du brief),
+qui vaut accord explicite pour ce changement constitutionnel.
