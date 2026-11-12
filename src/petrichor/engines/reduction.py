@@ -14,6 +14,8 @@ rules and the saved cost; the run stays archived (spec §12). A reduction
 without a certificate is refused (``UncertifiedReductionError``).
 """
 
+from typing import NewType
+
 import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -28,8 +30,20 @@ from petrichor.petri_canonical import (
 
 logger = structlog.get_logger(__name__)
 
-TOKEN_ELIMINATION_RULE_NAME = "token-elimination"  # noqa: S105 - rule name, not a secret
+RuleName = NewType("RuleName", str)
+"""The name of a reduction rule, e.g. ``token-elimination``."""
+
+Technique = NewType("Technique", str)
+"""The technique label carried by a reduction certificate."""
+
+TOKEN_ELIMINATION_RULE_NAME = RuleName("token-elimination")
 """The rule name of the Token Elimination reduction (TACAS'25)."""
+
+DERIVED_MODEL_ID_SUFFIX = "_te"
+"""The suffix appended to the parent model id for a Token Elimination derivative."""
+
+ZERO_SAVED_SECONDS = 0.0
+"""Token Elimination is a structural pre-pass; no tool time is saved yet."""
 
 
 class ReductionError(Exception):
@@ -49,7 +63,7 @@ class ReductionRule(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    name: str = Field(min_length=1)
+    name: RuleName = Field(min_length=1)
     description: str = ""
     elements_affected: int = Field(ge=0)
 
@@ -66,8 +80,12 @@ class ElementMap(BaseModel):
     mapping: dict[ElementName, ElementName]
 
     def to_original(self, *, name: ElementName) -> ElementName:
-        """Resolve a reduced-net element name to its original-net name."""
-        return self.mapping.get(name, name)
+        """Resolve a reduced-net element name to its original-net name.
+
+        Raises ``KeyError`` when the name is not in the map — an incomplete
+        map must never silently pass through as identity (spec §18.2).
+        """
+        return self.mapping[name]
 
 
 class ReductionCertificate(BaseModel):
@@ -83,7 +101,7 @@ class ReductionCertificate(BaseModel):
     saved_states: int = Field(ge=0)
     saved_seconds: float = Field(ge=0)
     element_map: ElementMap
-    technique: str = Field(min_length=1, default=TOKEN_ELIMINATION_RULE_NAME)
+    technique: Technique = Field(min_length=1, default=Technique(TOKEN_ELIMINATION_RULE_NAME))
 
 
 class ReducedModel(BaseModel):
@@ -156,7 +174,7 @@ def reduce_marking_token_elimination(
         for place in model.places
     )
     derived_payload = model.model_dump(mode="json")
-    derived_payload["id"] = f"{model.id}_te"
+    derived_payload["id"] = f"{model.id}{DERIVED_MODEL_ID_SUFFIX}"
     derived_payload["parent"] = model.id
     derived_payload["children"] = []
     derived_payload["places"] = [place.model_dump(mode="json") for place in new_places]
@@ -184,9 +202,9 @@ def reduce_marking_token_elimination(
             ),
         ),
         saved_states=saved_states,
-        saved_seconds=0.0,
+        saved_seconds=ZERO_SAVED_SECONDS,
         element_map=_identity_element_map(model=model),
-        technique=TOKEN_ELIMINATION_RULE_NAME,
+        technique=Technique(TOKEN_ELIMINATION_RULE_NAME),
     )
     return ReducedModel(model=derived_model, certificate=certificate, parent_id=model.id)
 
@@ -206,7 +224,17 @@ def replay_witness_on_original(
     original_place_names = {place.name for place in original_model.places}
     for step in witness.steps:
         for token in step.marking:
-            original_name = element_map.to_original(name=ElementName(token))
+            try:
+                original_name = element_map.to_original(name=ElementName(token))
+            except KeyError:
+                logger.warning(
+                    "witness_replay_failed_unmapped_place",
+                    token=token,
+                    step_index=step.index,
+                )
+                raise WitnessReplayError(
+                    f"witness step {step.index} references unmapped place {token!r}"
+                ) from None
             if original_name not in original_place_names:
                 logger.warning(
                     "witness_replay_failed_unknown_place",
@@ -219,7 +247,17 @@ def replay_witness_on_original(
                     f" (mapped to {original_name!r})"
                 )
         if step.fired is not None:
-            original_transition = element_map.to_original(name=ElementName(step.fired))
+            try:
+                original_transition = element_map.to_original(name=ElementName(step.fired))
+            except KeyError:
+                logger.warning(
+                    "witness_replay_failed_unmapped_transition",
+                    fired=step.fired,
+                    step_index=step.index,
+                )
+                raise WitnessReplayError(
+                    f"witness step {step.index} fires unmapped transition {step.fired!r}"
+                ) from None
             transition_names = {transition.name for transition in original_model.transitions}
             if original_transition not in transition_names:
                 logger.warning(
