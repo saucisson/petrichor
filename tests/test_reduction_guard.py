@@ -14,7 +14,7 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from philosophes3 import build_philosophes3
 
-from petrichor.engines.reduction import reduce_marking_token_elimination
+from petrichor.engines.reduction import UncertifiedReductionError, reduce_marking_token_elimination
 from petrichor.petri_canonical import ElementName
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -55,12 +55,27 @@ def test_reduction_module_defines_certified_entry_point() -> None:
     assert "replay_witness_on_original" in function_names
 
 
-def test_no_silent_reduction_call_without_certificate() -> None:
-    """Every call to reduce_marking_token_elimination in tests must assert a certificate."""
-    test_path = REPO_ROOT / "tests" / "test_reduction.py"
-    source = test_path.read_text(encoding="utf-8")
-    assert "certificate" in source
-    assert "UncertifiedReductionError" in source
+def test_reduction_module_rejects_uncertified_reduction() -> None:
+    """The reduction module must raise UncertifiedReductionError on bad input.
+
+    AST scan: the function reduce_marking_token_elimination contains at least
+    one ``raise UncertifiedReductionError`` — deleting them would fail this test.
+    """
+    path = ENGINES_PACKAGE / "reduction.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    raises_uncertified = 0
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Raise) and node.exc is not None:
+            exc = node.exc
+            if (
+                isinstance(exc, ast.Call)
+                and isinstance(exc.func, ast.Name)
+                and exc.func.id == "UncertifiedReductionError"
+            ) or (isinstance(exc, ast.Name) and exc.id == "UncertifiedReductionError"):
+                raises_uncertified += 1
+    assert raises_uncertified >= 3, (
+        f"expected >= 3 raise UncertifiedReductionError sites, found {raises_uncertified}"
+    )
 
 
 PLACE_NAMES = [
@@ -91,15 +106,21 @@ PLACE_NAMES = [
 def test_reduction_invariants_hold_on_arbitrary_markings(
     reduced_marking: dict[str, int],
 ) -> None:
-    """Property: Token Elimination never produces a negative marking or drops structure."""
+    """Property: Token Elimination never increases a marking, never drops structure."""
     model = build_philosophes3()
+    original_by_name = {place.name: place.initial_marking for place in model.places}
     typed_marking = {ElementName(name): marking for name, marking in reduced_marking.items()}
+    # If any requested marking exceeds the original, the reduction must be refused
+    if any(marking > original_by_name.get(name, 0) for name, marking in typed_marking.items()):
+        with pytest.raises(UncertifiedReductionError, match="exceeds original"):
+            reduce_marking_token_elimination(model=model, reduced_marking=typed_marking)
+        return
     reduced = reduce_marking_token_elimination(model=model, reduced_marking=typed_marking)
     assert len(reduced.model.places) == len(model.places)
     assert len(reduced.model.transitions) == len(model.transitions)
     assert len(reduced.model.arcs) == len(model.arcs)
     for place in reduced.model.places:
-        assert place.initial_marking >= 0
+        assert 0 <= place.initial_marking <= original_by_name[place.name]
     assert reduced.certificate is not None
     assert reduced.certificate.element_map is not None
     # Identity map: every original element maps to itself
