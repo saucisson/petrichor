@@ -7,18 +7,27 @@ construction.
 """
 
 import ast
+import os
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPO_ROOT / "src" / "petrichor"
 ENGINES_PACKAGE = SRC_ROOT / "engines"
-SCAN_ROOTS = [REPO_ROOT / "src", REPO_ROOT / "scripts", REPO_ROOT / "tools"]
-"""Scan roots for the import guard: tests/ is excluded — test files legitimately
-import the module under test."""
+UNFOLD_MODULE_NAME = "unfold"
+"""The module token the import guard watches for."""
+PRUNED_DIR_NAMES = frozenset({"__pycache__", "tests"})
+"""Directories never scanned: tests/ legitimately imports the module under test."""
 
 
 def _python_files(*, root: Path) -> list[Path]:
-    return sorted(root.rglob("*.py"))
+    """Every Python file under ``root``, pruning dot-dirs, tests/ and caches."""
+    collected: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(
+            name for name in dirnames if not name.startswith(".") and name not in PRUNED_DIR_NAMES
+        )
+        collected.extend(Path(dirpath, name) for name in filenames if name.endswith(".py"))
+    return sorted(collected)
 
 
 def _imports_unfold(*, tree: ast.AST, path: Path) -> list[str]:
@@ -26,13 +35,13 @@ def _imports_unfold(*, tree: ast.AST, path: Path) -> list[str]:
     hits: list[str] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
-            module_hit = node.module is not None and "unfold" in node.module
-            alias_hit = any(alias.name == "unfold" for alias in node.names)
+            module_hit = node.module is not None and UNFOLD_MODULE_NAME in node.module
+            alias_hit = any(alias.name == UNFOLD_MODULE_NAME for alias in node.names)
             if module_hit or alias_hit:
                 hits.append(f"{path.relative_to(REPO_ROOT)}:{node.lineno}")
         elif isinstance(node, ast.Import):
             for alias in node.names:
-                if "unfold" in alias.name:
+                if UNFOLD_MODULE_NAME in alias.name:
                     hits.append(f"{path.relative_to(REPO_ROOT)}:{node.lineno}")
     return hits
 
@@ -40,12 +49,11 @@ def _imports_unfold(*, tree: ast.AST, path: Path) -> list[str]:
 def test_no_module_outside_engines_imports_unfold() -> None:
     """Only petrichor.engines may import the unfold module (verdict-lock style)."""
     offenders: list[str] = []
-    for scan_root in SCAN_ROOTS:
-        for path in _python_files(root=scan_root):
-            if ENGINES_PACKAGE in path.parents:
-                continue
-            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-            offenders.extend(_imports_unfold(tree=tree, path=path))
+    for path in _python_files(root=REPO_ROOT):
+        if ENGINES_PACKAGE in path.parents:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        offenders.extend(_imports_unfold(tree=tree, path=path))
     assert offenders == [], f"unfold imported outside engines/: {offenders}"
 
 
