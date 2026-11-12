@@ -30,11 +30,20 @@ def _python_files(*, root: Path) -> list[Path]:
 
 
 def _imports_reduction(*, tree: ast.AST, path: Path) -> list[str]:
-    """Return the line numbers where the AST imports the reduction module."""
+    """Return the line numbers where the AST imports the reduction module.
+
+    Catches ``from petrichor.engines.reduction import ...`` (module contains
+    "reduction"), ``from petrichor.engines import reduction`` (alias name is
+    "reduction"), and ``import petrichor.engines.reduction`` (alias name
+    contains "reduction").
+    """
     hits: list[str] = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module and "reduction" in node.module:
-            hits.append(f"{path.relative_to(REPO_ROOT)}:{node.lineno}")
+        if isinstance(node, ast.ImportFrom):
+            module_hit = node.module is not None and "reduction" in node.module
+            alias_hit = any(alias.name == "reduction" for alias in node.names)
+            if module_hit or alias_hit:
+                hits.append(f"{path.relative_to(REPO_ROOT)}:{node.lineno}")
         elif isinstance(node, ast.Import):
             for alias in node.names:
                 if "reduction" in alias.name:
@@ -70,7 +79,8 @@ def test_reduction_module_rejects_uncertified_reduction() -> None:
     """The reduction module must raise UncertifiedReductionError on bad input.
 
     AST scan across the whole module: at least 3 ``raise UncertifiedReductionError``
-    sites must exist — deleting them would fail this test.
+    sites must exist. The threshold catches wholesale removal of the guard;
+    partial removal down to 3 sites is intentionally tolerated.
     """
     path = ENGINES_PACKAGE / "reduction.py"
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
