@@ -44,6 +44,14 @@ One entry per commit or pull request:
 
 <!-- Append new entries directly below this line. -->
 
+## 2026-11-12 - P24 PR B review round 1 on PR #92 - nesting depth, scan roots, docstring
+
+- **Issue**: #24 follow-up PR B, review round 1 on PR #92.
+- **Done**: 1 BLOCKING + 1 TO-FIX + 1 SUGGESTION fixed. BLOCKING: `test_no_module_outside_engines_imports_reduction` refactored — the import scan extracted to `_imports_reduction()` helper, nesting depth now <= 4. TO-FIX: scan roots widened to `src/`, `scripts/`, `tools/` (tests/ excluded — test files legitimately import the module under test). SUGGESTION: docstring of the raise-count test corrected to state the actual scope (whole module) and threshold (>= 3).
+- **Evidence**: run: ruff clean, pytest on the guard file 4 passed. Not run: full `make check`, `make mutate`, `make smoke-test`.
+- **Judgement calls**: tests/ excluded from the import scan because test files are the legitimate consumers of the module under test.
+- **Escalations**: none.
+
 ## 2026-11-12 - P24 PR B: reduction guard tests (issue #24 follow-up, branch feat/24b-reduction-guard-tests)
 
 - **Issue**: #24 (P24 · Réductions certifiées, spec §18.2) — follow-up PR B per the ADR-0019 split applied in PR #91.
