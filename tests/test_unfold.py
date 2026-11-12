@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 import structlog.testing
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from philosophes3 import build_philosophes3
 
 from petrichor.engines.unfold import (
@@ -289,6 +291,18 @@ class TestUnfoldService:
         assert len(unfolded.model.certificates) == 1
         assert unfolded.model.certificates[0]["technique"] == MCC_UNFOLD_TECHNIQUE
 
+    def test_success_event_is_pinned(self) -> None:
+        symmetric = _symmetric_model(
+            model_id="mdl_event_ok",
+            places=[("p", "A", 1), ("q", "B", 0)],
+            transitions=["t"],
+            arcs=[("p", "t"), ("t", "q")],
+        )
+        with structlog.testing.capture_logs() as logs:
+            unfold_symmetric_to_pt(model=symmetric)
+        events = [entry["event"] for entry in logs]
+        assert "unfold_symmetric_to_pt_applied" in events
+
     def test_rejects_pt_model(self) -> None:
         pt_model = build_philosophes3()
         with (
@@ -427,3 +441,79 @@ class TestElementMapStrictness:
         unfolded = unfold_symmetric_to_pt(model=symmetric)
         with pytest.raises(KeyError):
             unfolded.certificate.element_map.to_original(name=ElementName("ghost"))
+
+
+@st.composite
+def _symmetric_net_case(
+    draw: st.DrawFn,
+) -> tuple[list[tuple[str, str, int]], list[str], list[tuple[str, str]]]:
+    """Generate a small random Symmetric net: places, transitions, arcs."""
+    place_count = draw(st.integers(min_value=1, max_value=6))
+    transition_count = draw(st.integers(min_value=1, max_value=4))
+    places = [
+        (
+            f"p{index}",
+            draw(st.sampled_from(["A", "B"])),
+            draw(st.integers(min_value=0, max_value=3)),
+        )
+        for index in range(place_count)
+    ]
+    transitions = [f"t{index}" for index in range(transition_count)]
+    element_names = [name for name, _, _ in places] + transitions
+    arc_count = draw(st.integers(min_value=1, max_value=8))
+    arcs = [
+        (
+            draw(st.sampled_from(element_names)),
+            draw(st.sampled_from(element_names)),
+        )
+        for _ in range(arc_count)
+    ]
+    return places, transitions, arcs
+
+
+@pytest.mark.property
+@given(case=_symmetric_net_case())
+@settings(max_examples=50)
+def test_unfold_preserves_structure_and_markings_on_generated_nets(
+    case: tuple[list[tuple[str, str, int]], list[str], list[tuple[str, str]]],
+) -> None:
+    """Property: unfolding never drops structure, never changes a marking.
+
+    On arbitrary generated Symmetric nets, the unfolded P/T model has the
+    same places/transitions/arcs with the same markings and arc structure,
+    the certificate's element_map is the identity, and the cross-check
+    against the renamed P/T oracle matches.
+    """
+    places, transitions, arcs = case
+    symmetric = _symmetric_model(
+        model_id="mdl_prop",
+        places=places,
+        transitions=transitions,
+        arcs=arcs,
+    )
+    unfolded = unfold_symmetric_to_pt(model=symmetric)
+    derived = unfolded.model
+    assert derived.formalism == "pt"
+    assert derived.color_domain is None
+    assert len(derived.places) == len(symmetric.places)
+    assert len(derived.transitions) == len(symmetric.transitions)
+    assert len(derived.arcs) == len(symmetric.arcs)
+    original_marks = {place.name: place.initial_marking for place in symmetric.places}
+    for place in derived.places:
+        assert place.initial_marking == original_marks[place.name]
+        assert "color_class" not in place.annotations
+    for place in symmetric.places:
+        assert unfolded.certificate.element_map.to_original(name=place.name) == place.name
+    for transition in symmetric.transitions:
+        assert unfolded.certificate.element_map.to_original(name=transition.name) == transition.name
+    # Cross-check against the renamed P/T oracle built from the same structure
+    renaming = {name: f"oracle_{name}" for name, _, _ in places}
+    renaming.update({name: f"oracle_{name}" for name in transitions})
+    oracle = _oracle_model(
+        model_id="mdl_prop_oracle",
+        places=places,
+        transitions=transitions,
+        arcs=arcs,
+        renaming=renaming,
+    )
+    assert cross_check_unfold_against_oracle(unfolded=derived, oracle_pt=oracle) is True
