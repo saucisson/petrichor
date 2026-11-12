@@ -20,6 +20,7 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
 from petrichor.petri_canonical import (
+    INHIBITOR_ARC_ANNOTATION_KEY,
     CanonicalModel,
     ElementId,
     ElementName,
@@ -41,7 +42,7 @@ MCC_ORACLE_LABEL = "mcc-benchmark-unfolded-pt"
 DERIVED_MODEL_ID_SUFFIX = "_unfolded"
 """The suffix appended to the parent model id for an unfolded derivative."""
 
-NEGATIVE_ARC_ANNOTATION_KEYS = ("negative", "inhibitor")
+NEGATIVE_ARC_ANNOTATION_KEYS = ("negative", INHIBITOR_ARC_ANNOTATION_KEY)
 """Arc annotation keys that mark a negative (inhibitor) arc — never unfoldable."""
 
 
@@ -197,16 +198,6 @@ def unfold_symmetric_to_pt(*, model: CanonicalModel) -> UnfoldedModel:
             "parent_id": model.id,
         }
     ]
-    derived_model = build_canonical_model(payload=derived_payload)
-    logger.debug(
-        "unfold_symmetric_to_pt_applied",
-        parent_id=model.id,
-        derived_id=derived_model.id,
-        place_count=len(derived_model.places),
-        transition_count=len(derived_model.transitions),
-        arc_count=len(derived_model.arcs),
-    )
-
     certificate = UnfoldCertificate(
         rules=(
             UnfoldRule(
@@ -223,12 +214,17 @@ def unfold_symmetric_to_pt(*, model: CanonicalModel) -> UnfoldedModel:
         technique=MCC_UNFOLD_TECHNIQUE,
         oracle=OracleLabel(MCC_ORACLE_LABEL),
     )
-    derived_with_certificate = derived_model.model_copy(
-        update={"certificates": (certificate.model_dump(mode="json"),)}
+    derived_payload["certificates"] = [certificate.model_dump(mode="json")]
+    derived_model = build_canonical_model(payload=derived_payload)
+    logger.debug(
+        "unfold_symmetric_to_pt_applied",
+        parent_id=model.id,
+        derived_id=derived_model.id,
+        place_count=len(derived_model.places),
+        transition_count=len(derived_model.transitions),
+        arc_count=len(derived_model.arcs),
     )
-    return UnfoldedModel(
-        model=derived_with_certificate, certificate=certificate, parent_id=model.id
-    )
+    return UnfoldedModel(model=derived_model, certificate=certificate, parent_id=model.id)
 
 
 class _MatchContext(BaseModel):
@@ -241,8 +237,20 @@ class _MatchContext(BaseModel):
     target_marks: dict[ElementName, int]
     source_name_to_id: dict[ElementName, ElementId]
     target_name_to_id: dict[ElementName, ElementId]
-    source_arcs: dict[tuple[ElementId, ElementId], int]
-    target_arcs: dict[tuple[ElementId, ElementId], int]
+    source_id_to_name: dict[ElementId, ElementName]
+    target_id_to_name: dict[ElementId, ElementName]
+    source_arcs: dict[tuple[ElementId, ElementId], tuple[int, ...]]
+    target_arcs: dict[tuple[ElementId, ElementId], tuple[int, ...]]
+
+
+def _arc_weights_by_pair(
+    *, model: CanonicalModel
+) -> dict[tuple[ElementId, ElementId], tuple[int, ...]]:
+    """Arc weights as a multiset per (source, target) pair — parallel arcs kept."""
+    weights: dict[tuple[ElementId, ElementId], list[int]] = {}
+    for arc in model.arcs:
+        weights.setdefault((arc.source, arc.target), []).append(arc.weight)
+    return {pair: tuple(sorted(pair_weights)) for pair, pair_weights in weights.items()}
 
 
 def _arcs_consistent(
@@ -252,7 +260,12 @@ def _arcs_consistent(
     source_name: ElementName,
     target_name: ElementName,
 ) -> bool:
-    """Check arcs between the candidate pair and every already-mapped pair."""
+    """Check arcs between the candidate pair and every already-mapped pair.
+
+    Pruning only: compares the weight multisets of both arc directions; the
+    final full-multiset check in ``_match_up_to_renaming`` is what makes the
+    verdict sound (self-loops and parallel arcs included).
+    """
     source_id = context.source_name_to_id[source_name]
     target_id = context.target_name_to_id[target_name]
     for mapped_source, mapped_target in mapping.items():
@@ -262,10 +275,7 @@ def _arcs_consistent(
             ((source_id, mapped_source_id), (target_id, mapped_target_id)),
             ((mapped_source_id, source_id), (mapped_target_id, target_id)),
         ):
-            weight = context.source_arcs.get(source_pair)
-            if weight is None:
-                continue
-            if context.target_arcs.get(target_pair) != weight:
+            if context.source_arcs.get(source_pair, ()) != context.target_arcs.get(target_pair, ()):
                 return False
     return True
 
@@ -327,13 +337,33 @@ def _match_up_to_renaming(
         target_name_to_id={
             element.name: element.id for element in (*target.places, *target.transitions)
         },
-        source_arcs={(arc.source, arc.target): arc.weight for arc in source.arcs},
-        target_arcs={(arc.source, arc.target): arc.weight for arc in target.arcs},
+        source_id_to_name={
+            element.id: element.name for element in (*source.places, *source.transitions)
+        },
+        target_id_to_name={
+            element.id: element.name for element in (*target.places, *target.transitions)
+        },
+        source_arcs=_arc_weights_by_pair(model=source),
+        target_arcs=_arc_weights_by_pair(model=target),
     )
     mapping: dict[ElementName, ElementName] = {}
-    if _backtrack_match(context=context, mapping=mapping, used=set(), index=0):
-        return mapping
-    return None
+    if not _backtrack_match(context=context, mapping=mapping, used=set(), index=0):
+        return None
+    mapped_arcs = sorted(
+        (
+            mapping[context.source_id_to_name[arc.source]],
+            mapping[context.source_id_to_name[arc.target]],
+            arc.weight,
+        )
+        for arc in source.arcs
+    )
+    oracle_arcs = sorted(
+        (context.target_id_to_name[arc.source], context.target_id_to_name[arc.target], arc.weight)
+        for arc in target.arcs
+    )
+    if mapped_arcs != oracle_arcs:
+        return None
+    return mapping
 
 
 def cross_check_unfold_against_oracle(
