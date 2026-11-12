@@ -192,7 +192,7 @@ class TestWitnessReplay:
             is True
         )
 
-    def test_replay_rejects_unknown_place(self) -> None:
+    def test_replay_rejects_unmapped_place(self) -> None:
         model = build_philosophes3()
         element_map = ElementMap(mapping={})
         witness = Witness(
@@ -203,7 +203,7 @@ class TestWitnessReplay:
         )
         with (
             structlog.testing.capture_logs() as logs,
-            pytest.raises(WitnessReplayError, match="unknown place"),
+            pytest.raises(WitnessReplayError, match="unmapped place"),
         ):
             replay_witness_on_original(
                 witness=witness,
@@ -211,11 +211,11 @@ class TestWitnessReplay:
                 element_map=element_map,
             )
         event_names = [entry["event"] for entry in logs]
-        assert "witness_replay_failed_unknown_place" in event_names
+        assert "witness_replay_failed_unmapped_place" in event_names
 
-    def test_replay_rejects_unknown_transition(self) -> None:
+    def test_replay_rejects_unmapped_transition(self) -> None:
         model = build_philosophes3()
-        element_map = ElementMap(mapping={})
+        element_map = ElementMap(mapping={ElementName("think_1"): ElementName("think_1")})
         witness = Witness(
             kind="counterexample",
             cyclic=False,
@@ -224,7 +224,7 @@ class TestWitnessReplay:
         )
         with (
             structlog.testing.capture_logs() as logs,
-            pytest.raises(WitnessReplayError, match="unknown transition"),
+            pytest.raises(WitnessReplayError, match="unmapped transition"),
         ):
             replay_witness_on_original(
                 witness=witness,
@@ -232,7 +232,7 @@ class TestWitnessReplay:
                 element_map=element_map,
             )
         event_names = [entry["event"] for entry in logs]
-        assert "witness_replay_failed_unknown_transition" in event_names
+        assert "witness_replay_failed_unmapped_transition" in event_names
 
     def test_reformat_witness_maps_names(self) -> None:
         element_map = ElementMap(
