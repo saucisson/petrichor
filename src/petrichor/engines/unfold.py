@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from petrichor.petri_canonical import (
     CanonicalModel,
+    ElementId,
     ElementName,
     ModelId,
     build_canonical_model,
@@ -56,12 +57,19 @@ class NegativeArcAnnotationError(UnfoldError):
     """The model carries a negative arc annotation — explicit rejection (§18.5)."""
 
 
+RuleName = NewType("RuleName", str)
+"""The name of an unfold rule, e.g. ``mcc-unfold``."""
+
+OracleLabel = NewType("OracleLabel", str)
+"""The label identifying the oracle an unfold is cross-checked against."""
+
+
 class UnfoldRule(BaseModel):
     """One applied unfold rule, exposed in the certificate (never silent)."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    name: str = Field(min_length=1)
+    name: RuleName = Field(min_length=1)
     description: str = ""
     elements_affected: int = Field(ge=0)
 
@@ -100,7 +108,7 @@ class UnfoldCertificate(BaseModel):
     rules: tuple[UnfoldRule, ...]
     element_map: ElementMap
     technique: Technique = Field(min_length=1, default=MCC_UNFOLD_TECHNIQUE)
-    oracle: str = Field(min_length=1, default=MCC_ORACLE_LABEL)
+    oracle: OracleLabel = Field(min_length=1, default=OracleLabel(MCC_ORACLE_LABEL))
 
 
 class UnfoldedModel(BaseModel):
@@ -113,7 +121,7 @@ class UnfoldedModel(BaseModel):
     parent_id: ModelId
 
 
-def _has_negative_arc_annotation(*, model: CanonicalModel) -> str | None:
+def _has_negative_arc_annotation(*, model: CanonicalModel) -> ElementId | None:
     """Return the id of the first arc carrying a negative annotation, if any."""
     for arc in model.arcs:
         for key in NEGATIVE_ARC_ANNOTATION_KEYS:
@@ -173,6 +181,15 @@ def unfold_symmetric_to_pt(*, model: CanonicalModel) -> UnfoldedModel:
         }
         for place in model.places
     ]
+    derived_payload["transitions"] = [
+        {
+            **transition.model_dump(mode="json"),
+            "annotations": {
+                key: value for key, value in transition.annotations.items() if key != "color_class"
+            },
+        }
+        for transition in model.transitions
+    ]
     derived_payload["derivations"] = [
         {
             "kind": "unfold",
@@ -193,7 +210,7 @@ def unfold_symmetric_to_pt(*, model: CanonicalModel) -> UnfoldedModel:
     certificate = UnfoldCertificate(
         rules=(
             UnfoldRule(
-                name=str(MCC_UNFOLD_TECHNIQUE),
+                name=RuleName(MCC_UNFOLD_TECHNIQUE),
                 description=(
                     "Symmetric → P/T unfolding (mcc / High-Level Nets Blaster,"
                     " Dal Zilio — LAAS, reimplemented); structure and element"
@@ -204,7 +221,7 @@ def unfold_symmetric_to_pt(*, model: CanonicalModel) -> UnfoldedModel:
         ),
         element_map=_identity_element_map(model=model),
         technique=MCC_UNFOLD_TECHNIQUE,
-        oracle=MCC_ORACLE_LABEL,
+        oracle=OracleLabel(MCC_ORACLE_LABEL),
     )
     derived_with_certificate = derived_model.model_copy(
         update={"certificates": (certificate.model_dump(mode="json"),)}
@@ -214,42 +231,109 @@ def unfold_symmetric_to_pt(*, model: CanonicalModel) -> UnfoldedModel:
     )
 
 
-def _match_names(
+class _MatchContext(BaseModel):
+    """Prepared lookups for the renaming matcher (kept out of the hot loop)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    source_elements: tuple[tuple[str, ElementName, int], ...]
+    target_by_kind: dict[str, tuple[ElementName, ...]]
+    target_marks: dict[ElementName, int]
+    source_name_to_id: dict[ElementName, ElementId]
+    target_name_to_id: dict[ElementName, ElementId]
+    source_arcs: dict[tuple[ElementId, ElementId], int]
+    target_arcs: dict[tuple[ElementId, ElementId], int]
+
+
+def _arcs_consistent(
     *,
-    source_names: list[ElementName],
-    target_names: list[ElementName],
-    source_marks: dict[ElementName, int],
-    target_marks: dict[ElementName, int],
-) -> dict[ElementName, ElementName] | None:
-    """Find a marking-preserving bijection between two place-name sets.
+    context: _MatchContext,
+    mapping: dict[ElementName, ElementName],
+    source_name: ElementName,
+    target_name: ElementName,
+) -> bool:
+    """Check arcs between the candidate pair and every already-mapped pair."""
+    source_id = context.source_name_to_id[source_name]
+    target_id = context.target_name_to_id[target_name]
+    for mapped_source, mapped_target in mapping.items():
+        mapped_source_id = context.source_name_to_id[mapped_source]
+        mapped_target_id = context.target_name_to_id[mapped_target]
+        for source_pair, target_pair in (
+            ((source_id, mapped_source_id), (target_id, mapped_target_id)),
+            ((mapped_source_id, source_id), (mapped_target_id, target_id)),
+        ):
+            weight = context.source_arcs.get(source_pair)
+            if weight is None:
+                continue
+            if context.target_arcs.get(target_pair) != weight:
+                return False
+    return True
 
-    Backtracking over the source places; small nets only (oracle cross-check
-    on benchmark-sized samples), so exponential worst case is acceptable and
-    bounded by the test corpus.
-    """
-    if len(source_names) != len(target_names):
-        return None
-    mapping: dict[ElementName, ElementName] = {}
-    used: set[ElementName] = set()
 
-    def backtrack(*, index: int) -> bool:
-        if index == len(source_names):
+def _backtrack_match(
+    *,
+    context: _MatchContext,
+    mapping: dict[ElementName, ElementName],
+    used: set[ElementName],
+    index: int,
+) -> bool:
+    if index == len(context.source_elements):
+        return True
+    kind, source_name, source_mark = context.source_elements[index]
+    for candidate in context.target_by_kind[kind]:
+        if candidate in used:
+            continue
+        if kind == "place" and source_mark != context.target_marks[candidate]:
+            continue
+        if not _arcs_consistent(
+            context=context, mapping=mapping, source_name=source_name, target_name=candidate
+        ):
+            continue
+        mapping[source_name] = candidate
+        used.add(candidate)
+        if _backtrack_match(context=context, mapping=mapping, used=used, index=index + 1):
             return True
-        source = source_names[index]
-        for target in target_names:
-            if target in used:
-                continue
-            if source_marks[source] != target_marks[target]:
-                continue
-            mapping[source] = target
-            used.add(target)
-            if backtrack(index=index + 1):
-                return True
-            del mapping[source]
-            used.remove(target)
-        return False
+        del mapping[source_name]
+        used.remove(candidate)
+    return False
 
-    return mapping if backtrack(index=0) else None
+
+def _match_up_to_renaming(
+    *,
+    source: CanonicalModel,
+    target: CanonicalModel,
+) -> dict[ElementName, ElementName] | None:
+    """Find an isomorphism between two P/T nets, up to element renaming.
+
+    Combined backtracking over places (constrained by initial marking) and
+    transitions, pruning as soon as an arc between two already-assigned
+    elements is not preserved (source, target, weight) in the other net.
+    Small nets only (oracle cross-check on benchmark-sized samples), so the
+    exponential worst case is acceptable and bounded by the test corpus.
+    """
+    context = _MatchContext(
+        source_elements=tuple(
+            [("place", place.name, place.initial_marking) for place in source.places]
+            + [("transition", transition.name, 0) for transition in source.transitions]
+        ),
+        target_by_kind={
+            "place": tuple(place.name for place in target.places),
+            "transition": tuple(transition.name for transition in target.transitions),
+        },
+        target_marks={place.name: place.initial_marking for place in target.places},
+        source_name_to_id={
+            element.name: element.id for element in (*source.places, *source.transitions)
+        },
+        target_name_to_id={
+            element.name: element.id for element in (*target.places, *target.transitions)
+        },
+        source_arcs={(arc.source, arc.target): arc.weight for arc in source.arcs},
+        target_arcs={(arc.source, arc.target): arc.weight for arc in target.arcs},
+    )
+    mapping: dict[ElementName, ElementName] = {}
+    if _backtrack_match(context=context, mapping=mapping, used=set(), index=0):
+        return mapping
+    return None
 
 
 def cross_check_unfold_against_oracle(
@@ -259,11 +343,11 @@ def cross_check_unfold_against_oracle(
 ) -> bool:
     """Cross-check an unfolded model against the MCC « unfolded » P/T oracle.
 
-    Equality **up to renaming**: same place/transition/arc counts, a
-    marking-preserving bijection on places, a bijection on transitions, and
-    the arc structure (source, target, weight) preserved under both
-    bijections. Returns True when the unfold matches the oracle; False
-    otherwise — a mismatch means the unfold is wrong, never the oracle.
+    Equality **up to renaming**: same place/transition/arc counts and an
+    isomorphism (marking-preserving on places, arc-structure-preserving on
+    both) between the two nets. Returns True when the unfold matches the
+    oracle; False otherwise — a mismatch means the unfold is wrong, never
+    the oracle.
     """
     if unfolded.formalism != "pt" or oracle_pt.formalism != "pt":
         logger.warning(
@@ -280,55 +364,8 @@ def cross_check_unfold_against_oracle(
         logger.debug("unfold_cross_check_mismatch", reason="element_counts")
         return False
 
-    unfolded_marks = {place.name: place.initial_marking for place in unfolded.places}
-    oracle_marks = {place.name: place.initial_marking for place in oracle_pt.places}
-    place_bijection = _match_names(
-        source_names=[place.name for place in unfolded.places],
-        target_names=[place.name for place in oracle_pt.places],
-        source_marks=unfolded_marks,
-        target_marks=oracle_marks,
-    )
-    if place_bijection is None:
-        logger.debug("unfold_cross_check_mismatch", reason="place_markings")
-        return False
-
-    unfolded_transitions = [transition.name for transition in unfolded.transitions]
-    oracle_transitions = [transition.name for transition in oracle_pt.transitions]
-    transition_bijection = _match_names(
-        source_names=unfolded_transitions,
-        target_names=oracle_transitions,
-        source_marks=dict.fromkeys(unfolded_transitions, 0),
-        target_marks=dict.fromkeys(oracle_transitions, 0),
-    )
-    if transition_bijection is None:
-        logger.debug("unfold_cross_check_mismatch", reason="transition_count")
-        return False
-
-    name_bijection = {**place_bijection, **transition_bijection}
-    id_to_name_unfolded = {
-        element.id: element.name for element in (*unfolded.places, *unfolded.transitions)
-    }
-    id_to_name_oracle = {
-        element.id: element.name for element in (*oracle_pt.places, *oracle_pt.transitions)
-    }
-    unfolded_arcs = sorted(
-        (
-            name_bijection[id_to_name_unfolded[arc.source]],
-            name_bijection[id_to_name_unfolded[arc.target]],
-            arc.weight,
-        )
-        for arc in unfolded.arcs
-    )
-    oracle_arcs = sorted(
-        (
-            id_to_name_oracle[arc.source],
-            id_to_name_oracle[arc.target],
-            arc.weight,
-        )
-        for arc in oracle_pt.arcs
-    )
-    if unfolded_arcs != oracle_arcs:
-        logger.debug("unfold_cross_check_mismatch", reason="arc_structure")
+    if _match_up_to_renaming(source=unfolded, target=oracle_pt) is None:
+        logger.debug("unfold_cross_check_mismatch", reason="no_isomorphism")
         return False
     logger.debug(
         "unfold_cross_check_matched",
