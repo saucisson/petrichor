@@ -96,6 +96,15 @@ def _philosophers_payload(*, count: int) -> dict[str, object]:
     }
 
 
+def _section(payload: dict[str, object], *, name: str) -> list[dict[str, object]]:
+    """One list section of a payload built by ``_philosophers_payload``.
+
+    The payload is typed ``dict[str, object]``; the cast narrows a section
+    the builder always fills with a list of dicts (justified escape, ADR-0006).
+    """
+    return cast("list[dict[str, object]]", payload[name])
+
+
 def _arc_weight(*, model: CanonicalModel, source_name: str, target_name: str) -> int | None:
     id_by_name = {element.name: element.id for element in (*model.places, *model.transitions)}
     for arc in model.arcs:
@@ -288,9 +297,8 @@ class TestRejections:
 
     def test_rejects_net_with_a_partial_agent(self) -> None:
         payload = _philosophers_payload(count=3)
-        places = cast("list[dict[str, object]]", payload["places"])
         # A broken agent 4: one place present, the five other elements missing
-        places.append(
+        _section(payload, name="places").append(
             {
                 "id": "pl_think_4",
                 "name": "think_4",
@@ -311,7 +319,39 @@ class TestRejections:
             if entry["event"] == "fault_injection_rejected_unsupported_model"
         ]
         assert len(rejected) == 1
-        assert rejected[0]["partial_agents"] == [4]
+        assert rejected[0]["off_pattern_agents"] == [4]
+
+    def test_rejects_net_with_a_gap_in_agent_indices(self) -> None:
+        payload = _philosophers_payload(count=3)
+        # Agent 2 removed entirely, agent 3 kept: a gap, not a partial agent
+        payload["places"] = [
+            place
+            for place in _section(payload, name="places")
+            if not str(place["name"]).endswith("_2")
+        ]
+        payload["transitions"] = [
+            transition
+            for transition in _section(payload, name="transitions")
+            if not str(transition["name"]).endswith("_2")
+        ]
+        payload["arcs"] = [
+            arc
+            for arc in _section(payload, name="arcs")
+            if "_2" not in str(arc["source"]) and "_2" not in str(arc["target"])
+        ]
+        model = build_canonical_model(payload=payload)
+        with (
+            structlog.testing.capture_logs() as logs,
+            pytest.raises(UnsupportedModelError, match="agent pattern"),
+        ):
+            inject_fault(model=model, fault_class="f1", seed=FaultSeed(0))
+        rejected = [
+            entry
+            for entry in logs
+            if entry["event"] == "fault_injection_rejected_unsupported_model"
+        ]
+        assert len(rejected) == 1
+        assert rejected[0]["off_pattern_agents"] == [3]
 
     def test_rejects_unknown_fault_class(self) -> None:
         model = build_philosophes3()
