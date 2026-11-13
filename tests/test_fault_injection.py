@@ -11,6 +11,7 @@ from petrichor.engines.fault_injection import (
     FAULT_INJECTION_TECHNIQUE,
     POLARIZED_CONFLICT_WEIGHT,
     FaultCertificate,
+    FaultClass,
     FaultInjectionError,
     FaultSeed,
     UnsupportedModelError,
@@ -108,9 +109,9 @@ class TestFaultClasses:
     """The four fault classes are certified transformations with element_map."""
 
     @pytest.mark.parametrize("fault_class", FAULT_CLASSES)
-    def test_every_class_produces_a_certified_variant(self, fault_class: str) -> None:
+    def test_every_class_produces_a_certified_variant(self, fault_class: FaultClass) -> None:
         model = build_philosophes3()
-        faulty = inject_fault(model=model, fault_class=fault_class, seed=FaultSeed(0))  # type: ignore[arg-type]
+        faulty = inject_fault(model=model, fault_class=fault_class, seed=FaultSeed(0))
         assert faulty.parent_id == model.id
         assert faulty.model.parent == model.id
         assert faulty.model.id == f"{model.id}_fault_{fault_class}_s0"
@@ -188,10 +189,10 @@ class TestDeterminism:
     """Seeded and deterministic: each variant has its own canonical hash."""
 
     @pytest.mark.parametrize("fault_class", FAULT_CLASSES)
-    def test_same_seed_same_hash(self, fault_class: str) -> None:
+    def test_same_seed_same_hash(self, fault_class: FaultClass) -> None:
         model = build_philosophes3()
-        first = inject_fault(model=model, fault_class=fault_class, seed=FaultSeed(7))  # type: ignore[arg-type]
-        second = inject_fault(model=model, fault_class=fault_class, seed=FaultSeed(7))  # type: ignore[arg-type]
+        first = inject_fault(model=model, fault_class=fault_class, seed=FaultSeed(7))
+        second = inject_fault(model=model, fault_class=fault_class, seed=FaultSeed(7))
         assert first.model.content_hash == second.model.content_hash
         assert first.certificate.agent == second.certificate.agent
 
@@ -286,6 +287,7 @@ class TestRejections:
     def test_rejects_unknown_fault_class(self) -> None:
         model = build_philosophes3()
         with pytest.raises(FaultInjectionError, match="Unknown fault class"):
+            # negative test: deliberately invalid class, rejected at runtime
             inject_fault(model=model, fault_class="f9", seed=FaultSeed(0))  # type: ignore[arg-type]
 
     def test_success_event_is_pinned(self) -> None:
@@ -299,12 +301,13 @@ class TestRejections:
 class TestFaultInjectionProperties:
     """Property tests: every fault class is deterministic and certified on generated nets."""
 
+    @pytest.mark.property
     @given(count=st.integers(min_value=2, max_value=4), seed=st.integers(min_value=0, max_value=99))
     def test_faults_are_deterministic_and_certified(self, count: int, seed: int) -> None:
         model = build_canonical_model(payload=_philosophers_payload(count=count))
         for fault_class in FAULT_CLASSES:
-            first = inject_fault(model=model, fault_class=fault_class, seed=FaultSeed(seed))  # type: ignore[arg-type]
-            second = inject_fault(model=model, fault_class=fault_class, seed=FaultSeed(seed))  # type: ignore[arg-type]
+            first = inject_fault(model=model, fault_class=fault_class, seed=FaultSeed(seed))
+            second = inject_fault(model=model, fault_class=fault_class, seed=FaultSeed(seed))
             assert first.model.content_hash == second.model.content_hash
             assert first.model.parent == model.id
             faulty_names = [

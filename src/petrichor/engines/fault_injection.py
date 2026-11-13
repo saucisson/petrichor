@@ -59,6 +59,22 @@ DERIVED_MODEL_ID_TEMPLATE = "{parent}_fault_{fault_class}_s{seed}"
 POLARIZED_CONFLICT_WEIGHT = 2
 """The arc weight polarizing a conflict for f3 (spec §20.3: poids)."""
 
+DUPLICATE_PLACE_MARKINGS: tuple[tuple[str, int], ...] = (
+    ("think_", 1),
+    ("hasL_", 0),
+    ("eat_", 0),
+)
+"""Initial markings of the duplicated agent's places (thinking, empty hands, not eating)."""
+
+UNIT_ARC_WEIGHT = 1
+"""The weight of a plain P/T arc (every arc of the duplicated agent)."""
+
+PLACEHOLDER_LAYOUT_X = 0
+"""The x coordinate of a placeholder layout (generated nets carry no geometry)."""
+
+PLACEHOLDER_LAYOUT_Y = 0
+"""The y coordinate of a placeholder layout (generated nets carry no geometry)."""
+
 AGENT_PLACE_PREFIXES = ("think_", "hasL_", "eat_")
 """Place prefixes identifying one agent of the dining-philosophers pattern."""
 
@@ -269,13 +285,13 @@ def _f4_duplicate_asymmetric(
     places = [place.model_dump(mode="json") for place in model.places]
     transitions = [transition.model_dump(mode="json") for transition in model.transitions]
     arcs = [arc.model_dump(mode="json") for arc in model.arcs]
-    for prefix, marking in (("think_", 1), ("hasL_", 0), ("eat_", 0)):
+    for prefix, marking in DUPLICATE_PLACE_MARKINGS:
         places.append(
             {
                 "id": f"pl_{prefix}{suffix}",
                 "name": f"{prefix}{suffix}",
                 "initial_marking": marking,
-                "layout": {"x": 0, "y": 0},
+                "layout": {"x": PLACEHOLDER_LAYOUT_X, "y": PLACEHOLDER_LAYOUT_Y},
                 "annotations": {},
             }
         )
@@ -284,7 +300,7 @@ def _f4_duplicate_asymmetric(
             {
                 "id": f"tr_{prefix}{suffix}",
                 "name": f"{prefix}{suffix}",
-                "layout": {"x": 0, "y": 0},
+                "layout": {"x": PLACEHOLDER_LAYOUT_X, "y": PLACEHOLDER_LAYOUT_Y},
                 "annotations": {},
             }
         )
@@ -306,7 +322,7 @@ def _f4_duplicate_asymmetric(
                 "id": f"ar_f4_{position:03d}",
                 "source": source,
                 "target": target,
-                "weight": 1,
+                "weight": UNIT_ARC_WEIGHT,
                 "annotations": {},
             }
         )
