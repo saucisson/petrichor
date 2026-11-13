@@ -51,17 +51,25 @@ from petrichor.checks import (
     RunId,
     run_key,
 )
+from petrichor.insitu import build_net_overlay
 from petrichor.petri_canonical import (
+    Arc,
+    Element,
+    ElementId,
     InvalidCanonicalModelError,
+    JsonValue,
     ModelId,
+    UnknownElementError,
     canonical_json,
     semantic_projection,
     serialize_model,
+    with_element_annotation,
 )
 from petrichor.pnml_import import PnmlImportError, import_pnml
 from petrichor.profile import ArbitrationDecision, ProfileArbitrator
 from petrichor.run_store import BudgetRefused, RunAdmission, RunStore
-from petrichor.session_store import SessionId, SessionStore
+from petrichor.session_store import SessionId, SessionStore, StoredSession
+from petrichor.state_graph import StateGraphExplorer, StateGraphUnsupportedError
 
 if TYPE_CHECKING:
     from petrichor.api.settings import ApiSettings
@@ -82,6 +90,9 @@ SESSION_JOURNAL_SUFFIX = "/journal"
 SESSION_PROFILE_SUFFIX = "/profile"
 SESSION_ARBITRATE_SUFFIX = "/profile/arbitrate"
 SESSION_COVERAGE_SUFFIX = "/coverage"
+SESSION_STATE_GRAPH_SUFFIX = "/state-graph"
+SESSION_ANNOTATIONS_SUFFIX = "/annotations"
+SESSION_NET_OVERLAY_SUFFIX = "/net-overlay"
 DEFAULT_SESSIONS_PAGE_LIMIT = 100
 MAX_SESSIONS_PAGE_LIMIT = 500
 CONTENT_TYPE_PNML = "application/pnml+xml"
@@ -1115,6 +1126,314 @@ def _get_session_coverage(
     )
 
 
+class AnnotationRequest(BaseModel):
+    """One in-situ annotation set on one element of the session's model (spec §13, §14)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    element_id: ElementId
+    key: str = Field(min_length=1)
+    value: JsonValue
+
+
+def _session_or_problem(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    session_store: SessionStore,
+    session_id: str,
+) -> StoredSession | Iterable[bytes]:
+    """The session, or a ready-to-return 404 problem response."""
+    session = session_store.get(session_id=SessionId(session_id))
+    if session is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="session_not_found",
+                detail=f"No session with id {session_id!r}.",
+            ),
+        )
+    return session
+
+
+def _get_session_state_graph(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    store: ModelStore,
+    session_store: SessionStore,
+    state_graph_explorer: StateGraphExplorer | None,
+    session_id: str,
+) -> Iterable[bytes]:
+    """The reachability graph of the session's permanent model, always consultable (P13)."""
+    session = _session_or_problem(
+        environ=environ,
+        start_response=start_response,
+        session_store=session_store,
+        session_id=session_id,
+    )
+    if not isinstance(session, StoredSession):
+        return session
+    if state_graph_explorer is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+                reason="state_graph_not_configured",
+                detail="No state-graph explorer is wired on this server.",
+            ),
+        )
+    model = store.get(model_id=session.model_id)
+    if model is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="model_not_found",
+                detail=f"No model with id {session.model_id!r}.",
+            ),
+        )
+    try:
+        graph_payload, truncated = state_graph_explorer(model=model)
+    except StateGraphUnsupportedError as error:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.UNPROCESSABLE_ENTITY,
+                reason="unsupported_formalism",
+                detail=str(error),
+            ),
+        )
+    body = json.dumps(
+        {
+            "model_id": model.id,
+            "formalism": model.formalism,
+            "truncated": truncated,
+            **graph_payload,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    states = graph_payload["states"]
+    logger.debug(
+        "api_state_graph_served",
+        session_id=session_id,
+        state_count=len(states) if isinstance(states, list) else 0,
+        truncated=truncated,
+    )
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.OK,
+        content_type=CONTENT_TYPE_JSON,
+        body=body.encode("utf-8"),
+    )
+
+
+def _put_session_annotation(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    store: ModelStore,
+    session_store: SessionStore,
+    session_id: str,
+) -> Iterable[bytes]:
+    """Set one in-situ annotation on one element; persisted outside the content hash (P13)."""
+    session = _session_or_problem(
+        environ=environ,
+        start_response=start_response,
+        session_store=session_store,
+        session_id=session_id,
+    )
+    if not isinstance(session, StoredSession):
+        return session
+    model = store.get(model_id=session.model_id)
+    if model is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="model_not_found",
+                detail=f"No model with id {session.model_id!r}.",
+            ),
+        )
+    try:
+        length = int(environ.get("CONTENT_LENGTH", "") or 0)
+    except ValueError:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.BAD_REQUEST,
+                reason="invalid_content_length",
+                detail="The Content-Length header is not an integer.",
+            ),
+        )
+    body = environ["wsgi.input"].read(length)
+    try:
+        payload = json.loads(body.decode("utf-8"))
+        request = AnnotationRequest.model_validate(payload)
+    except (UnicodeDecodeError, json.JSONDecodeError, ValidationError) as error:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.UNPROCESSABLE_ENTITY,
+                reason="invalid_annotation",
+                detail=f"The annotation body is invalid: {error}",
+            ),
+        )
+    try:
+        updated = with_element_annotation(
+            model=model, element_id=request.element_id, key=request.key, value=request.value
+        )
+    except UnknownElementError as error:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="element_not_found",
+                detail=str(error),
+            ),
+        )
+    store.replace(model=updated)
+    logger.debug(
+        "api_annotation_set",
+        session_id=session_id,
+        element_id=request.element_id,
+        key=request.key,
+        content_hash=updated.content_hash,
+    )
+    updated_elements: tuple[Element | Arc, ...] = (
+        *updated.places,
+        *updated.transitions,
+        *updated.arcs,
+    )
+    body_out = json.dumps(
+        {
+            "model_id": updated.id,
+            "element_id": request.element_id,
+            "content_hash": updated.content_hash,
+            "annotations": next(
+                element.annotations
+                for element in updated_elements
+                if element.id == request.element_id
+            ),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.OK,
+        content_type=CONTENT_TYPE_JSON,
+        body=body_out.encode("utf-8"),
+    )
+
+
+def _get_session_net_overlay(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    store: ModelStore,
+    session_store: SessionStore,
+    arbitrator: ProfileArbitrator | None,
+    session_id: str,
+) -> Iterable[bytes]:
+    """The coverage overlay of the permanent net: card → elements + greyed coverage (P13)."""
+    session = _session_or_problem(
+        environ=environ,
+        start_response=start_response,
+        session_store=session_store,
+        session_id=session_id,
+    )
+    if not isinstance(session, StoredSession):
+        return session
+    model = store.get(model_id=session.model_id)
+    if model is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="model_not_found",
+                detail=f"No model with id {session.model_id!r}.",
+            ),
+        )
+    state = arbitrator.get(session_id=SessionId(session_id)) if arbitrator is not None else None
+    overlay = build_net_overlay(model=model, groups=state.groups if state is not None else ())
+    logger.debug(
+        "api_net_overlay_read",
+        session_id=session_id,
+        elements=len(overlay.elements),
+        greyed=len(overlay.greyed_ids()),
+    )
+    body = json.dumps(
+        {**overlay.model_dump(mode="json"), "greyed": list(overlay.greyed_ids())},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.OK,
+        content_type=CONTENT_TYPE_JSON,
+        body=body.encode("utf-8"),
+    )
+
+
+def _dispatch_session_insitu(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    method: str,
+    remainder: str,
+    store: ModelStore,
+    session_store: SessionStore,
+    arbitrator: ProfileArbitrator | None,
+    state_graph_explorer: StateGraphExplorer | None,
+) -> Iterable[bytes] | None:
+    """Route the in-situ sub-resources of a session (state graph, annotations, overlay), or None."""
+    if remainder.endswith(SESSION_STATE_GRAPH_SUFFIX):
+        session_id = remainder[: -len(SESSION_STATE_GRAPH_SUFFIX)]
+        if method == "GET" and session_id and "/" not in session_id:
+            return _get_session_state_graph(
+                environ=environ,
+                start_response=start_response,
+                store=store,
+                session_store=session_store,
+                state_graph_explorer=state_graph_explorer,
+                session_id=session_id,
+            )
+    elif remainder.endswith(SESSION_ANNOTATIONS_SUFFIX):
+        session_id = remainder[: -len(SESSION_ANNOTATIONS_SUFFIX)]
+        if method == "PUT" and session_id and "/" not in session_id:
+            return _put_session_annotation(
+                environ=environ,
+                start_response=start_response,
+                store=store,
+                session_store=session_store,
+                session_id=session_id,
+            )
+    elif remainder.endswith(SESSION_NET_OVERLAY_SUFFIX):
+        session_id = remainder[: -len(SESSION_NET_OVERLAY_SUFFIX)]
+        if method == "GET" and session_id and "/" not in session_id:
+            return _get_session_net_overlay(
+                environ=environ,
+                start_response=start_response,
+                store=store,
+                session_store=session_store,
+                arbitrator=arbitrator,
+                session_id=session_id,
+            )
+    return None
+
+
 def _dispatch_session_profile(
     *,
     environ: WSGIEnvironment,
@@ -1164,6 +1483,7 @@ def _dispatch_sessions(
     store: ModelStore,
     session_store: SessionStore,
     arbitrator: ProfileArbitrator | None = None,
+    state_graph_explorer: StateGraphExplorer | None = None,
 ) -> Iterable[bytes] | None:
     """Route the /v1/sessions resources, or return None when the path is not one."""
     result: Iterable[bytes] | None = None
@@ -1207,14 +1527,25 @@ def _dispatch_sessions(
                 session_store=session_store,
                 session_id=remainder,
             )
-        elif arbitrator is not None:
-            result = _dispatch_session_profile(
+        else:
+            result = _dispatch_session_insitu(
                 environ=environ,
                 start_response=start_response,
                 method=method,
                 remainder=remainder,
+                store=store,
+                session_store=session_store,
                 arbitrator=arbitrator,
+                state_graph_explorer=state_graph_explorer,
             )
+            if result is None and arbitrator is not None:
+                result = _dispatch_session_profile(
+                    environ=environ,
+                    start_response=start_response,
+                    method=method,
+                    remainder=remainder,
+                    arbitrator=arbitrator,
+                )
         if result is None:
             result = _problem_response(
                 start_response=start_response,
@@ -1239,6 +1570,7 @@ def create_app(
     session_store: SessionStore | None = None,
     arbitrator: ProfileArbitrator | None = None,
     qualification: QualificationLookup | None = None,
+    state_graph_explorer: StateGraphExplorer | None = None,
 ) -> WSGIApp:
     """Build the WSGI application: auth first, then routing and negotiation."""
 
@@ -1289,6 +1621,7 @@ def create_app(
                 store=store,
                 session_store=session_store,
                 arbitrator=arbitrator,
+                state_graph_explorer=state_graph_explorer,
             )
         if routed is not None:
             return routed

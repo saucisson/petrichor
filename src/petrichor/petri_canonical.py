@@ -54,6 +54,10 @@ class InvalidCanonicalModelError(PetriCanonicalError):
     """A payload does not conform to the `petri+json` v1.0 schema."""
 
 
+class UnknownElementError(PetriCanonicalError):
+    """No place, transition or arc carries the requested element id."""
+
+
 class Layout(BaseModel):
     """Graphical position of an element; excluded from the content hash."""
 
@@ -272,3 +276,34 @@ def build_canonical_model(*, payload: dict[str, object]) -> CanonicalModel:
     model = draft.model_copy(update={"content_hash": content_hash})
     logger.debug("canonical_model_built", model_id=draft.id, content_hash=content_hash)
     return model
+
+
+def with_element_annotation(
+    *, model: CanonicalModel, element_id: ElementId, key: str, value: JsonValue
+) -> CanonicalModel:
+    """Return a copy of ``model`` with one annotation set on one element.
+
+    Annotations live outside the content hash (spec §13): the returned model
+    keeps the same ``content_hash`` — editing an annotation never creates a
+    new model. Raises ``UnknownElementError`` when no element carries the id.
+    """
+    if not key:
+        raise ValueError("The annotation key must be non-empty.")
+    payload = model.model_dump(mode="json")
+    for section in ("places", "transitions", "arcs"):
+        for element in payload[section]:
+            if element["id"] == element_id:
+                element["annotations"][key] = value
+                logger.debug(
+                    "canonical_annotation_set",
+                    model_id=model.id,
+                    element_id=element_id,
+                    key=key,
+                )
+                return build_canonical_model(payload=payload)
+    logger.warning(
+        "canonical_annotation_rejected_unknown_element",
+        model_id=model.id,
+        element_id=element_id,
+    )
+    raise UnknownElementError(f"Model {model.id!r} has no element with id {element_id!r}.")

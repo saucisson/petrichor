@@ -23,6 +23,8 @@ from petrichor.engines.mini_engine import (
     check_ag_ef,
     check_ef_deadlock,
     explore_state_graph,
+    explore_state_graph_bounded,
+    explore_state_graph_payload,
     find_starvation_cycle,
     maximal_siphon,
     maximal_trap,
@@ -33,6 +35,7 @@ from petrichor.engines.mini_engine import (
     tarjan_scc,
 )
 from petrichor.petri_canonical import CanonicalModel, build_canonical_model
+from petrichor.state_graph import StateGraphUnsupportedError
 
 
 def tiny_net_payload() -> dict[str, object]:
@@ -386,6 +389,45 @@ class TestCapacityAndFormalism:
         model = build_canonical_model(payload=toggle_net_payload(pair_count=14))
         with pytest.raises(NetBeyondCapacityError, match="capacity"):
             explore_state_graph(model=model)
+
+    def test_bounded_state_graph_truncates_instead_of_raising(self) -> None:
+        model = build_canonical_model(payload=toggle_net_payload(pair_count=14))
+        graph, truncated = explore_state_graph_bounded(model=model, max_states=100)
+        assert truncated is True
+        assert len(graph.states) == 100
+        # The unbounded exploration still raises on the same net
+        with pytest.raises(NetBeyondCapacityError, match="capacity"):
+            explore_state_graph(model=model)
+
+    def test_bounded_state_graph_is_complete_below_the_cap(self) -> None:
+        model = build_philosophes3()
+        graph, truncated = explore_state_graph_bounded(model=model, max_states=10_000)
+        assert truncated is False
+        assert graph.states == explore_state_graph(model=model).states
+
+    def test_state_graph_payload_is_json_data_and_marks_truncation(self) -> None:
+        model = build_canonical_model(payload=toggle_net_payload(pair_count=14))
+        payload, truncated = explore_state_graph_payload(model=model)
+        assert truncated is True
+        assert payload["max_states"] == 10_000
+        assert isinstance(payload["states"], list)
+        assert isinstance(payload["edges"], list)
+        assert payload["place_names"] == [place.name for place in model.places]
+
+    def test_state_graph_payload_rejects_non_pt_explicitly(self) -> None:
+        symmetric = build_canonical_model(
+            payload={
+                "id": "mdl_sym",
+                "formalism": "symmetric",
+                "color_domain": {"agents": ["1", "2", "3"]},
+                "places": [],
+                "transitions": [],
+                "arcs": [],
+                "metadata": {"source": "test"},
+            }
+        )
+        with pytest.raises(StateGraphUnsupportedError):
+            explore_state_graph_payload(model=symmetric)
 
     def test_invariant_enumeration_beyond_capacity_is_rejected(self) -> None:
         model = build_canonical_model(payload=self_loop_net_payload(place_count=17))

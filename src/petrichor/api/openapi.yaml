@@ -437,6 +437,90 @@ paths:
           $ref: "#/components/responses/NotFound"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+  /sessions/{session_id}/state-graph:
+    get:
+      summary: Reachability graph of the session's permanent model, always consultable (P13)
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: >-
+            The state graph (states, edges, deadlocks). `truncated: true` marks the
+            explicit degradation when the graph exceeds the engine capacity.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StateGraphReport"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /sessions/{session_id}/annotations:
+    put:
+      summary: Set one in-situ annotation on one element; persisted outside the content hash (P13)
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AnnotationRequest"
+      responses:
+        "200":
+          description: The element's annotations after the update; the content hash is unchanged.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AnnotationReport"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+  /sessions/{session_id}/net-overlay:
+    get:
+      summary: Coverage overlay of the permanent net — card to elements + greyed coverage (P13)
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: >-
+            Per-element coverage state and per-group resolved element ids; `greyed`
+            lists the uncovered element ids the front renders greyed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NetOverlay"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
 components:
   securitySchemes:
     apiKey:
@@ -522,6 +606,128 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/CoverageGroup"
+    StateGraphReport:
+      type: object
+      required: [model_id, formalism, truncated, place_names, initial, states, edges, deadlocks, arc_count, max_states]
+      properties:
+        model_id:
+          type: string
+        formalism:
+          type: string
+        truncated:
+          type: boolean
+          description: True when the graph was cut at the engine capacity (explicit degradation).
+        place_names:
+          type: array
+          items:
+            type: string
+        initial:
+          type: array
+          items:
+            type: integer
+        states:
+          type: array
+          items:
+            type: array
+            items:
+              type: integer
+        edges:
+          type: array
+          items:
+            type: object
+            required: [source, transition, target]
+            properties:
+              source:
+                type: array
+                items:
+                  type: integer
+              transition:
+                type: string
+              target:
+                type: array
+                items:
+                  type: integer
+        deadlocks:
+          type: array
+          items:
+            type: array
+            items:
+              type: integer
+        arc_count:
+          type: integer
+        max_states:
+          type: integer
+    AnnotationRequest:
+      type: object
+      required: [element_id, key, value]
+      properties:
+        element_id:
+          type: string
+        key:
+          type: string
+          minLength: 1
+        value: {}
+    AnnotationReport:
+      type: object
+      required: [model_id, element_id, content_hash, annotations]
+      properties:
+        model_id:
+          type: string
+        element_id:
+          type: string
+        content_hash:
+          type: string
+          description: Unchanged — annotations live outside the content hash (spec §13).
+        annotations:
+          type: object
+    NetOverlay:
+      type: object
+      required: [model_id, elements, groups, greyed]
+      properties:
+        model_id:
+          type: string
+        elements:
+          type: array
+          items:
+            type: object
+            required: [id, kind, name, covered, groups]
+            properties:
+              id:
+                type: string
+              kind:
+                type: string
+                enum: [place, transition, arc]
+              name:
+                type: string
+                nullable: true
+              covered:
+                type: boolean
+              groups:
+                type: array
+                items:
+                  type: string
+        groups:
+          type: array
+          items:
+            type: object
+            required: [group_id, role, covered, elements]
+            properties:
+              group_id:
+                type: string
+              role:
+                type: string
+              covered:
+                type: boolean
+              elements:
+                type: array
+                items:
+                  type: string
+                description: The card's element spec resolved to element ids of the net.
+        greyed:
+          type: array
+          items:
+            type: string
+          description: The uncovered element ids, rendered greyed by the front.
     Problem:
       type: object
       required: [type, title, status, detail, instance]
@@ -708,6 +914,12 @@ components:
             $ref: "#/components/schemas/Problem"
     UnprocessableEntity:
       description: The request body fails schema validation.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    ServiceUnavailable:
+      description: The server has no engine/explorer wired for this resource (e.g. runner not configured).
       content:
         application/problem+json:
           schema:

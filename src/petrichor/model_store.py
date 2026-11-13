@@ -42,6 +42,11 @@ class ModelStore:
         """Return the stored model for an id, or None."""
         return self._by_id.get(model_id)
 
+    def replace(self, *, model: CanonicalModel) -> None:
+        """Overwrite the stored model for its id (same content hash: annotations only)."""
+        self._by_id[model.id] = model
+        logger.debug("model_store_replaced", model_id=model.id, content_hash=model.content_hash)
+
     def __len__(self) -> int:
         """The number of stored models."""
         return len(self._by_id)
