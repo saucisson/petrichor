@@ -23,11 +23,12 @@ from petrichor.engines.verdict import (
     PathWitness,
     Verdict,
 )
+from petrichor.state_graph import StateGraphUnsupportedError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from petrichor.petri_canonical import CanonicalModel
+    from petrichor.petri_canonical import CanonicalModel, JsonValue
 
 logger = structlog.get_logger(__name__)
 
@@ -141,30 +142,15 @@ def _fire(
     return tuple(result)
 
 
-def _register_state(
-    *,
-    seen: dict[Marking, int],
-    queue: list[Marking],
-    successors: dict[Marking, list[tuple[str, Marking]]],
-    marking: Marking,
-) -> None:
-    """Add a freshly discovered marking, enforcing the capacity cap."""
-    if len(seen) >= MAX_REACHABLE_STATES:
-        logger.warning(
-            "engine_capacity_exceeded",
-            state_count=len(seen),
-            max_states=MAX_REACHABLE_STATES,
-        )
-        raise NetBeyondCapacityError(
-            f"Reachability graph exceeds the mini-engine capacity of {MAX_REACHABLE_STATES} states."
-        )
-    seen[marking] = len(seen)
-    successors[marking] = []
-    queue.append(marking)
+def _explore(
+    *, model: CanonicalModel, max_states: int, raise_on_cap: bool
+) -> tuple[StateGraph, bool]:
+    """BFS the reachability graph up to ``max_states`` states.
 
-
-def explore_state_graph(*, model: CanonicalModel) -> StateGraph:
-    """BFS the reachability graph; raises NetBeyondCapacityError past the cap."""
+    With ``raise_on_cap`` a capacity breach raises ``NetBeyondCapacityError``;
+    otherwise the exploration stops at the cap and returns the partial graph
+    with ``truncated=True`` — an explicit degradation, never a silent result.
+    """
     _require_pt(model=model)
     place_names = _place_names(model=model)
     index_of = {name: position for position, name in enumerate(place_names)}
@@ -175,7 +161,8 @@ def explore_state_graph(*, model: CanonicalModel) -> StateGraph:
     successors: dict[Marking, list[tuple[str, Marking]]] = {initial: []}
     deadlocks: list[Marking] = []
     arc_count = 0
-    while queue:
+    truncated = False
+    while queue and not truncated:
         marking = queue.pop(0)
         fired_any = False
         for name, input_output in transitions:
@@ -184,18 +171,36 @@ def explore_state_graph(*, model: CanonicalModel) -> StateGraph:
                 continue
             fired_any = True
             arc_count += 1
+            if next_marking in seen:
+                successors[marking].append((name, next_marking))
+                continue
+            if len(seen) >= max_states:
+                if raise_on_cap:
+                    logger.warning(
+                        "engine_capacity_exceeded",
+                        state_count=len(seen),
+                        max_states=max_states,
+                    )
+                    raise NetBeyondCapacityError(
+                        "Reachability graph exceeds the mini-engine capacity"
+                        f" of {max_states} states."
+                    )
+                truncated = True
+                break
             successors[marking].append((name, next_marking))
-            if next_marking not in seen:
-                _register_state(seen=seen, queue=queue, successors=successors, marking=next_marking)
-        if not fired_any:
+            seen[next_marking] = len(seen)
+            successors[next_marking] = []
+            queue.append(next_marking)
+        if not fired_any and not truncated:
             deadlocks.append(marking)
     logger.debug(
         "state_graph_explored",
         state_count=len(seen),
         arc_count=arc_count,
         deadlock_count=len(deadlocks),
+        truncated=truncated,
     )
-    return StateGraph(
+    graph = StateGraph(
         place_names=place_names,
         initial=initial,
         states=tuple(seen),
@@ -203,6 +208,51 @@ def explore_state_graph(*, model: CanonicalModel) -> StateGraph:
         deadlocks=tuple(deadlocks),
         arc_count=arc_count,
     )
+    return graph, truncated
+
+
+def explore_state_graph(*, model: CanonicalModel) -> StateGraph:
+    """BFS the reachability graph; raises NetBeyondCapacityError past the cap."""
+    graph, _truncated = _explore(model=model, max_states=MAX_REACHABLE_STATES, raise_on_cap=True)
+    return graph
+
+
+def explore_state_graph_bounded(
+    *, model: CanonicalModel, max_states: int
+) -> tuple[StateGraph, bool]:
+    """BFS the reachability graph up to ``max_states`` states.
+
+    Returns the (possibly partial) graph and whether it was truncated at the
+    cap — the explicit degradation path for unbounded nets (spec §14, P13).
+    """
+    return _explore(model=model, max_states=max_states, raise_on_cap=False)
+
+
+def explore_state_graph_payload(*, model: CanonicalModel) -> tuple[dict[str, JsonValue], bool]:
+    """Bounded reachability graph as a JSON payload (adapter for ``StateGraphExplorer``).
+
+    The verdict lock (spec §19.4) keeps this adapter inside ``engines/``: the
+    API only sees plain JSON data. A non-P/T model raises
+    ``StateGraphUnsupportedError`` — an explicit rejection, never a graph.
+    """
+    try:
+        graph, truncated = explore_state_graph_bounded(model=model, max_states=MAX_REACHABLE_STATES)
+    except UnsupportedFormalismError as error:
+        raise StateGraphUnsupportedError(str(error)) from error
+    payload: dict[str, JsonValue] = {
+        "place_names": list(graph.place_names),
+        "initial": list(graph.initial),
+        "states": [list(state) for state in graph.states],
+        "edges": [
+            {"source": list(marking), "transition": name, "target": list(target)}
+            for marking, edges in graph.successors.items()
+            for name, target in edges
+        ],
+        "deadlocks": [list(deadlock) for deadlock in graph.deadlocks],
+        "arc_count": graph.arc_count,
+        "max_states": MAX_REACHABLE_STATES,
+    }
+    return payload, truncated
 
 
 def _kernel_basis(*, matrix: list[list[Fraction]]) -> list[list[Fraction]]:
