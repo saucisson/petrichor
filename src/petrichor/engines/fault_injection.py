@@ -199,7 +199,7 @@ def _detect_agents(*, model: CanonicalModel) -> list[AgentIndex]:
         logger.warning(
             "fault_injection_rejected_unsupported_model",
             model_id=model.id,
-            off_pattern_agents=off_pattern,
+            partial_agents=off_pattern,
         )
         raise UnsupportedModelError(
             f"Model {model.id!r} does not match the dining-philosophers agent pattern"

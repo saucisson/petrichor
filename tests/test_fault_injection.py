@@ -319,7 +319,7 @@ class TestRejections:
             if entry["event"] == "fault_injection_rejected_unsupported_model"
         ]
         assert len(rejected) == 1
-        assert rejected[0]["off_pattern_agents"] == [4]
+        assert rejected[0]["partial_agents"] == [4]
 
     def test_rejects_net_with_a_gap_in_agent_indices(self) -> None:
         payload = _philosophers_payload(count=3)
@@ -351,7 +351,7 @@ class TestRejections:
             if entry["event"] == "fault_injection_rejected_unsupported_model"
         ]
         assert len(rejected) == 1
-        assert rejected[0]["off_pattern_agents"] == [3]
+        assert rejected[0]["partial_agents"] == [3]
 
     def test_rejects_unknown_fault_class(self) -> None:
         model = build_philosophes3()
