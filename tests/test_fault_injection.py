@@ -1,5 +1,7 @@
 """Unit and property tests for certified fault injection (spec §20.3, issue #44)."""
 
+from typing import cast
+
 import pytest
 import structlog.testing
 from hypothesis import given
@@ -283,6 +285,33 @@ class TestRejections:
         ):
             inject_fault(model=model, fault_class="f1", seed=FaultSeed(0))
         assert "fault_injection_rejected_unsupported_model" in [entry["event"] for entry in logs]
+
+    def test_rejects_net_with_a_partial_agent(self) -> None:
+        payload = _philosophers_payload(count=3)
+        places = cast("list[dict[str, object]]", payload["places"])
+        # A broken agent 4: one place present, the five other elements missing
+        places.append(
+            {
+                "id": "pl_think_4",
+                "name": "think_4",
+                "initial_marking": 1,
+                "layout": {"x": 0, "y": 0},
+                "annotations": {},
+            }
+        )
+        model = build_canonical_model(payload=payload)
+        with (
+            structlog.testing.capture_logs() as logs,
+            pytest.raises(UnsupportedModelError, match="agent pattern"),
+        ):
+            inject_fault(model=model, fault_class="f1", seed=FaultSeed(0))
+        rejected = [
+            entry
+            for entry in logs
+            if entry["event"] == "fault_injection_rejected_unsupported_model"
+        ]
+        assert len(rejected) == 1
+        assert rejected[0]["partial_agents"] == [4]
 
     def test_rejects_unknown_fault_class(self) -> None:
         model = build_philosophes3()

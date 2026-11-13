@@ -81,6 +81,9 @@ AGENT_PLACE_PREFIXES = ("think_", "hasL_", "eat_")
 AGENT_TRANSITION_PREFIXES = ("takeL_", "takeR_", "rel_")
 """Transition prefixes identifying one agent of the pattern."""
 
+AGENT_ELEMENT_COUNT = len(AGENT_PLACE_PREFIXES) + len(AGENT_TRANSITION_PREFIXES)
+"""The number of pattern elements making one complete agent (3 places + 3 transitions)."""
+
 
 class FaultInjectionError(Exception):
     """Base class of every domain error raised by this module."""
@@ -154,31 +157,52 @@ def _right_fork_index(*, agent: AgentIndex, agent_count: int) -> int:
     return agent % agent_count + 1
 
 
+def _pattern_element_counts(
+    *, place_names: set[ElementName], transition_names: set[ElementName]
+) -> dict[int, int]:
+    """How many pattern elements each agent index carries.
+
+    A complete agent carries exactly ``AGENT_ELEMENT_COUNT`` elements; a
+    partial one (some but not all) means the net does not match the pattern.
+    """
+    counts: dict[int, int] = {}
+    for names in (place_names, transition_names):
+        for name in names:
+            for prefix in (*AGENT_PLACE_PREFIXES, *AGENT_TRANSITION_PREFIXES):
+                if name.startswith(prefix) and name[len(prefix) :].isdigit():
+                    index = int(name[len(prefix) :])
+                    counts[index] = counts.get(index, 0) + 1
+    return counts
+
+
 def _detect_agents(*, model: CanonicalModel) -> list[AgentIndex]:
     """The agent indices of a dining-philosophers-pattern net, sorted.
 
     An agent ``i`` exists when every ``{think,hasL,eat}_{i}`` place and every
     ``{takeL,takeR,rel}_{i}`` transition is present. Raises
-    ``UnsupportedModelError`` when no agent matches.
+    ``UnsupportedModelError`` when no complete agent matches, or when a
+    partial agent (some pattern elements but not all) is present — a net
+    that does not match the pattern is rejected explicitly, never silently
+    faulted as a smaller philosophers net.
     """
     place_names = {place.name for place in model.places}
     transition_names = {transition.name for transition in model.transitions}
+    counts = _pattern_element_counts(place_names=place_names, transition_names=transition_names)
     agents: list[AgentIndex] = []
     index = 1
-    while True:
-        suffix = str(index)
-        if all(f"{prefix}{suffix}" in place_names for prefix in AGENT_PLACE_PREFIXES) and all(
-            f"{prefix}{suffix}" in transition_names for prefix in AGENT_TRANSITION_PREFIXES
-        ):
-            agents.append(AgentIndex(index))
-            index += 1
-        else:
-            break
-    if not agents:
-        logger.warning("fault_injection_rejected_unsupported_model", model_id=model.id)
+    while counts.get(index, 0) == AGENT_ELEMENT_COUNT:
+        agents.append(AgentIndex(index))
+        index += 1
+    partial = sorted(i for i, count in counts.items() if 0 < count < AGENT_ELEMENT_COUNT)
+    if partial or not agents:
+        logger.warning(
+            "fault_injection_rejected_unsupported_model",
+            model_id=model.id,
+            partial_agents=partial,
+        )
         raise UnsupportedModelError(
             f"Model {model.id!r} does not match the dining-philosophers agent pattern"
-            " (no think_i/hasL_i/eat_i + takeL_i/takeR_i/rel_i agent found)."
+            f" (complete agents: {agents}, partial agents: {partial})."
         )
     return agents
 
