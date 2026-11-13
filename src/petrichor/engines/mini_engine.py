@@ -8,6 +8,7 @@ never emits an implicit verdict: a net beyond its capacity is rejected
 explicitly with :class:`NetBeyondCapacityError` (spec §14.2, §18.5).
 """
 
+import re
 import sys
 from dataclasses import dataclass, field, replace
 from fractions import Fraction
@@ -24,10 +25,17 @@ from petrichor.engines.verdict import (
     Verdict,
 )
 from petrichor.state_graph import StateGraphUnsupportedError
+from petrichor.triage import (
+    STATIC_KINDS,
+    CapacityReport,
+    NonVacuityGuard,
+    StaticUndecidableError,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from petrichor.checks import CheckFamilyName, CheckQuestion, KindPattern
     from petrichor.petri_canonical import CanonicalModel, JsonValue
 
 logger = structlog.get_logger(__name__)
@@ -852,3 +860,217 @@ def analyze(*, model: CanonicalModel) -> StaticAnalysis:
         orbit_count=report.orbit_count,
     )
     return report
+
+
+# ---------------------------------------------------------------------------
+# P14 adapters: capacity probe, static resolution, non-vacuity guard (issue #14).
+# Plain-data implementations of the StaticResolver protocol (spec §19.4): the
+# API receives JSON payloads and guard records, never verdict objects.
+# ---------------------------------------------------------------------------
+
+COMPARISON_PATTERN = re.compile(
+    r"^\(\s*(?P<place>[A-Za-z_][A-Za-z0-9_]*)\s*"
+    r"(?P<op>>=|<=|==|!=|>|<)\s*(?P<value>-?\d+)\s*\)$"
+)
+"""The ``(place op n)`` state formula of the static fragment, e.g. ``(eat_1 <= 1)``."""
+
+EF_FORMULA_PATTERN = re.compile(r"^EF\s+(?P<inner>.+)$")
+"""The ``EF φ`` form of a reachability formula."""
+
+AG_FORMULA_PATTERN = re.compile(r"^AG\s+(?P<inner>.+)$")
+"""The ``AG ψ`` form of a safety formula."""
+
+
+def _parse_comparison(*, text: str) -> tuple[str, str, int] | None:
+    """Parse a ``(place op n)`` comparison, or None when the text is not one."""
+    match = COMPARISON_PATTERN.fullmatch(text.strip())
+    if match is None:
+        return None
+    return match.group("place"), match.group("op"), int(match.group("value"))
+
+
+def _satisfies(*, place: str, op: str, value: int, marking: dict[str, int]) -> bool:
+    """Evaluate one comparison on a marking; an unknown place never satisfies."""
+    actual = marking.get(place)
+    if actual is None:
+        return False
+    if op == ">":
+        result = actual > value
+    elif op == ">=":
+        result = actual >= value
+    elif op == "<":
+        result = actual < value
+    elif op == "<=":
+        result = actual <= value
+    elif op == "==":
+        result = actual == value
+    else:
+        result = actual != value
+    return result
+
+
+def mini_capacity(*, model: CanonicalModel) -> CapacityReport:
+    """Capacity probe adapter of ``StaticResolver`` (issue #14, spec §14.2).
+
+    A non-P/T net or a graph beyond the state cap reports ``state_count=None``:
+    the capacity is probed, never assumed.
+    """
+    try:
+        graph, truncated = explore_state_graph_bounded(model=model, max_states=MAX_REACHABLE_STATES)
+    except UnsupportedFormalismError:
+        graph, truncated = None, True
+    return CapacityReport(
+        place_count=len(model.places),
+        max_places_for_invariants=MAX_PLACES_FOR_INVARIANT_ENUMERATION,
+        state_count=None if truncated or graph is None else len(graph.states),
+        max_states=MAX_REACHABLE_STATES,
+    )
+
+
+def resolve_static_payload(
+    *, model: CanonicalModel, question: CheckQuestion
+) -> dict[str, JsonValue]:
+    """Resolve a statically-triaged question as an opaque JSON payload (issue #14).
+
+    The static fragment covers the safety patterns over a simple
+    ``AG (place op n)`` formula, decided by bounded state enumeration with
+    cost zero (spec §18.1). Anything else - or a net beyond capacity - raises
+    ``StaticUndecidableError`` so the API degrades the question explicitly
+    (spec §14.2): the failure of a heuristic is never a verdict.
+    """
+    if question.kind not in STATIC_KINDS:
+        raise StaticUndecidableError(
+            f"Pattern {question.kind!r} is not one of the static targets (spec §14.2)."
+        )
+    match = AG_FORMULA_PATTERN.fullmatch(question.formula.strip())
+    comparison = _parse_comparison(text=match.group("inner")) if match is not None else None
+    if comparison is None:
+        raise StaticUndecidableError(
+            f"Formula {question.formula!r} is outside the static fragment AG (place op n)."
+        )
+    place, op, value = comparison
+    try:
+        graph, truncated = explore_state_graph_bounded(model=model, max_states=MAX_REACHABLE_STATES)
+    except UnsupportedFormalismError as error:
+        raise StaticUndecidableError(str(error)) from error
+    if truncated:
+        raise StaticUndecidableError(
+            f"Reachability graph beyond the cap of {MAX_REACHABLE_STATES} states."
+        )
+    index_of = {name: position for position, name in enumerate(graph.place_names)}
+    if place not in index_of:
+        raise StaticUndecidableError(f"Unknown place {place!r}: not in the model.")
+    violating = next(
+        (
+            state
+            for state in graph.states
+            if not _satisfies(
+                place=place,
+                op=op,
+                value=value,
+                marking=dict(zip(graph.place_names, state, strict=True)),
+            )
+        ),
+        None,
+    )
+    cost: dict[str, JsonValue] = {
+        "tool_seconds": STATIC_ENGINE_COST,
+        "states_explored": len(graph.states),
+    }
+    if violating is None:
+        logger.debug(
+            "static_question_resolved", kind=question.kind, formula=question.formula, verdict="true"
+        )
+        return {
+            "verdict": "true",
+            "technique": "static",
+            "static_technique": "state_enumeration",
+            "witness": None,
+            "cost": cost,
+        }
+    path = _path_from_initial(graph=graph, target_predicate=lambda state: state == violating)
+    witness = PathWitness(
+        states=tuple(_sparse(marking=state, place_names=graph.place_names) for state in path),
+        description=(
+            f"AG ({place} {op} {value}) is false: this path reaches a marking violating it."
+        ),
+    )
+    logger.debug(
+        "static_question_resolved", kind=question.kind, formula=question.formula, verdict="false"
+    )
+    return {
+        "verdict": "false",
+        "technique": "static",
+        "static_technique": "state_enumeration",
+        "witness": witness.model_dump(mode="json"),
+        "cost": cost,
+    }
+
+
+def non_vacuity_guard(
+    *, model: CanonicalModel, family: CheckFamilyName, kind: KindPattern, formula: str
+) -> NonVacuityGuard:
+    """Non-vacuity guard adapter of ``StaticResolver`` (issue #14, spec §14.4).
+
+    For ``EF φ`` the guard is ok when the initial marking does not already
+    satisfy φ; for ``AG ψ`` when it does not violate ψ. Any other formula
+    carries no guard of this fragment and reports ``not_applicable``
+    explicitly - a mute property gets no verdict.
+    """
+    initial: dict[str, int] = {place.name: place.initial_marking for place in model.places}
+    text = formula.strip()
+    if text == "EF DEADLOCK":
+        return NonVacuityGuard(
+            guard=None,
+            status="not_applicable",
+            detail="EF DEADLOCK carries its own deadlock guard, not an EF φ guard (spec §14.4).",
+        )
+    ef_match = EF_FORMULA_PATTERN.fullmatch(text)
+    if ef_match is not None:
+        comparison = _parse_comparison(text=ef_match.group("inner"))
+        if comparison is not None:
+            place, op, value = comparison
+            if place not in initial:
+                return NonVacuityGuard(
+                    guard="ef_phi",
+                    status="not_applicable",
+                    detail=f"Place {place!r} of the guard is not in the model.",
+                )
+            holds = _satisfies(place=place, op=op, value=value, marking=initial)
+            return NonVacuityGuard(
+                guard="ef_phi",
+                status="vacuous" if holds else "ok",
+                detail=(
+                    f"EF ({place} {op} {value}): the initial marking already satisfies it,"
+                    " the property is vacuous on this model."
+                    if holds
+                    else f"EF ({place} {op} {value}): the initial marking does not satisfy it yet."
+                ),
+            )
+    ag_match = AG_FORMULA_PATTERN.fullmatch(text)
+    if ag_match is not None:
+        comparison = _parse_comparison(text=ag_match.group("inner"))
+        if comparison is not None:
+            place, op, value = comparison
+            if place not in initial:
+                return NonVacuityGuard(
+                    guard="ag_psi",
+                    status="not_applicable",
+                    detail=f"Place {place!r} of the guard is not in the model.",
+                )
+            holds = _satisfies(place=place, op=op, value=value, marking=initial)
+            return NonVacuityGuard(
+                guard="ag_psi",
+                status="ok" if holds else "vacuous",
+                detail=(
+                    f"AG ({place} {op} {value}): the initial marking satisfies it, the guard holds."
+                    if holds
+                    else f"AG ({place} {op} {value}): the initial marking already violates it,"
+                    " the property is vacuous on this model."
+                ),
+            )
+    return NonVacuityGuard(
+        guard=None,
+        status="not_applicable",
+        detail=f"Formula {formula!r} is outside the EF φ / AG ψ guards (spec §14.4).",
+    )

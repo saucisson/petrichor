@@ -34,6 +34,7 @@ from petrichor.model_store import ModelStore
 from petrichor.petri_canonical import ModelId
 from petrichor.pnml_import import import_pnml
 from petrichor.run_store import BudgetRefused, RunAdmission, RunAdmitted, RunStore
+from petrichor.triage import QuestionTriage
 
 if TYPE_CHECKING:
     import pytest
@@ -398,6 +399,7 @@ def admission_for(formula: str, *, session_budget_seconds: float = 3600.0) -> Ru
         timeout_seconds=30,
         tool_version=SLEEP_TOOL_VERSION,
         session_budget_seconds=session_budget_seconds,
+        triage=QuestionTriage(kind="MC", justification="test"),
     )
 
 
