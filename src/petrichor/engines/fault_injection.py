@@ -179,11 +179,12 @@ def _detect_agents(*, model: CanonicalModel) -> list[AgentIndex]:
     """The agent indices of a dining-philosophers-pattern net, sorted.
 
     An agent ``i`` exists when every ``{think,hasL,eat}_{i}`` place and every
-    ``{takeL,takeR,rel}_{i}`` transition is present. Raises
-    ``UnsupportedModelError`` when no complete agent matches, or when a
-    partial agent (some pattern elements but not all) is present — a net
-    that does not match the pattern is rejected explicitly, never silently
-    faulted as a smaller philosophers net.
+    ``{takeL,takeR,rel}_{i}`` transition is present, and the agents are exactly
+    ``1..k`` with no other pattern element beyond them. Raises
+    ``UnsupportedModelError`` when no complete agent matches, or when any
+    off-pattern agent index is present (partial agent, or a gap in the
+    indices) — a net that does not match the pattern is rejected explicitly,
+    never silently faulted as a smaller philosophers net.
     """
     place_names = {place.name for place in model.places}
     transition_names = {transition.name for transition in model.transitions}
@@ -193,16 +194,16 @@ def _detect_agents(*, model: CanonicalModel) -> list[AgentIndex]:
     while counts.get(index, 0) == AGENT_ELEMENT_COUNT:
         agents.append(AgentIndex(index))
         index += 1
-    partial = sorted(i for i, count in counts.items() if 0 < count < AGENT_ELEMENT_COUNT)
-    if partial or not agents:
+    off_pattern = sorted(set(counts) - set(range(1, len(agents) + 1)))
+    if off_pattern or not agents:
         logger.warning(
             "fault_injection_rejected_unsupported_model",
             model_id=model.id,
-            partial_agents=partial,
+            off_pattern_agents=off_pattern,
         )
         raise UnsupportedModelError(
             f"Model {model.id!r} does not match the dining-philosophers agent pattern"
-            f" (complete agents: {agents}, partial agents: {partial})."
+            f" (complete agents: {agents}, off-pattern agents: {off_pattern})."
         )
     return agents
 
