@@ -26,6 +26,7 @@ from petrichor.checks import (
     new_run_id,
 )
 from petrichor.petri_canonical import JsonValue, ModelId
+from petrichor.triage import NonVacuityGuard, QuestionTriage
 
 logger = structlog.get_logger(__name__)
 
@@ -73,6 +74,11 @@ class StoredRun(BaseModel):
     """Whether the engine that produced the output is qualified for the family
     (spec §17.5, issue #22); None while the run is not done or no qualification
     lookup is wired."""
+    triage: QuestionTriage
+    """The static/MC triage of the question, with its justification (spec §14.2,
+    issue #14); a degraded question displays it here, never silently."""
+    non_vacuity: NonVacuityGuard | None = None
+    """The non-vacuity guard chip of the question (spec §14.4, issue #14)."""
 
 
 class RunAdmission(BaseModel):
@@ -93,6 +99,10 @@ class RunAdmission(BaseModel):
     tool_version: ToolVersion
     session_budget_seconds: float = Field(gt=0)
     """The session budget cap in tool seconds (spec §12.4); no carry-over."""
+    triage: QuestionTriage
+    """The triage computed at admission (spec §14.2, issue #14)."""
+    non_vacuity: NonVacuityGuard | None = None
+    """The non-vacuity guard computed at admission (spec §14.4, issue #14)."""
 
 
 class RunAdmitted(BaseModel):
@@ -188,6 +198,8 @@ class RunStore:
                 input_hash=admission.key,
                 timeout_seconds=admission.timeout_seconds,
                 tool_version=admission.tool_version,
+                triage=admission.triage,
+                non_vacuity=admission.non_vacuity,
             )
             self._by_id[run.run_id] = run
             self._by_key[admission.key] = run.run_id

@@ -36,6 +36,7 @@ from petrichor.model_store import ModelStore
 from petrichor.petri_canonical import ModelId
 from petrichor.pnml_import import import_pnml
 from petrichor.run_store import BudgetRefused, RunAdmission, RunStore
+from petrichor.triage import QuestionTriage
 
 if TYPE_CHECKING:
     from wsgiref.types import WSGIEnvironment
@@ -375,6 +376,7 @@ class TestRunStates:
                 timeout_seconds=30,
                 tool_version=FAKE_TOOL_VERSION,
                 session_budget_seconds=3600.0,
+                triage=QuestionTriage(kind="MC", justification="test"),
             ),
             reservation_seconds=35.0,
         )
@@ -431,6 +433,8 @@ class TestRunStates:
             "output",
             "error",
             "engine_qualified",
+            "triage",
+            "non_vacuity",
         }
         assert run["family"] == "deadlock"
         assert run["kind"] == "deadlock"
@@ -523,6 +527,7 @@ class TestRunKeyProperty:
             timeout_seconds=30,
             tool_version=FAKE_TOOL_VERSION,
             session_budget_seconds=3600.0,
+            triage=QuestionTriage(kind="MC", justification="test"),
         )
         first = run_store.admit(admission=admission, reservation_seconds=35.0)
         second = run_store.admit(admission=admission, reservation_seconds=35.0)
