@@ -2,27 +2,43 @@
 
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import httpx
 import pytest
 import structlog.testing
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from philosophes3 import build_philosophes3
 from pydantic import SecretStr
 
 from petrichor.api.app import create_app
 from petrichor.api.settings import ApiSettings
-from petrichor.engines.mini_engine import explore_state_graph_payload
-from petrichor.insitu import InvalidElementSpecError, build_net_overlay, expand_element_spec
+from petrichor.engines.mini_engine import (
+    explore_state_graph_bounded,
+    explore_state_graph_payload,
+)
+from petrichor.insitu import (
+    InvalidElementSpecError,
+    build_net_overlay,
+    expand_element_spec,
+    resolve_group_elements,
+)
 from petrichor.llm.schemas import ProfileEntry, SemanticProfile
 from petrichor.model_store import ModelStore
 from petrichor.petri_canonical import (
+    CanonicalModel,
     ElementId,
+    JsonValue,
     UnknownElementError,
     with_element_annotation,
 )
 from petrichor.profile import CoverageGroup, GroupId, ProfileArbitrator, QuestionKind
 from petrichor.run_store import RunStore
 from petrichor.session_store import SessionId, SessionStore
+
+if TYPE_CHECKING:
+    from petrichor.state_graph import StateGraphExplorer
 
 FIXTURES = Path(__file__).parent / "fixtures"
 PHILOSOPHES3_PNML = (FIXTURES / "philosophes3.pnml").read_text(encoding="utf-8")
@@ -57,9 +73,9 @@ def sample_profile() -> SemanticProfile:
 
 
 def build_client(
-    tmp_path: Path, *, with_explorer: bool = True
+    tmp_path: Path, *, explorer: StateGraphExplorer | None = explore_state_graph_payload
 ) -> tuple[httpx.Client, ProfileArbitrator]:
-    """Build a test client with the in-situ explorer wired (or not)."""
+    """Build a test client with the given in-situ explorer wired (None → 503)."""
     settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
     store = ModelStore()
     run_store = RunStore()
@@ -72,7 +88,7 @@ def build_client(
         runner=None,
         session_store=session_store,
         arbitrator=arbitrator,
-        state_graph_explorer=explore_state_graph_payload if with_explorer else None,
+        state_graph_explorer=explorer,
     )
     client = httpx.Client(transport=httpx.WSGITransport(app=app), base_url="http://testserver")
     return client, arbitrator
@@ -98,7 +114,8 @@ class TestStateGraphEndpoint:
         client, _ = build_client(tmp_path)
         model_id = import_model(client)
         session_id = create_session(client, model_id)
-        response = client.get(f"/v1/sessions/{session_id}/state-graph", headers=AUTH_HEADERS)
+        with structlog.testing.capture_logs() as logs:
+            response = client.get(f"/v1/sessions/{session_id}/state-graph", headers=AUTH_HEADERS)
         assert response.status_code == 200
         body = response.json()
         assert body["model_id"] == model_id
@@ -107,9 +124,41 @@ class TestStateGraphEndpoint:
         assert len(body["states"]) > 1
         assert len(body["edges"]) > 0
         assert body["place_names"]
+        served = next(entry for entry in logs if entry["event"] == "api_state_graph_served")
+        assert served["session_id"] == session_id
+        assert served["state_count"] == len(body["states"])
+        assert served["truncated"] is False
         # Deterministic: two reads are identical (spec §19.4)
         again = client.get(f"/v1/sessions/{session_id}/state-graph", headers=AUTH_HEADERS)
         assert again.json() == body
+
+    def test_state_graph_truncated_flag_passes_through(self, tmp_path: Path) -> None:
+        """The explicit degradation reaches the API: truncated=true when the cap is hit."""
+
+        def tiny_explorer(*, model: CanonicalModel) -> tuple[dict[str, JsonValue], bool]:
+            graph, truncated = explore_state_graph_bounded(model=model, max_states=2)
+            payload: dict[str, JsonValue] = {
+                "place_names": list(graph.place_names),
+                "initial": list(graph.initial),
+                "states": [list(state) for state in graph.states],
+                "edges": [],
+                "deadlocks": [],
+                "arc_count": graph.arc_count,
+                "max_states": 2,
+            }
+            return payload, truncated
+
+        client, _ = build_client(tmp_path, explorer=tiny_explorer)
+        model_id = import_model(client)
+        session_id = create_session(client, model_id)
+        with structlog.testing.capture_logs() as logs:
+            response = client.get(f"/v1/sessions/{session_id}/state-graph", headers=AUTH_HEADERS)
+        assert response.status_code == 200
+        body = response.json()
+        assert body["truncated"] is True
+        assert len(body["states"]) == 2
+        served = next(entry for entry in logs if entry["event"] == "api_state_graph_served")
+        assert served["truncated"] is True
 
     def test_state_graph_unknown_session_is_404(self, tmp_path: Path) -> None:
         client, _ = build_client(tmp_path)
@@ -118,7 +167,7 @@ class TestStateGraphEndpoint:
         assert response.json()["extensions"]["reason"] == "session_not_found"
 
     def test_state_graph_without_explorer_is_503(self, tmp_path: Path) -> None:
-        client, _ = build_client(tmp_path, with_explorer=False)
+        client, _ = build_client(tmp_path, explorer=None)
         model_id = import_model(client)
         session_id = create_session(client, model_id)
         response = client.get(f"/v1/sessions/{session_id}/state-graph", headers=AUTH_HEADERS)
@@ -194,7 +243,8 @@ class TestNetOverlayEndpoint:
         client, _ = build_client(tmp_path)
         model_id = import_model(client)
         session_id = create_session(client, model_id)
-        response = client.get(f"/v1/sessions/{session_id}/net-overlay", headers=AUTH_HEADERS)
+        with structlog.testing.capture_logs() as logs:
+            response = client.get(f"/v1/sessions/{session_id}/net-overlay", headers=AUTH_HEADERS)
         assert response.status_code == 200
         body = response.json()
         assert body["model_id"] == model_id
@@ -202,6 +252,10 @@ class TestNetOverlayEndpoint:
         assert len(body["elements"]) > 0
         assert all(not element["covered"] for element in body["elements"])
         assert len(body["greyed"]) == len(body["elements"])
+        read = next(entry for entry in logs if entry["event"] == "api_net_overlay_read")
+        assert read["session_id"] == session_id
+        assert read["elements"] == len(body["elements"])
+        assert read["greyed"] == len(body["greyed"])
 
     def test_overlay_resolves_card_to_elements_and_greys_the_rest(self, tmp_path: Path) -> None:
         """A covered group resolves its range spec to element ids; the rest stays greyed (P5/P6)."""
@@ -214,9 +268,12 @@ class TestNetOverlayEndpoint:
             group_id=GroupId("grp_eat"),
             question_kind=QuestionKind("liveness.conditional"),
         )
-        response = client.get(f"/v1/sessions/{session_id}/net-overlay", headers=AUTH_HEADERS)
+        with structlog.testing.capture_logs() as logs:
+            response = client.get(f"/v1/sessions/{session_id}/net-overlay", headers=AUTH_HEADERS)
         assert response.status_code == 200
         body = response.json()
+        read = next(entry for entry in logs if entry["event"] == "api_net_overlay_read")
+        assert read["session_id"] == session_id
         eat_group = next(g for g in body["groups"] if g["group_id"] == "grp_eat")
         assert eat_group["covered"] is True
         # Card → elements: eat_1..3 resolved to the three eat place ids
@@ -273,3 +330,109 @@ class TestWithElementAnnotation:
         )
         overlay = build_net_overlay(model=model, groups=groups)
         assert len(overlay.greyed_ids()) == len(overlay.elements) - 3
+
+
+SPEC_NAME_ALPHABET = "abcdefghijklmnopqrstuvwxyz_"
+"""Letters only: a generated name can never parse as a range or contain a comma."""
+
+
+class TestInsituProperties:
+    """Property tier (ADR-0012): invariants of the in-situ domain logic over generated inputs."""
+
+    @pytest.mark.property
+    @settings(deadline=None)
+    @given(
+        prefix=st.text(alphabet=SPEC_NAME_ALPHABET, min_size=1, max_size=8),
+        start=st.integers(min_value=0, max_value=20),
+        span=st.integers(min_value=0, max_value=5),
+    )
+    def test_property_range_expands_to_exactly_span_plus_one_names(
+        self, prefix: str, start: int, span: int
+    ) -> None:
+        names = expand_element_spec(spec=f"{prefix}{start}..{start + span}")
+        assert names == tuple(f"{prefix}{index}" for index in range(start, start + span + 1))
+
+    @pytest.mark.property
+    @settings(deadline=None)
+    @given(
+        names=st.lists(
+            st.text(alphabet=SPEC_NAME_ALPHABET, min_size=1, max_size=6), min_size=1, max_size=5
+        )
+    )
+    def test_property_comma_list_preserves_order_and_content(self, names: list[str]) -> None:
+        assert expand_element_spec(spec=", ".join(names)) == tuple(names)
+
+    @pytest.mark.property
+    @settings(deadline=None)
+    @given(start=st.integers(min_value=1, max_value=20), span=st.integers(min_value=1, max_value=5))
+    def test_property_inverted_range_always_raises(self, start: int, span: int) -> None:
+        with pytest.raises(InvalidElementSpecError, match="Inverted"):
+            expand_element_spec(spec=f"p{start + span}..{start}")
+
+    @pytest.mark.property
+    @settings(deadline=None)
+    @given(
+        junk=st.lists(st.text(alphabet=SPEC_NAME_ALPHABET, min_size=1, max_size=6), max_size=4),
+        pick=st.integers(min_value=0, max_value=10),
+    )
+    def test_property_resolution_keeps_only_names_present_in_the_model(
+        self, junk: list[str], pick: int
+    ) -> None:
+        model = build_philosophes3()
+        all_names = [element.name for element in (*model.places, *model.transitions)]
+        real = all_names[pick % len(all_names)]
+        group = CoverageGroup(
+            group_id=GroupId("grp_x"), role="r", elements=",".join([real, *junk]), covered_by=()
+        )
+        ids = resolve_group_elements(group=group, model=model)
+        ids_by_name = {element.name: element.id for element in (*model.places, *model.transitions)}
+        assert ids_by_name[real] in ids
+        assert set(ids) <= set(ids_by_name.values())
+
+    @pytest.mark.property
+    @settings(deadline=None)
+    @given(covered=st.booleans(), span=st.integers(min_value=1, max_value=3))
+    def test_property_overlay_partitions_covered_and_greyed(self, covered: bool, span: int) -> None:
+        model = build_philosophes3()
+        groups = (
+            CoverageGroup(
+                group_id=GroupId("grp_eat"),
+                role="section critique",
+                elements=f"eat_1..{span}",
+                covered_by=(QuestionKind("liveness.conditional"),) if covered else (),
+            ),
+        )
+        overlay = build_net_overlay(model=model, groups=groups)
+        assert len(overlay.elements) == len(model.places) + len(model.transitions) + len(model.arcs)
+        covered_ids = {element.id for element in overlay.elements if element.covered}
+        greyed = set(overlay.greyed_ids())
+        all_ids = {element.id for element in overlay.elements}
+        assert covered_ids | greyed == all_ids
+        assert not covered_ids & greyed
+        expected: set[ElementId] = set()
+        if covered:
+            ids_by_name = {
+                element.name: element.id for element in (*model.places, *model.transitions)
+            }
+            expected = {
+                ids_by_name[name]
+                for name in expand_element_spec(spec=f"eat_1..{span}")
+                if name in ids_by_name
+            }
+        assert covered_ids == expected
+
+    @pytest.mark.property
+    @settings(deadline=None)
+    @given(
+        index=st.integers(min_value=0, max_value=30),
+        key=st.text(alphabet=SPEC_NAME_ALPHABET, min_size=1, max_size=8),
+        value=st.text(alphabet=f"{SPEC_NAME_ALPHABET} ", min_size=0, max_size=20),
+    )
+    def test_property_annotation_never_changes_the_hash(
+        self, index: int, key: str, value: str
+    ) -> None:
+        model = build_philosophes3()
+        elements = [*model.places, *model.transitions, *model.arcs]
+        element = elements[index % len(elements)]
+        updated = with_element_annotation(model=model, element_id=element.id, key=key, value=value)
+        assert updated.content_hash == model.content_hash
