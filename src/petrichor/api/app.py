@@ -54,6 +54,7 @@ from petrichor.checks import (
 from petrichor.insitu import build_net_overlay
 from petrichor.petri_canonical import (
     Arc,
+    CanonicalModel,
     Element,
     ElementId,
     InvalidCanonicalModelError,
@@ -70,6 +71,15 @@ from petrichor.profile import ArbitrationDecision, ProfileArbitrator
 from petrichor.run_store import BudgetRefused, RunAdmission, RunStore
 from petrichor.session_store import SessionId, SessionStore, StoredSession
 from petrichor.state_graph import StateGraphExplorer, StateGraphUnsupportedError
+from petrichor.triage import (
+    STATIC_COST_SECONDS,
+    STATIC_TOOL_VERSION,
+    NonVacuityGuard,
+    QuestionTriage,
+    StaticResolver,
+    StaticUndecidableError,
+    triage_question,
+)
 
 if TYPE_CHECKING:
     from petrichor.api.settings import ApiSettings
@@ -465,7 +475,56 @@ def _watchdog(
         )
 
 
-def _post_check(
+def _triage_and_resolve_static(
+    *,
+    static_resolver: StaticResolver | None,
+    model: CanonicalModel,
+    family: CheckFamilyName,
+    request: CheckRequest,
+    question: CheckQuestion,
+) -> tuple[QuestionTriage, NonVacuityGuard | None, dict[str, JsonValue] | None]:
+    """Triage a question and try the static resolution (spec §14.2, issue #14).
+
+    Returns the triage, the non-vacuity guard and the static output when the
+    embedded engine decided the question without any MC run. When the static
+    proof cannot be found, the triage is explicitly degraded - the failure of
+    a heuristic is never read as a verdict - and the output stays None.
+    """
+    capacity = static_resolver.capacity(model=model) if static_resolver is not None else None
+    triage = triage_question(kind=request.kind, capacity=capacity)
+    guard = (
+        static_resolver.non_vacuity_guard(
+            model=model, family=family, kind=request.kind, formula=request.formula
+        )
+        if static_resolver is not None
+        else None
+    )
+    logger.debug(
+        "api_check_triaged",
+        family=family,
+        kind=request.kind,
+        triage_kind=triage.kind,
+        justification=triage.justification,
+        guard_status=guard.status if guard is not None else None,
+    )
+    static_output: dict[str, JsonValue] | None = None
+    if triage.kind == "statique" and static_resolver is not None:
+        try:
+            static_output = static_resolver.resolve_static(model=model, question=question)
+        except StaticUndecidableError as error:
+            triage = QuestionTriage(
+                kind="dégradé",
+                justification=(
+                    f"Preuve statique non trouvée ({error}) — question déclassée MC (spec §14.2)."
+                ),
+            )
+            logger.warning(
+                "api_check_static_undecidable", family=family, kind=request.kind, detail=str(error)
+            )
+    return triage, guard, static_output
+
+
+def _post_check(  # noqa: PLR0913 - one keyword per routed dependency (ADR-0003)
     *,
     environ: WSGIEnvironment,
     start_response: StartResponse,
@@ -475,6 +534,7 @@ def _post_check(
     family: CheckFamilyName,
     settings: ApiSettings,
     qualification: QualificationLookup | None,
+    static_resolver: StaticResolver | None,
 ) -> Iterable[bytes]:
     """Accept a check question: 202 + Location, idempotent by (model, question) hash.
 
@@ -482,6 +542,11 @@ def _post_check(
     and the run creation happen under one lock, with in-flight reservations,
     so the cumulative measured cost never exceeds the cap - a run that does
     not fit is refused with an explicit 429 carrying the remaining budget.
+
+    Every question is triaged first (spec §14.2, issue #14): a statically
+    triaged question is resolved by the embedded engine without any MC run
+    (cost zero, ``technique: static``); when the static proof cannot be found
+    the question is explicitly degraded and displayed as such on the run.
     """
     timeout_seconds = settings.check_timeout_seconds
     try:
@@ -506,14 +571,6 @@ def _post_check(
                     detail=f"No model with id {request.model_id!r}.",
                 )
             )
-        if runner is None:
-            raise _ProblemPayloadError(
-                payload=_problem(
-                    status=HTTPStatus.SERVICE_UNAVAILABLE,
-                    reason="runner_not_configured",
-                    detail="No check runner is wired into this server yet (real engines: P09+).",
-                )
-            )
     except _ProblemPayloadError as problem:
         return _problem_response(
             start_response=start_response, environ=environ, payload=problem.payload
@@ -532,6 +589,27 @@ def _post_check(
             "model": json.loads(canonical_json(payload=semantic_projection(model=model))),
         },
     )
+    # Triage from the pattern family and the current capacity (spec §14.2).
+    triage, guard, static_output = _triage_and_resolve_static(
+        static_resolver=static_resolver,
+        model=model,
+        family=family,
+        request=request,
+        question=question,
+    )
+    tool_version = STATIC_TOOL_VERSION
+    if static_output is None:
+        if runner is None:
+            return _problem_response(
+                start_response=start_response,
+                environ=environ,
+                payload=_problem(
+                    status=HTTPStatus.SERVICE_UNAVAILABLE,
+                    reason="runner_not_configured",
+                    detail="No check runner is wired into this server yet (real engines: P09+).",
+                ),
+            )
+        tool_version = runner.tool_version
     admission = RunAdmission(
         key=run_key(model_id=request.model_id, question=question),
         family=family,
@@ -539,12 +617,18 @@ def _post_check(
         formula=request.formula,
         model_id=request.model_id,
         timeout_seconds=timeout_seconds,
-        tool_version=runner.tool_version,
+        tool_version=tool_version,
         session_budget_seconds=settings.session_budget_seconds,
+        triage=triage,
+        non_vacuity=guard,
     )
     result = run_store.admit(
         admission=admission,
-        reservation_seconds=timeout_seconds + WATCHDOG_GRACE_SECONDS,
+        reservation_seconds=(
+            STATIC_COST_SECONDS
+            if static_output is not None
+            else timeout_seconds + WATCHDOG_GRACE_SECONDS
+        ),
     )
     if isinstance(result, BudgetRefused):
         logger.warning(
@@ -579,33 +663,49 @@ def _post_check(
         )
     run, created = result.run, result.created
     if created:
-        started_monotonic = time.monotonic()
-        thread = threading.Thread(
-            target=_execute_run,
-            kwargs={
-                "runner": runner,
-                "run_store": run_store,
-                "run_id": run.run_id,
-                "question": question,
-                "timeout_seconds": timeout_seconds,
-                "started_monotonic": started_monotonic,
-                "qualification": qualification,
-            },
-            daemon=True,
-        )
-        thread.start()
-        watchdog = threading.Timer(
-            timeout_seconds + WATCHDOG_GRACE_SECONDS,
-            _watchdog,
-            kwargs={
-                "run_store": run_store,
-                "run_id": run.run_id,
-                "timeout_seconds": timeout_seconds,
-                "started_monotonic": started_monotonic,
-            },
-        )
-        watchdog.daemon = True
-        watchdog.start()
+        if static_output is not None:
+            # Static resolution: no MC run, no tool time, no watchdog (spec §18.1, §14.2).
+            run_store.mark_done(
+                run_id=run.run_id,
+                output=static_output,
+                command=[],
+                measured_seconds=STATIC_COST_SECONDS,
+            )
+            logger.debug(
+                "api_check_static_resolved",
+                run_id=run.run_id,
+                family=family,
+                kind=request.kind,
+                verdict=static_output.get("verdict"),
+            )
+        else:
+            started_monotonic = time.monotonic()
+            thread = threading.Thread(
+                target=_execute_run,
+                kwargs={
+                    "runner": runner,
+                    "run_store": run_store,
+                    "run_id": run.run_id,
+                    "question": question,
+                    "timeout_seconds": timeout_seconds,
+                    "started_monotonic": started_monotonic,
+                    "qualification": qualification,
+                },
+                daemon=True,
+            )
+            thread.start()
+            watchdog = threading.Timer(
+                timeout_seconds + WATCHDOG_GRACE_SECONDS,
+                _watchdog,
+                kwargs={
+                    "run_store": run_store,
+                    "run_id": run.run_id,
+                    "timeout_seconds": timeout_seconds,
+                    "started_monotonic": started_monotonic,
+                },
+            )
+            watchdog.daemon = True
+            watchdog.start()
     logger.debug(
         "api_check_accepted",
         run_id=run.run_id,
@@ -761,6 +861,7 @@ def _dispatch_checks_and_runs(  # noqa: PLR0913 - one keyword per routed depende
     run_store: RunStore,
     runner: CheckRunner | None,
     qualification: QualificationLookup | None,
+    static_resolver: StaticResolver | None,
 ) -> Iterable[bytes] | None:
     """Route /v1/checks/{family} and /v1/runs/{run_id}, or return None."""
     if path.startswith(CHECKS_PATH_PREFIX):
@@ -775,6 +876,7 @@ def _dispatch_checks_and_runs(  # noqa: PLR0913 - one keyword per routed depende
                 family=family,
                 settings=settings,
                 qualification=qualification,
+                static_resolver=static_resolver,
             )
         return _problem_response(
             start_response=start_response,
@@ -1561,7 +1663,7 @@ def _dispatch_sessions(
     return result
 
 
-def create_app(
+def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
     *,
     settings: ApiSettings,
     store: ModelStore,
@@ -1571,6 +1673,7 @@ def create_app(
     arbitrator: ProfileArbitrator | None = None,
     qualification: QualificationLookup | None = None,
     state_graph_explorer: StateGraphExplorer | None = None,
+    static_resolver: StaticResolver | None = None,
 ) -> WSGIApp:
     """Build the WSGI application: auth first, then routing and negotiation."""
 
@@ -1611,6 +1714,7 @@ def create_app(
                 run_store=run_store,
                 runner=runner,
                 qualification=qualification,
+                static_resolver=static_resolver,
             )
         if routed is None and session_store is not None:
             routed = _dispatch_sessions(

@@ -98,6 +98,12 @@ paths:
         the session budget cap (spec §12.4): when the remaining budget
         cannot cover the run, the request is refused with 429 and the
         remaining budget in the problem extensions - no carry-over.
+        Each question is triaged first (spec §14.2, issue #14): a statically
+        triaged question is resolved by the embedded engine without any MC
+        run (cost zero, output technique "static"); when the static proof
+        cannot be found the question is explicitly degraded and the run
+        carries the degradation in its triage field. The run also carries
+        the non-vacuity guard chip of the question (spec §14.4).
       parameters:
         - name: family
           in: path
@@ -812,7 +818,7 @@ components:
         command, tool version, timeout, input hash and measured cost.
         Runs are never deleted - no API or code path removes one.
         output is the normalized engine output served verbatim.
-      required: [run_id, status, family, kind, formula, model_id, input_hash, timeout_seconds, tool_version, command, measured_seconds, output, error, engine_qualified]
+      required: [run_id, status, family, kind, formula, model_id, input_hash, timeout_seconds, tool_version, command, measured_seconds, output, error, engine_qualified, triage, non_vacuity]
       properties:
         run_id:
           type: string
@@ -865,6 +871,44 @@ components:
             family (spec §17.5, issue #22); null while running, on error
             runs, or when no qualification lookup is wired. An unqualified
             adapter is never alone on a clause.
+        triage:
+          $ref: "#/components/schemas/QuestionTriage"
+        non_vacuity:
+          nullable: true
+          $ref: "#/components/schemas/NonVacuityGuard"
+    QuestionTriage:
+      type: object
+      description: >-
+        The static/MC triage of the question with its justification
+        (spec §14.2, issue #14). A degraded question displays it here -
+        never a silent degradation.
+      required: [kind, justification]
+      properties:
+        kind:
+          type: string
+          enum: [statique, MC, dégradé]
+        justification:
+          type: string
+          minLength: 1
+    NonVacuityGuard:
+      type: object
+      description: >-
+        The non-vacuity chip of the question (spec §14.4, issue #14):
+        for EF φ the initial marking must not already satisfy φ, for
+        AG ψ it must not violate ψ. A vacuous guard means the property
+        says nothing about this model - no verdict is rendered on it.
+      required: [guard, status, detail]
+      properties:
+        guard:
+          type: string
+          enum: [ef_phi, ag_psi]
+          nullable: true
+        status:
+          type: string
+          enum: [ok, vacuous, not_applicable]
+        detail:
+          type: string
+          minLength: 1
     RunError:
       type: object
       description: The explicit failure of a run - never a default verdict.
