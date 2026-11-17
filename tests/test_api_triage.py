@@ -235,6 +235,24 @@ class TestTriageOnRuns:
         assert run["triage"]["kind"] == "dégradé"
         assert "Preuve statique non trouvée" in run["triage"]["justification"]
 
+    def test_out_of_fragment_formula_degrades_with_undecidable_event(self) -> None:
+        """A statique-triaged formula outside the fragment degrades explicitly (spec §14.2)."""
+        client, model_id = build_client(runner=FakeRunner())
+        with structlog.testing.capture_logs() as logs:
+            response = post_check(
+                client,
+                "safety",
+                check_payload(model_id, "safety.invariant", "AG (think_1 == 0 or EF (eat_1 > 0))"),
+            )
+        assert response.status_code == 202
+        run = get_run(client, response.json()["run_id"])
+        assert run["triage"]["kind"] == "dégradé"
+        assert "Preuve statique non trouvée" in run["triage"]["justification"]
+        undecidable = next(e for e in logs if e["event"] == "api_check_static_undecidable")
+        assert undecidable["family"] == "safety"
+        assert undecidable["kind"] == "safety.invariant"
+        assert "outside the static fragment" in undecidable["detail"]
+
 
 class TestNonVacuityGuards:
     def test_ef_guard_ok_on_the_corpus(self) -> None:

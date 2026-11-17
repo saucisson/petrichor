@@ -870,9 +870,9 @@ def analyze(*, model: CanonicalModel) -> StaticAnalysis:
 
 COMPARISON_PATTERN = re.compile(
     r"^\(\s*(?P<place>[A-Za-z_][A-Za-z0-9_]*)\s*"
-    r"(?P<op>>=|<=|==|!=|>|<)\s*(?P<value>-?\d+)\s*\)$"
+    r"(?P<operator>>=|<=|==|!=|>|<)\s*(?P<value>-?\d+)\s*\)$"
 )
-"""The ``(place op n)`` state formula of the static fragment, e.g. ``(eat_1 <= 1)``."""
+"""The ``(place operator n)`` state formula of the static fragment, e.g. ``(eat_1 <= 1)``."""
 
 EF_FORMULA_PATTERN = re.compile(r"^EF\s+(?P<inner>.+)$")
 """The ``EF φ`` form of a reachability formula."""
@@ -882,27 +882,27 @@ AG_FORMULA_PATTERN = re.compile(r"^AG\s+(?P<inner>.+)$")
 
 
 def _parse_comparison(*, text: str) -> tuple[str, str, int] | None:
-    """Parse a ``(place op n)`` comparison, or None when the text is not one."""
+    """Parse a ``(place operator n)`` comparison, or None when the text is not one."""
     match = COMPARISON_PATTERN.fullmatch(text.strip())
     if match is None:
         return None
-    return match.group("place"), match.group("op"), int(match.group("value"))
+    return match.group("place"), match.group("operator"), int(match.group("value"))
 
 
-def _satisfies(*, place: str, op: str, value: int, marking: dict[str, int]) -> bool:
+def _satisfies(*, place: str, operator: str, value: int, marking: dict[str, int]) -> bool:
     """Evaluate one comparison on a marking; an unknown place never satisfies."""
     actual = marking.get(place)
     if actual is None:
         return False
-    if op == ">":
+    if operator == ">":
         result = actual > value
-    elif op == ">=":
+    elif operator == ">=":
         result = actual >= value
-    elif op == "<":
+    elif operator == "<":
         result = actual < value
-    elif op == "<=":
+    elif operator == "<=":
         result = actual <= value
-    elif op == "==":
+    elif operator == "==":
         result = actual == value
     else:
         result = actual != value
@@ -933,7 +933,7 @@ def resolve_static_payload(
     """Resolve a statically-triaged question as an opaque JSON payload (issue #14).
 
     The static fragment covers the safety patterns over a simple
-    ``AG (place op n)`` formula, decided by bounded state enumeration with
+    ``AG (place operator n)`` formula, decided by bounded state enumeration with
     cost zero (spec §18.1). Anything else - or a net beyond capacity - raises
     ``StaticUndecidableError`` so the API degrades the question explicitly
     (spec §14.2): the failure of a heuristic is never a verdict.
@@ -946,9 +946,9 @@ def resolve_static_payload(
     comparison = _parse_comparison(text=match.group("inner")) if match is not None else None
     if comparison is None:
         raise StaticUndecidableError(
-            f"Formula {question.formula!r} is outside the static fragment AG (place op n)."
+            f"Formula {question.formula!r} is outside the static fragment AG (place operator n)."
         )
-    place, op, value = comparison
+    place, operator, value = comparison
     try:
         graph, truncated = explore_state_graph_bounded(model=model, max_states=MAX_REACHABLE_STATES)
     except UnsupportedFormalismError as error:
@@ -966,7 +966,7 @@ def resolve_static_payload(
             for state in graph.states
             if not _satisfies(
                 place=place,
-                op=op,
+                operator=operator,
                 value=value,
                 marking=dict(zip(graph.place_names, state, strict=True)),
             )
@@ -992,7 +992,7 @@ def resolve_static_payload(
     witness = PathWitness(
         states=tuple(_sparse(marking=state, place_names=graph.place_names) for state in path),
         description=(
-            f"AG ({place} {op} {value}) is false: this path reaches a marking violating it."
+            f"AG ({place} {operator} {value}) is false: this path reaches a marking violating it."
         ),
     )
     logger.debug(
@@ -1029,43 +1029,45 @@ def non_vacuity_guard(
     if ef_match is not None:
         comparison = _parse_comparison(text=ef_match.group("inner"))
         if comparison is not None:
-            place, op, value = comparison
+            place, operator, value = comparison
             if place not in initial:
                 return NonVacuityGuard(
                     guard="ef_phi",
                     status="not_applicable",
                     detail=f"Place {place!r} of the guard is not in the model.",
                 )
-            holds = _satisfies(place=place, op=op, value=value, marking=initial)
+            holds = _satisfies(place=place, operator=operator, value=value, marking=initial)
+            formula_text = f"EF ({place} {operator} {value})"
             return NonVacuityGuard(
                 guard="ef_phi",
                 status="vacuous" if holds else "ok",
                 detail=(
-                    f"EF ({place} {op} {value}): the initial marking already satisfies it,"
+                    f"{formula_text}: the initial marking already satisfies it,"
                     " the property is vacuous on this model."
                     if holds
-                    else f"EF ({place} {op} {value}): the initial marking does not satisfy it yet."
+                    else f"{formula_text}: the initial marking does not satisfy it yet."
                 ),
             )
     ag_match = AG_FORMULA_PATTERN.fullmatch(text)
     if ag_match is not None:
         comparison = _parse_comparison(text=ag_match.group("inner"))
         if comparison is not None:
-            place, op, value = comparison
+            place, operator, value = comparison
             if place not in initial:
                 return NonVacuityGuard(
                     guard="ag_psi",
                     status="not_applicable",
                     detail=f"Place {place!r} of the guard is not in the model.",
                 )
-            holds = _satisfies(place=place, op=op, value=value, marking=initial)
+            holds = _satisfies(place=place, operator=operator, value=value, marking=initial)
+            formula_text = f"AG ({place} {operator} {value})"
             return NonVacuityGuard(
                 guard="ag_psi",
                 status="ok" if holds else "vacuous",
                 detail=(
-                    f"AG ({place} {op} {value}): the initial marking satisfies it, the guard holds."
+                    f"{formula_text}: the initial marking satisfies it, the guard holds."
                     if holds
-                    else f"AG ({place} {op} {value}): the initial marking already violates it,"
+                    else f"{formula_text}: the initial marking already violates it,"
                     " the property is vacuous on this model."
                 ),
             )
