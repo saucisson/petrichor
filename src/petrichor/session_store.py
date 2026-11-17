@@ -197,6 +197,19 @@ class SessionStore:
         logger.debug("session_run_added", session_id=session_id, run_id=run_id)
         return updated
 
+    def append_journal_entry(
+        self, *, session_id: SessionId, event: str, detail: dict[str, JsonValue]
+    ) -> JournalEntry | None:
+        """Append one entry to the session journal; None if unknown session."""
+        now = time.time()
+        with self._lock:
+            if session_id not in self._sessions:
+                return None
+            entry = JournalEntry(timestamp=now, event=event, detail=detail)
+            self._append_journal_locked(session_id=session_id, entry=entry)
+        logger.debug("session_journal_appended", session_id=session_id, event_name=event)
+        return entry
+
     def journal(self, *, session_id: SessionId) -> list[JournalEntry]:
         """Return the append-only journal of a session, in append order."""
         with self._lock:
