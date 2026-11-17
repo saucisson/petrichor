@@ -22,7 +22,7 @@ from petrichor.engines.mini_engine import (
     non_vacuity_guard,
     resolve_static_payload,
 )
-from petrichor.petri_canonical import build_canonical_model
+from petrichor.petri_canonical import CanonicalModel, build_canonical_model
 from petrichor.triage import (
     STATIC_KINDS,
     CapacityReport,
@@ -46,7 +46,7 @@ def capacity(*, place_count: int, state_count: int | None) -> CapacityReport:
     )
 
 
-def big_model(place_count: int) -> object:
+def big_model(place_count: int) -> CanonicalModel:
     """A P/T model with ``place_count`` places and one self-looping transition."""
     places = [
         {
