@@ -85,13 +85,34 @@ class TestStaticUi:
     def test_unknown_ui_asset_is_404(self) -> None:
         client = build_client()
         assert client.get("/ui/nope.js", headers=AUTH_HEADERS).status_code == 404
-        # Path traversal is refused: only the whitelisted asset names are served.
-        assert client.get("/ui/../app.py", headers=AUTH_HEADERS).status_code == 404
 
-    def test_post_on_ui_is_not_served(self) -> None:
+    def test_post_on_ui_is_405(self) -> None:
         client = build_client()
         response = client.post("/ui/", content=b"", headers=AUTH_HEADERS)
-        assert response.status_code == 404
+        assert response.status_code == 405
+        assert response.json()["extensions"]["reason"] == "method_not_allowed"
+
+    def test_path_traversal_is_refused_at_the_wsgi_layer(self) -> None:
+        # httpx normalizes dot segments client-side, so the server-side guard
+        # is exercised through a raw WSGI call with the un-normalized path.
+        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+        app = create_app(settings=settings, store=ModelStore(), run_store=RunStore(), runner=None)
+        captured: dict[str, str] = {}
+
+        def start_response(status: str, headers: list) -> None:
+            captured["status"] = status
+
+        environ = {
+            "REQUEST_METHOD": "GET",
+            "PATH_INFO": "/ui/../app.py",
+            "HTTP_X_API_KEY": TEST_API_KEY,
+            "wsgi.input": None,
+        }
+        body = b"".join(app(environ, start_response))  # type: ignore[arg-type]
+        assert captured["status"].startswith("404")
+        # The problem document is returned, never the source file content.
+        assert b"petrichor.dev/problems/not_found" in body
+        assert b"def _dispatch_ui" not in body
 
     def test_ui_asset_narration_is_pinned(self) -> None:
         client = build_client()

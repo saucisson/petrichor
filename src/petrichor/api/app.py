@@ -2081,8 +2081,16 @@ def _dispatch_ui(
     The UI assets carry no data and are public; every data call they make
     goes through the authenticated /v1 API.
     """
-    if method != "GET":
-        return None
+    if (path == "/" or path.startswith(UI_PATH)) and method != "GET":
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.METHOD_NOT_ALLOWED,
+                reason="method_not_allowed",
+                detail=f"{method} is not supported on {path}.",
+            ),
+        )
     if path == "/":
         return _respond(
             start_response=start_response,

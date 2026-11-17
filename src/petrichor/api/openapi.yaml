@@ -17,6 +17,39 @@ servers:
 security:
   - apiKey: []
 paths:
+  /:
+    get:
+      summary: Redirect to the elicitation UI (spec §9, issue #18)
+      description: >-
+        302 to /ui/. The UI assets are public (they carry no data); every data
+        call they make goes through the authenticated /v1 API.
+      responses:
+        "302":
+          description: Redirect to /ui/.
+          headers:
+            Location:
+              schema:
+                type: string
+  /ui/{asset}:
+    get:
+      summary: Static assets of the elicitation UI (spec §9, issue #18)
+      description: >-
+        Whitelist of index.html, app.js, styles.css - unauthenticated, since
+        the assets contain no data. Any other name (including traversal
+        attempts) is a 404; non-GET methods are a 405.
+      parameters:
+        - name: asset
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The asset, with its content type (text/html, text/javascript, text/css).
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
   /models:
     post:
       summary: Import a PNML document into the canonical form
