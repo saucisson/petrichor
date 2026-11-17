@@ -13,7 +13,7 @@ Two serializations of the same document are served by
 """
 
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, NewType
 
 import structlog
 from pydantic import BaseModel, ConfigDict, Field
@@ -22,12 +22,15 @@ from petrichor.checks import RunId, RunStatus
 from petrichor.elicitation import (
     ElicitationCatalog,
     GeneratedQuestion,
+    QuestionId,
+    TemplateId,
     instantiate_questions,
     order_questions,
 )
 from petrichor.llm.schemas import SemanticProfile
-from petrichor.petri_canonical import JsonValue
+from petrichor.petri_canonical import JsonValue, ModelId
 from petrichor.profile import EntryId, ProfileState
+from petrichor.session_store import SessionId
 from petrichor.triage import TriageKind
 
 if TYPE_CHECKING:
@@ -44,6 +47,9 @@ CONTRACT_VERSION: Literal["1.0"] = "1.0"
 RUN_LINK_PREFIX = "/v1/runs/"
 """The API link prefix of one proof run."""
 
+RunLink = NewType("RunLink", str)
+"""The API link of one proof run, e.g. ``/v1/runs/run_7c2a9f``."""
+
 type ContractQuestionStatus = Literal["pending", "accept", "refuse", "verify-first"]
 """The status of a question card: its latest arbitration, or pending."""
 
@@ -54,7 +60,7 @@ class ContractProof(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     run_id: RunId
-    link: str = Field(min_length=1)
+    link: RunLink
     status: RunStatus
     triage: TriageKind
     verdict: str | None = None
@@ -66,8 +72,8 @@ class ContractQuestion(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    question_id: str
-    template_id: str
+    question_id: QuestionId
+    template_id: TemplateId
     family: str
     kind: str
     formula: str = Field(min_length=1)
@@ -85,7 +91,7 @@ class ContractProfileEntry(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    entry_id: str
+    entry_id: EntryId
     elements: str = Field(min_length=1)
     proposed_role: str = Field(min_length=1)
     confidence: float = Field(ge=0.0, le=1.0)
@@ -101,8 +107,8 @@ class ContractDocument(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     version: Literal["1.0"] = CONTRACT_VERSION
-    session_id: str
-    model_id: str
+    session_id: SessionId
+    model_id: ModelId
     profile: tuple[ContractProfileEntry, ...]
     """The arbitrated profile: every proposed entry with its arbitration."""
 
@@ -131,11 +137,11 @@ def arbitrated_profile(*, profile_state: ProfileState) -> SemanticProfile:
 
 def _latest_decisions(
     *, arbitration_history: list[ArbitrationRecord]
-) -> dict[str, ContractQuestionStatus]:
+) -> dict[QuestionId, ContractQuestionStatus]:
     """The latest decision of each question, in append order (last wins)."""
-    latest: dict[str, ContractQuestionStatus] = {}
+    latest: dict[QuestionId, ContractQuestionStatus] = {}
     for record in arbitration_history:
-        latest[str(record.question_id)] = record.decision
+        latest[record.question_id] = record.decision
     return latest
 
 
@@ -151,7 +157,7 @@ def _proofs_for_question(
         proofs.append(
             ContractProof(
                 run_id=run.run_id,
-                link=f"{RUN_LINK_PREFIX}{run.run_id}",
+                link=RunLink(f"{RUN_LINK_PREFIX}{run.run_id}"),
                 status=run.status,
                 triage=run.triage.kind,
                 verdict=verdict if isinstance(verdict, str) else None,
@@ -180,8 +186,8 @@ def build_contract(
     latest = _latest_decisions(arbitration_history=arbitration_history)
     questions = tuple(
         ContractQuestion(
-            question_id=str(question.question_id),
-            template_id=str(question.template_id),
+            question_id=question.question_id,
+            template_id=question.template_id,
             family=question.family,
             kind=question.kind,
             formula=question.formula,
@@ -190,7 +196,7 @@ def build_contract(
             cost=question.cost,
             scenario=question.scenario,
             role=question.role,
-            status=latest.get(str(question.question_id), "pending"),
+            status=latest.get(question.question_id, "pending"),
             proofs=_proofs_for_question(question=question, runs=runs),
         )
         for question in ordered
@@ -200,7 +206,7 @@ def build_contract(
     }
     profile = tuple(
         ContractProfileEntry(
-            entry_id=entry.id,
+            entry_id=EntryId(entry.id),
             elements=entry.elements,
             proposed_role=entry.role,
             confidence=entry.confidence,
@@ -216,15 +222,15 @@ def build_contract(
         for entry in profile_state.proposed.entries
     )
     document = ContractDocument(
-        session_id=str(session.session_id),
-        model_id=str(session.model_id),
+        session_id=session.session_id,
+        model_id=session.model_id,
         profile=profile,
         questions=questions,
         journal=tuple(entry.model_dump(mode="json") for entry in journal),
     )
     logger.debug(
         "contract_built",
-        session_id=str(session.session_id),
+        session_id=session.session_id,
         questions=len(questions),
         arbitrated=sum(1 for entry in profile if entry.accepted),
         journal_entries=len(journal),

@@ -153,22 +153,40 @@ def _accepts_petri_json(*, accept_header: str | None) -> bool:
 
 CONTRACT_JSON_MEDIA = "application/contract+json"
 CONTRACT_MARKDOWN_MEDIA = "text/markdown"
-CONTRACT_ACCEPTABLE_MEDIA_TYPES = frozenset({"*/*", "application/contract+json"})
+CONTRACT_NEGOTIABLE_MEDIA = frozenset({CONTRACT_MARKDOWN_MEDIA, CONTRACT_JSON_MEDIA, "*/*"})
 
 
 def _negotiate_contract_media(*, accept_header: str | None) -> Literal["markdown", "json"] | None:
-    """Negotiate the contract representation: markdown, contract+json, or None (406)."""
+    """Negotiate the contract representation by q-value, or None when refused (406).
+
+    Standard content negotiation (spec §5): the acceptable entry with the
+    highest q-value wins, ties keep the client's order, and an entry with
+    q=0 is refused - so ``text/markdown;q=0, application/contract+json``
+    negotiates to the JSON document.
+    """
     if accept_header is None or not accept_header.strip():
         return "json"
+    best_media: str | None = None
+    best_quality = 0.0
     for entry in accept_header.split(","):
-        media = entry.split(";", maxsplit=1)[0].strip().lower()
-        if media == CONTRACT_MARKDOWN_MEDIA:
-            return "markdown"
-    for entry in accept_header.split(","):
-        media = entry.split(";", maxsplit=1)[0].strip().lower()
-        if media in CONTRACT_ACCEPTABLE_MEDIA_TYPES:
-            return "json"
-    return None
+        parts = entry.split(";")
+        media = parts[0].strip().lower()
+        if media not in CONTRACT_NEGOTIABLE_MEDIA:
+            continue
+        quality = 1.0
+        for parameter in parts[1:]:
+            key, _, value = parameter.strip().partition("=")
+            if key == "q":
+                try:
+                    quality = float(value)
+                except ValueError:
+                    quality = 0.0
+        if quality > best_quality:
+            best_quality = quality
+            best_media = media
+    if best_media is None or best_quality <= 0:
+        return None
+    return "markdown" if best_media == CONTRACT_MARKDOWN_MEDIA else "json"
 
 
 class ProblemPayload(BaseModel):

@@ -11,19 +11,29 @@ from pathlib import Path
 from typing import cast
 
 import httpx
+import pytest
 import structlog.testing
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from pydantic import SecretStr
 
 from petrichor.api.app import create_app
 from petrichor.api.settings import ApiSettings
-from petrichor.arbitration import ArbitrationStore
+from petrichor.arbitration import (
+    ArbitrationDecisionKind,
+    ArbitrationRecord,
+    ArbitrationStore,
+)
 from petrichor.checks import CheckFamilyName, CheckQuestion, KindPattern, ToolVersion, run_key
+from petrichor.contract import build_contract, render_markdown
+from petrichor.elicitation import QuestionId, load_catalog
 from petrichor.llm.schemas import ProfileEntry, SemanticProfile
 from petrichor.model_store import ModelStore
 from petrichor.petri_canonical import ModelId
-from petrichor.profile import ProfileArbitrator
+from petrichor.pnml_import import import_pnml
+from petrichor.profile import ArbitrationDecision, EntryId, ProfileArbitrator
 from petrichor.run_store import RunAdmission, RunStore
-from petrichor.session_store import SessionId, SessionStore
+from petrichor.session_store import JournalEntry, SessionId, SessionStore, StoredSession
 from petrichor.triage import QuestionTriage, TriageKind
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -311,6 +321,25 @@ class TestContractExport:
             assert response.status_code == 406
             assert response.json()["extensions"]["reason"] == "not_acceptable"
 
+    def test_contract_negotiation_honors_q_values(self, tmp_path: Path) -> None:
+        client, _, _, arbitrator, _ = build_client(tmp_path)
+        session_id = create_session(client)
+        propose_and_arbitrate(client, arbitrator, session_id)
+        cases = (
+            ("text/markdown;q=0, application/contract+json", "application/contract+json"),
+            ("application/contract+json, text/markdown", "application/contract+json"),
+            ("text/markdown;q=0.5, application/contract+json;q=0.9", "application/contract+json"),
+            ("application/contract+json;q=0.2, text/markdown;q=0.8", "text/markdown"),
+            ("*/*", "application/contract+json"),
+        )
+        for accept, expected_content_type in cases:
+            response = client.get(
+                f"/v1/sessions/{session_id}/contract",
+                headers={**AUTH_HEADERS, "Accept": accept},
+            )
+            assert response.status_code == 200
+            assert response.headers["content-type"].startswith(expected_content_type)
+
     def test_contract_401_without_api_key(self, tmp_path: Path) -> None:
         client, _, _, _, _ = build_client(tmp_path)
         session_id = create_session(client)
@@ -330,3 +359,77 @@ class TestContractExport:
         assert exported["session_id"] == session_id
         assert exported["media"] == "markdown"
         assert exported["questions"] > 0
+        built = next(e for e in logs if e["event"] == "contract_built")
+        assert built["session_id"] == session_id
+        assert built["questions"] == exported["questions"]
+        rendered = next(e for e in logs if e["event"] == "contract_markdown_rendered")
+        assert rendered["session_id"] == session_id
+        assert rendered["bytes"] > 0
+
+
+DECISIONS: list[ArbitrationDecisionKind] = ["accept", "refuse", "verify-first"]
+
+
+class TestContractPropertyTier:
+    @pytest.mark.property
+    @settings(deadline=None, max_examples=25)
+    @given(
+        accepted=st.lists(st.booleans(), min_size=1, max_size=3),
+        decisions=st.lists(st.sampled_from(DECISIONS), min_size=0, max_size=8),
+    )
+    def test_build_and_render_are_deterministic(
+        self, accepted: list[bool], decisions: list[ArbitrationDecisionKind]
+    ) -> None:
+        """The export is a pure function of the session state (spec §4.8, issue #17)."""
+        model = import_pnml(text=PHILOSOPHES3_PNML)
+        session_id = SessionId("ses_prop")
+        session = StoredSession(
+            session_id=session_id,
+            model_id=model.id,
+            created_at=1.0,
+            updated_at=1.0,
+        )
+        arbitrator = ProfileArbitrator()
+        state = arbitrator.propose(session_id=session_id, profile=sample_profile())
+        for entry, accept in zip(sample_profile().entries, accepted, strict=False):
+            state = arbitrator.arbitrate(
+                session_id=session_id,
+                decision=ArbitrationDecision(
+                    entry_id=EntryId(entry.id),
+                    accepted=accept,
+                    chosen_role=entry.role,
+                ),
+            )
+            assert state is not None
+        history = [
+            ArbitrationRecord(
+                session_id=session_id,
+                question_id=QuestionId(f"q_{index:012x}"),
+                decision=decision,
+                timestamp=1.0,
+            )
+            for index, decision in enumerate(decisions)
+        ]
+        journal = [
+            JournalEntry(timestamp=1.0, event="session_created", detail={"model_id": str(model.id)})
+        ]
+        first = build_contract(
+            session=session,
+            profile_state=state,
+            model=model,
+            catalog=load_catalog(),
+            arbitration_history=history,
+            runs=[],
+            journal=journal,
+        )
+        second = build_contract(
+            session=session,
+            profile_state=state,
+            model=model,
+            catalog=load_catalog(),
+            arbitration_history=history,
+            runs=[],
+            journal=journal,
+        )
+        assert first.model_dump(mode="json") == second.model_dump(mode="json")
+        assert render_markdown(document=first) == render_markdown(document=second)
