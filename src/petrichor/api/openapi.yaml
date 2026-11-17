@@ -762,7 +762,7 @@ components:
           type: array
           items:
             type: object
-            required: [question_id, template_id, family, kind, formula, triage, risk, cost, scenario, role, status, proofs]
+            required: [question_id, template_id, family, kind, formula, triage, risk, cost, scenario, role, status, proofs, examination]
             properties:
               question_id:
                 type: string
@@ -803,6 +803,19 @@ components:
                     verdict:
                       type: string
                       nullable: true
+              examination:
+                type: string
+              counter_variant:
+                type: object
+                nullable: true
+                required: [examination, family, formula]
+                properties:
+                    examination:
+                      type: string
+                    family:
+                      type: string
+                    formula:
+                      type: string
         journal:
           type: array
           items:

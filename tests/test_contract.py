@@ -27,6 +27,7 @@ from petrichor.arbitration import (
 from petrichor.checks import CheckFamilyName, CheckQuestion, KindPattern, ToolVersion, run_key
 from petrichor.contract import build_contract, render_markdown
 from petrichor.elicitation import QuestionId, load_catalog
+from petrichor.examinations import EXAMINATION_BY_KIND
 from petrichor.llm.schemas import ProfileEntry, SemanticProfile
 from petrichor.model_store import ModelStore
 from petrichor.petri_canonical import ModelId
@@ -203,6 +204,24 @@ class TestContractExport:
         assert "arbitration_decided" in markdown
         assert "section critique" in markdown
         assert "ressource partagée" in markdown
+
+    def test_questions_carry_examination_and_safety_counter_variant(self, tmp_path: Path) -> None:
+        """Each question names its MCC examination; safety adds the complement (issue #30)."""
+        client, _, _, arbitrator, _ = build_client(tmp_path)
+        session_id = create_session(client)
+        propose_and_arbitrate(client, arbitrator, session_id)
+        document = get_contract_json(client, session_id)
+        assert document["questions"], "the arbitrated profile must generate questions"
+        for question in document["questions"]:
+            assert question["examination"] == EXAMINATION_BY_KIND[question["kind"]]
+            if question["family"] == "safety":
+                counter_variant = question["counter_variant"]
+                assert counter_variant is not None
+                assert counter_variant["examination"] == "ReachabilityCardinality"
+                assert counter_variant["family"] == "reachability"
+                assert counter_variant["formula"] == f"EF (not ({question['formula']}))"
+            else:
+                assert question["counter_variant"] is None
 
     def test_contract_json_negotiation_and_default(self, tmp_path: Path) -> None:
         client, _, _, arbitrator, _ = build_client(tmp_path)
