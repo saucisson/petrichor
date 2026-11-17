@@ -29,10 +29,17 @@ from petrichor.checks import (
     CheckFamilyName,
     CheckQuestion,
     KindPattern,
+    RunId,
     ToolVersion,
     run_key,
 )
-from petrichor.contract import build_contract, render_markdown
+from petrichor.contract import (
+    ContractProof,
+    RunLink,
+    build_contract,
+    cross_status_for_proofs,
+    render_markdown,
+)
 from petrichor.elicitation import QuestionId, load_catalog
 from petrichor.examinations import EXAMINATION_BY_KIND
 from petrichor.llm.schemas import ProfileEntry, SemanticProfile
@@ -148,6 +155,7 @@ def admit_done_run(  # noqa: PLR0913 - one keyword per admitted field (ADR-0003)
     triage_kind: TriageKind,
     verdict: str,
     extra_output: dict[str, object] | None = None,
+    finish: bool = True,
 ) -> str:
     """Admit one run on a question formula, attach it to the session, finish it."""
     question = CheckQuestion(family=family, kind=kind, formula=formula)
@@ -165,12 +173,13 @@ def admit_done_run(  # noqa: PLR0913 - one keyword per admitted field (ADR-0003)
     admitted = run_store.admit(admission=admission, reservation_seconds=0.0)
     run = admitted.run
     session_store.append_run(session_id=SessionId(session_id), run_id=run.run_id)
-    run_store.mark_done(
-        run_id=run.run_id,
-        output={"verdict": verdict, **(extra_output or {})},
-        command=["mock"],
-        measured_seconds=0.1,
-    )
+    if finish:
+        run_store.mark_done(
+            run_id=run.run_id,
+            output={"verdict": verdict, **(extra_output or {})},
+            command=["mock"],
+            measured_seconds=0.1,
+        )
     return str(run.run_id)
 
 
@@ -373,6 +382,19 @@ class TestContractExport:
             triage_kind="MC",
             verdict="violated",
         )
+        # A still-running proof on the same formula must not render a third camp.
+        admit_done_run(
+            run_store=run_store,
+            session_store=session_store,
+            session_id=session_id,
+            model_id=model_id,
+            family="deadlock",
+            kind="deadlock",
+            formula=question["formula"],
+            triage_kind="MC",
+            verdict="safe",
+            finish=False,
+        )
         document = get_contract_json(client, session_id)
         exported = next(
             q for q in document["questions"] if q["question_id"] == question["question_id"]
@@ -383,6 +405,7 @@ class TestContractExport:
         assert "controversée" in markdown
         assert "mock → safe" in markdown
         assert "mock → violated" in markdown
+        assert "mock → None" not in markdown
 
     def test_contract_is_replayable_from_session_state(self, tmp_path: Path) -> None:
         client, _, _, arbitrator, _ = build_client(tmp_path)
@@ -492,6 +515,40 @@ DECISIONS: list[ArbitrationDecisionKind] = ["accept", "refuse", "verify-first"]
 
 
 class TestContractPropertyTier:
+    @pytest.mark.property
+    @settings(deadline=None, max_examples=50)
+    @given(
+        proofs=st.lists(
+            st.builds(
+                ContractProof,
+                run_id=st.just(RunId("run_prop")),
+                link=st.just(RunLink("/v1/runs/run_prop")),
+                status=st.sampled_from(["running", "done", "error"]),
+                triage=st.sampled_from(["statique", "MC", "dégradé"]),
+                verdict=st.one_of(st.none(), st.sampled_from(["safe", "violated"])),
+                tool_version=st.just(ToolVersion("mock")),
+            ),
+            max_size=6,
+        )
+    )
+    def test_cross_status_for_proofs_invariants(self, proofs: list[ContractProof]) -> None:
+        """verified_by counts exactly the agreeing done proofs; discordance is controversial."""
+        status, verified_by = cross_status_for_proofs(proofs=tuple(proofs))
+        done_verdicts = [
+            proof.verdict
+            for proof in proofs
+            if proof.status == "done" and proof.verdict is not None
+        ]
+        if not done_verdicts:
+            assert status == "unverified"
+            assert verified_by == 0
+        elif len(set(done_verdicts)) == 1:
+            assert status == "verified_by_n"
+            assert verified_by == len(done_verdicts)
+        else:
+            assert status == "controversial"
+            assert verified_by == 0
+
     @pytest.mark.property
     @settings(deadline=None, max_examples=25)
     @given(

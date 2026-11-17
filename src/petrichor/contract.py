@@ -244,7 +244,7 @@ def build_contract(
     )
     latest = _latest_decisions(arbitration_history=arbitration_history)
 
-    def _with_cross_status(question: GeneratedQuestion) -> ContractQuestion:
+    def _with_cross_status(*, question: GeneratedQuestion) -> ContractQuestion:
         """Build one contract question with its computed cross-verification status."""
         proofs = _proofs_for_question(question=question, runs=runs)
         cross_status, verified_by = cross_status_for_proofs(proofs=proofs)
@@ -271,7 +271,7 @@ def build_contract(
             verified_by=verified_by,
         )
 
-    questions = tuple(_with_cross_status(question) for question in ordered)
+    questions = tuple(_with_cross_status(question=question) for question in ordered)
     arbitrated_ids = {
         arbitration.entry_id: arbitration for arbitration in profile_state.arbitrations
     }
@@ -314,7 +314,7 @@ def _iso_timestamp(timestamp: float) -> str:
     return datetime.fromtimestamp(timestamp, tz=UTC).isoformat()
 
 
-def _render_cross_status(question: ContractQuestion) -> str:
+def _render_cross_status(*, question: ContractQuestion) -> str:
     """The human-readable cross-verification status of one question (spec §17.4)."""
     if question.cross_status == "verified_by_n":
         return f"vérifiée par {question.verified_by} outils"
@@ -373,14 +373,16 @@ def render_markdown(*, document: ContractDocument) -> str:
                 if question.proofs
                 else "—"
             )
-            cross = _render_cross_status(question)
+            cross = _render_cross_status(question=question)
             lines.append(
                 f"| `{question.question_id}` | {question.formula} | {question.triage}"
                 f" | {question.risk} | {question.cost} | {question.status} | {cross} | {proofs} |"
             )
             if question.cross_status == "controversial":
                 camps = " ; ".join(
-                    f"{proof.tool_version} → {proof.verdict}" for proof in question.proofs
+                    f"{proof.tool_version} → {proof.verdict}"
+                    for proof in question.proofs
+                    if proof.status == "done" and proof.verdict is not None
                 )
                 lines.append(f"  - Controverse remontée à l'ingénieur — camps : {camps}.")
         lines.append("")
