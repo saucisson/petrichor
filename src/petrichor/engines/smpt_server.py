@@ -23,7 +23,8 @@ Endpoints:
   format **distinct from the mini-engine semi-flows** (spec §18.1): a
   semi-flow is a non-negative integer vector over all places, a polyhedral
   invariant is a rational coefficient vector over a named place subset with
-  a bound, and its coefficients may be negative.
+  a bound, and its coefficients may be negative or fractional (serialized
+  as an int when integral, else as the canonical ``"p/q"`` string).
 """
 
 import json
@@ -33,6 +34,7 @@ import re
 import subprocess
 import tempfile
 import time
+from fractions import Fraction
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Literal
@@ -67,6 +69,15 @@ STATES_EXPLORED_PATTERN = re.compile(r"States: (\d+)")
 TRACE_BLOCK_PATTERN = re.compile(r"<trace>(.*?)</trace>", re.DOTALL)
 TRACE_TRANSITION_PATTERN = re.compile(r'<transition id="([^"]+)"')
 INVARIANT_LINE_PATTERN = re.compile(r"INVARIANT places=(\S+) coeffs=(\S+) bound=(-?\d+)")
+MODEL_FILE_NAME = "model.pnml"
+QUERY_FILE_NAME = "query.smt2"
+TEMP_DIR_PREFIX = "smpt-"
+TRACE_XML_ARGUMENT = "2"
+"""SMPT ``-t 2``: emit the witness trace as XML on stderr."""
+CHECK_ARGUMENTS = ["-q", QUERY_FILE_NAME, "-t", TRACE_XML_ARGUMENT]
+"""The SMPT argv of one reachability check (query file + XML trace)."""
+INVARIANTS_ARGUMENTS = ["--invariants"]
+"""The SMPT argv of one polyhedral-invariant computation."""
 
 
 class QuestionError(Exception):
@@ -101,18 +112,33 @@ def parse_trace_transitions(*, stderr: str) -> list[str]:
     return TRACE_TRANSITION_PATTERN.findall(block.group(1))
 
 
+def _parse_coefficient(*, text: str) -> Json:
+    """One rational coefficient: int when integral, else the canonical "p/q" string."""
+    try:
+        value = Fraction(text)
+    except (ValueError, ZeroDivisionError) as error:
+        raise QuestionError(f"Malformed coefficient {text!r} in an INVARIANT line.") from error
+    if value.denominator == 1:
+        return value.numerator
+    return f"{value.numerator}/{value.denominator}"
+
+
 def parse_polyhedral_invariants(*, stdout: str) -> list[Json]:
     """The normalized polyhedral invariants from the SMPT stdout.
 
     Each ``INVARIANT places=p1,p2 coeffs=c1,c2 bound=b`` line becomes a
     ``polyhedral_invariant`` object: rational coefficients over a named place
     subset with a bound. Unlike the mini-engine semi-flows (non-negative
-    integer vectors over all places), coefficients may be negative here.
+    integer vectors over all places), coefficients may be negative or
+    fractional here; a coefficient is serialized as an int when integral,
+    else as the canonical ``"p/q"`` string.
     """
     invariants: list[Json] = []
     for match in INVARIANT_LINE_PATTERN.finditer(stdout):
         places: list[Json] = [name for name in match.group(1).split(",") if name]
-        coefficients: list[Json] = [int(value) for value in match.group(2).split(",") if value]
+        coefficients: list[Json] = [
+            _parse_coefficient(text=value) for value in match.group(2).split(",") if value
+        ]
         if not places or len(places) != len(coefficients):
             raise QuestionError(f"Malformed INVARIANT line: {match.group(0)!r}")
         invariants.append(
@@ -188,11 +214,11 @@ def run_smpt(
 ) -> tuple[int, str, str, float]:
     """Run one SMPT execution in a temp dir; return (exit, stdout, stderr, seconds)."""
     executable = binary or os.environ.get("SMPT_BINARY", SMPT_BINARY)
-    with tempfile.TemporaryDirectory(prefix="smpt-") as workdir:
-        model_path = Path(workdir) / "model.pnml"
+    with tempfile.TemporaryDirectory(prefix=TEMP_DIR_PREFIX) as workdir:
+        model_path = Path(workdir) / MODEL_FILE_NAME
         model_path.write_text(model_pnml, encoding="utf-8")
         if query is not None:
-            (Path(workdir) / "query.smt2").write_text(query + "\n", encoding="utf-8")
+            (Path(workdir) / QUERY_FILE_NAME).write_text(query + "\n", encoding="utf-8")
         started = time.monotonic()
         completed = subprocess.run(  # noqa: S603 - fixed argv, no shell
             [executable, str(model_path), *arguments],
@@ -305,7 +331,7 @@ def handle_check(*, body: bytes, timeout_seconds: int) -> tuple[int, bytes]:
             raise HttpError(status=422, detail=str(error)) from error
         stdout, stderr, tool_seconds = _run_smpt_or_raise(
             model_pnml=model_pnml,
-            arguments=["-q", "query.smt2", "-t", "2"],
+            arguments=CHECK_ARGUMENTS,
             timeout_seconds=timeout_seconds,
             query=formula,
         )
@@ -332,7 +358,7 @@ def handle_invariants(*, body: bytes, timeout_seconds: int) -> tuple[int, bytes]
             raise HttpError(status=422, detail=str(error)) from error
         stdout, _, tool_seconds = _run_smpt_or_raise(
             model_pnml=model_pnml,
-            arguments=["--invariants"],
+            arguments=INVARIANTS_ARGUMENTS,
             timeout_seconds=timeout_seconds,
         )
         try:
