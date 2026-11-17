@@ -50,6 +50,15 @@ header {
   font-style: italic;
 }
 
+.question-card .cross-status {
+  font-weight: 600;
+}
+
+.controversy-camps {
+  font-weight: normal;
+  margin: 0.25rem 0 0 1rem;
+}
+
 .covered {
   color: var(--covered);
 }

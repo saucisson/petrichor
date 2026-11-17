@@ -32,6 +32,7 @@ from petrichor.engines.contract import (
     EngineError,
     EngineName,
     EngineQuestion,
+    EngineVersion,
     Verdict,
 )
 
@@ -111,7 +112,7 @@ def default_pairing_matrix() -> PairingMatrix:
 
 
 class EngineVerdictRecord(BaseModel):
-    """One engine's verdict on a clause, with its witness and cost."""
+    """One engine's verdict on a clause, with its technique, cost and version (spec §17.4)."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -119,6 +120,8 @@ class EngineVerdictRecord(BaseModel):
     verdict: Verdict
     technique: str = Field(min_length=1)
     cost_tool_seconds: float = Field(ge=0)
+    tool_version: EngineVersion
+    """The pinned version of the tool that produced this verdict (spec §12.5)."""
 
 
 class ArbitrationRecord(BaseModel):
@@ -194,6 +197,7 @@ class CrossVerificationOrchestrator:
             verdict=record.output.verdict,
             technique=record.output.technique,
             cost_tool_seconds=record.output.cost.tool_seconds,
+            tool_version=record.engine_version,
         )
 
     def _arbitrate(
