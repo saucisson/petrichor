@@ -153,16 +153,7 @@ def _accepts_petri_json(*, accept_header: str | None) -> bool:
 
 CONTRACT_JSON_MEDIA = "application/contract+json"
 CONTRACT_MARKDOWN_MEDIA = "text/markdown"
-CONTRACT_ACCEPTABLE_MEDIA_TYPES = frozenset(
-    {
-        "*/*",
-        "application/*",
-        "application/contract+json",
-        "application/json",
-        "text/*",
-        "text/markdown",
-    }
-)
+CONTRACT_ACCEPTABLE_MEDIA_TYPES = frozenset({"*/*", "application/contract+json"})
 
 
 def _negotiate_contract_media(*, accept_header: str | None) -> Literal["markdown", "json"] | None:
