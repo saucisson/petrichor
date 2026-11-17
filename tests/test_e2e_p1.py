@@ -13,7 +13,7 @@ yields a byte-identical journal.
 
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypedDict
 
 import httpx
 from pydantic import SecretStr
@@ -28,6 +28,7 @@ from petrichor.checks import (
     RunId,
     ToolVersion,
 )
+from petrichor.contract import ContractDocument
 from petrichor.engines.mini_engine import (
     mini_capacity,
     non_vacuity_guard,
@@ -57,21 +58,40 @@ FAKE_TOOL_VERSION = ToolVersion("1.0.0-fake")
 FAKE_COMMAND = ["fake-tool", "check"]
 DONE_OUTPUT = {"verdict": "violated", "witness": None, "cost": {}, "technique": "dummy"}
 
+ARBITRATION_DECISIONS = ("accept", "refuse", "verify-first")
+NORMALIZED_SESSION_ID = "ses_normalized"
+NORMALIZED_RUN_ID = "run_normalized"
+NORMALIZED_TIMESTAMP = "ts_normalized"
+RUN_ID_PATTERN = re.compile(r"run_[0-9a-f]+")
+TIMESTAMP_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:\+00:00|Z)")
+
+
+class ScenarioResult(TypedDict):
+    """The artifacts of one scenario execution, for the determinism checks (spec §19.4)."""
+
+    session_id: str
+    journal: list[dict[str, object]]
+    markdown: str
+    contract: dict[str, object]
+
 
 class MiniStaticResolver:
     """The StaticResolver protocol wired to the mini-engine adapters."""
 
     def capacity(self, *, model: CanonicalModel) -> CapacityReport:
+        """Probe the state-graph capacity of the model (never assumed)."""
         return mini_capacity(model=model)
 
     def resolve_static(
         self, *, model: CanonicalModel, question: CheckQuestion
     ) -> dict[str, JsonValue]:
+        """Resolve a statically-triaged question inside the mini-engine fragment."""
         return resolve_static_payload(model=model, question=question)
 
     def non_vacuity_guard(
         self, *, model: CanonicalModel, family: str, kind: str, formula: str
     ) -> NonVacuityGuard:
+        """Build the non-vacuity guard of a question (spec §14.4)."""
         return non_vacuity_guard(model=model, family=family, kind=kind, formula=formula)
 
 
@@ -81,6 +101,7 @@ class FakeRunner:
     tool_version = FAKE_TOOL_VERSION
 
     def run(self, *, question: CheckQuestion, timeout_seconds: int) -> CheckOutcome:
+        """Answer every question with the same fixed completed outcome."""
         return CheckCompleted(output=DONE_OUTPUT, command=FAKE_COMMAND)
 
 
@@ -135,7 +156,7 @@ def build_client(
     return client, session_store, arbitrator
 
 
-def run_scenario(tmp_path: Path) -> dict[str, object]:
+def run_scenario(tmp_path: Path) -> ScenarioResult:
     """Run the whole P1 scenario once; return the journal, exports and session id."""
     client, session_store, arbitrator = build_client(tmp_path)
 
@@ -166,7 +187,9 @@ def run_scenario(tmp_path: Path) -> dict[str, object]:
     # 4. Questions statiques: read the contract, resolve each static question
     #    with the embedded mini-engine (no MC run, cost zero).
     contract = client.get(f"/v1/sessions/{session_id}/contract", headers=CONTRACT_HEADERS).json()
-    static_questions = [q for q in contract["questions"] if q["triage"] == "statique"]
+    static_questions = [
+        question for question in contract["questions"] if question["triage"] == "statique"
+    ]
     assert static_questions, "the scenario must produce static questions"
     triage_kinds: list[str] = []
     for question in static_questions:
@@ -189,11 +212,13 @@ def run_scenario(tmp_path: Path) -> dict[str, object]:
     assert "statique" in triage_kinds, "the scenario must exercise the static path"
 
     # 5. Cartes + arbitrages: one decision per question, then a revision on the first.
-    decisions = ["accept", "refuse", "verify-first"]
     for index, question in enumerate(contract["questions"]):
         response = client.post(
             f"/v1/sessions/{session_id}/arbitration-requests",
-            json={"question_id": question["question_id"], "decision": decisions[index % 3]},
+            json={
+                "question_id": question["question_id"],
+                "decision": ARBITRATION_DECISIONS[index % len(ARBITRATION_DECISIONS)],
+            },
             headers=JSON_HEADERS,
         )
         assert response.status_code == 201
@@ -204,7 +229,7 @@ def run_scenario(tmp_path: Path) -> dict[str, object]:
         headers=JSON_HEADERS,
     )
     assert revised.status_code == 201
-    assert revised.json()["record"]["previous_decision"] == decisions[0]
+    assert revised.json()["record"]["previous_decision"] == ARBITRATION_DECISIONS[0]
 
     # 6. Contrat + export Markdown + journal.
     markdown = client.get(f"/v1/sessions/{session_id}/contract", headers=MARKDOWN_HEADERS)
@@ -221,63 +246,68 @@ def run_scenario(tmp_path: Path) -> dict[str, object]:
     }
 
 
-def normalize_journal(journal: list[dict[str, object]], session_id: str) -> list[object]:
+def normalize_journal(
+    journal: list[dict[str, object]], session_id: SessionId
+) -> list[tuple[str, dict[str, object]]]:
     """The journal content without the wall-clock timestamps and the random ids."""
-    normalized = []
+    normalized: list[tuple[str, dict[str, object]]] = []
     for entry in journal:
-        detail = {
-            key: _normalize_id(value=value, session_id=session_id)
-            for key, value in entry["detail"].items()  # type: ignore[union-attr]
-        }
-        normalized.append((entry["event"], detail))
+        detail = entry["detail"]
+        assert isinstance(detail, dict), "a journal detail is a named-field object"
+        normalized.append(
+            (
+                str(entry["event"]),
+                {
+                    key: _normalize_id(value=value, session_id=session_id)
+                    for key, value in detail.items()
+                },
+            )
+        )
     return normalized
 
 
-def _normalize_id(*, value: object, session_id: str) -> object:
+def _normalize_id(*, value: object, session_id: SessionId) -> object:
     """Replace the random session id and run ids by stable placeholders."""
     if value == session_id:
-        return "ses_normalized"
+        return NORMALIZED_SESSION_ID
     if isinstance(value, str) and value.startswith("run_"):
-        return "run_normalized"
+        return NORMALIZED_RUN_ID
     return value
 
 
-def normalize_markdown(markdown: str, session_id: str) -> str:
-    """The export without the session id and the run ids (random per execution)."""
-    normalized = markdown.replace(session_id, "ses_normalized")
-    normalized = re.sub(r"run_[0-9a-f]+", "run_normalized", normalized)
-    timestamp = r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:\+00:00|Z)"
-    return re.sub(timestamp, "ts_normalized", normalized)
+def normalize_markdown(markdown: str, session_id: SessionId) -> str:
+    """The export without the session id, the run ids and the timestamps (random per run)."""
+    normalized = markdown.replace(session_id, NORMALIZED_SESSION_ID)
+    normalized = RUN_ID_PATTERN.sub(NORMALIZED_RUN_ID, normalized)
+    return TIMESTAMP_PATTERN.sub(NORMALIZED_TIMESTAMP, normalized)
 
 
 class TestE2eP1:
     def test_full_scenario_runs_on_mock_and_mini_engine(self, tmp_path: Path) -> None:
         result = run_scenario(tmp_path / "run1")
         journal = result["journal"]
-        events = [entry["event"] for entry in journal]  # type: ignore[index]
+        events = [entry["event"] for entry in journal]
         assert events[0] == "session_created"
         assert "arbitration_decided" in events
         assert "run_added" in events
         markdown = result["markdown"]
-        assert isinstance(markdown, str)
         assert "## Questions par famille" in markdown
         assert "## Journal" in markdown
-        contract = result["contract"]
-        assert isinstance(contract, dict)
-        statuses = {q["question_id"]: q["status"] for q in contract["questions"]}  # type: ignore[index]
-        assert set(statuses.values()) <= {"accept", "refuse", "verify-first"}
-        assert contract["questions"][0]["proofs"], "static runs are the proof links"  # type: ignore[index]
+        contract = ContractDocument.model_validate(result["contract"])
+        statuses = {question.question_id: question.status for question in contract.questions}
+        assert all(status in ARBITRATION_DECISIONS for status in statuses.values())
+        assert contract.questions[0].proofs, "static runs are the proof links"
 
     def test_two_executions_produce_identical_journals(self, tmp_path: Path) -> None:
         first = run_scenario(tmp_path / "run1")
         second = run_scenario(tmp_path / "run2")
-        assert normalize_journal(first["journal"], first["session_id"]) == normalize_journal(  # type: ignore[arg-type]
-            second["journal"],
-            second["session_id"],  # type: ignore[arg-type]
+        first_session = SessionId(first["session_id"])
+        second_session = SessionId(second["session_id"])
+        assert normalize_journal(first["journal"], first_session) == normalize_journal(
+            second["journal"], second_session
         )
-        assert normalize_markdown(first["markdown"], first["session_id"]) == normalize_markdown(  # type: ignore[arg-type]
-            second["markdown"],
-            second["session_id"],  # type: ignore[arg-type]
+        assert normalize_markdown(first["markdown"], first_session) == normalize_markdown(
+            second["markdown"], second_session
         )
 
     def test_replay_from_persisted_state_gives_identical_journal(self, tmp_path: Path) -> None:
