@@ -22,6 +22,8 @@ from petrichor.checks import (
 )
 from petrichor.engines.contract import (
     DEFAULT_TIMEOUT_SECONDS,
+    SMPT_ENGINE_NAME,
+    SMPT_ENGINE_VERSION,
     VERIFYPN_ENGINE_NAME,
     VERIFYPN_ENGINE_VERSION,
     DriverError,
@@ -65,6 +67,74 @@ class VerifypnCheckRunner:
 
     def run(self, *, question: CheckQuestion, timeout_seconds: int) -> CheckOutcome:
         """Execute one check question on verifypn within the timeout."""
+        engine_question = EngineQuestion(
+            family=question.family,
+            formula=question.formula,
+            pattern=question.kind,
+            parameters=question.parameters,
+        )
+        try:
+            record = self._driver.run(
+                question=engine_question,
+                timeout_seconds=timeout_seconds or DEFAULT_TIMEOUT_SECONDS,
+            )
+        except EngineTimeoutError as error:
+            logger.warning(
+                "runner_timeout", family=question.family, kind=question.kind, error=str(error)
+            )
+            return CheckFailed(kind="timeout", detail=str(error), command=[])
+        except DriverError as error:
+            logger.warning(
+                "runner_engine_error",
+                family=question.family,
+                kind=question.kind,
+                error=str(error),
+            )
+            return CheckFailed(kind="engine_error", detail=str(error), command=[])
+        logger.info(
+            "runner_run_completed",
+            run_id=record.run_id,
+            engine=record.engine,
+            verdict=record.output.verdict,
+        )
+        return CheckCompleted(
+            output=record.output.model_dump(mode="json"),
+            command=record.command,
+        )
+
+
+DEFAULT_SMPT_HOST_PORT = 18083
+SMPT_SERVICE_NAME = "smpt"
+
+
+class SmptCheckRunner:
+    """A `CheckRunner` executing reachability questions on the SMPT compose engine.
+
+    SMPT is the third technological differential of spec §17.4 (issue #26):
+    reachability by SMT with witnesses, polyhedral invariants - no CTL/LTL.
+    """
+
+    tool_version: ToolVersion = ToolVersion(SMPT_ENGINE_VERSION)
+
+    def __init__(
+        self,
+        *,
+        archive: RunArchive,
+        compose_file: Path = DEFAULT_COMPOSE_FILE,
+        host_port: int = DEFAULT_SMPT_HOST_PORT,
+    ) -> None:
+        """Wire the runner to a run archive and the SMPT compose service."""
+        self._driver = ComposeEngineDriver(
+            archive=archive,
+            compose_file=compose_file,
+            host_port=host_port,
+            service_name=SMPT_SERVICE_NAME,
+            engine_name=SMPT_ENGINE_NAME,
+            engine_version=SMPT_ENGINE_VERSION,
+        )
+
+    def run(self, *, question: CheckQuestion, timeout_seconds: int) -> CheckOutcome:
+        """Execute one reachability question on SMPT within the timeout."""
         engine_question = EngineQuestion(
             family=question.family,
             formula=question.formula,
