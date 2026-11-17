@@ -441,9 +441,49 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
-  /sessions/{session_id}/profile:
+  /sessions/{session_id}/contract:
     get:
-      summary: Read the proposed + arbitrated semantic profile of a session (spec §14)
+      summary: The contract of a session, negotiated as contract+json or Markdown (spec §4.8)
+      description: >-
+        The exportable deliverable aggregated from the session state: arbitrated
+        profile, proposed hypotheses, questions by family with their status and
+        proof links, and the append-only journal. Replayable: building it twice
+        from the same state yields identical output.
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: Accept
+          in: header
+          required: false
+          schema:
+            type: string
+          description: >-
+            text/markdown for the Markdown export, application/contract+json
+            (default) for the structured document.
+      responses:
+        "200":
+          description: The contract document in the negotiated representation.
+          content:
+            application/contract+json; version=1.0:
+              schema:
+                $ref: "#/components/schemas/ContractDocument"
+            text/markdown:
+              schema:
+                type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "406":
+          description: The Accept header admits neither representation.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /sessions/{session_id}/profile:
       parameters:
         - name: session_id
           in: path
@@ -649,6 +689,87 @@ components:
         previous_decision:
           enum: [accept, refuse, verify-first]
           nullable: true
+    ContractDocument:
+      type: object
+      required: [version, session_id, model_id, profile, questions, journal]
+      properties:
+        version:
+          type: string
+          enum: ["1.0"]
+        session_id:
+          type: string
+        model_id:
+          type: string
+        profile:
+          type: array
+          items:
+            type: object
+            required: [entry_id, elements, proposed_role, confidence, evidence, accepted, chosen_role]
+            properties:
+              entry_id:
+                type: string
+              elements:
+                type: string
+              proposed_role:
+                type: string
+              confidence:
+                type: number
+              evidence:
+                type: string
+              accepted:
+                type: boolean
+              chosen_role:
+                type: string
+                nullable: true
+        questions:
+          type: array
+          items:
+            type: object
+            required: [question_id, template_id, family, kind, formula, triage, risk, cost, scenario, role, status, proofs]
+            properties:
+              question_id:
+                type: string
+              template_id:
+                type: string
+              family:
+                type: string
+              kind:
+                type: string
+              formula:
+                type: string
+              triage:
+                enum: [statique, MC, dégradé]
+              risk:
+                type: integer
+              cost:
+                type: integer
+              scenario:
+                type: string
+              role:
+                type: string
+              status:
+                enum: [pending, accept, refuse, verify-first]
+              proofs:
+                type: array
+                items:
+                  type: object
+                  required: [run_id, link, status, triage, verdict]
+                  properties:
+                    run_id:
+                      type: string
+                    link:
+                      type: string
+                    status:
+                      enum: [running, done, error]
+                    triage:
+                      enum: [statique, MC, dégradé]
+                    verdict:
+                      type: string
+                      nullable: true
+        journal:
+          type: array
+          items:
+            type: object
     ArbitrationDecision:
       type: object
       required: [entry_id, accepted, chosen_role]

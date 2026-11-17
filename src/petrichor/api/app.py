@@ -33,7 +33,7 @@ import threading
 import time
 from collections.abc import Callable, Iterable
 from http import HTTPStatus
-from typing import TYPE_CHECKING, TypeGuard
+from typing import TYPE_CHECKING, Literal, TypeGuard
 from wsgiref.types import StartResponse, WSGIEnvironment
 
 import structlog
@@ -52,7 +52,8 @@ from petrichor.checks import (
     RunId,
     run_key,
 )
-from petrichor.elicitation import QuestionId
+from petrichor.contract import build_contract, render_markdown
+from petrichor.elicitation import QuestionId, load_catalog
 from petrichor.insitu import build_net_overlay
 from petrichor.petri_canonical import (
     Arc,
@@ -107,12 +108,15 @@ SESSION_COVERAGE_SUFFIX = "/coverage"
 SESSION_STATE_GRAPH_SUFFIX = "/state-graph"
 SESSION_ANNOTATIONS_SUFFIX = "/annotations"
 SESSION_NET_OVERLAY_SUFFIX = "/net-overlay"
+SESSION_CONTRACT_SUFFIX = "/contract"
 DEFAULT_SESSIONS_PAGE_LIMIT = 100
 MAX_SESSIONS_PAGE_LIMIT = 500
 CONTENT_TYPE_PNML = "application/pnml+xml"
 CONTENT_TYPE_JSON = "application/json"
 CONTENT_TYPE_PETRI_JSON = "application/petri+json; version=1.0"
 CONTENT_TYPE_PROBLEM_JSON = "application/problem+json"
+CONTENT_TYPE_CONTRACT_JSON = "application/contract+json; version=1.0"
+CONTENT_TYPE_MARKDOWN = "text/markdown; charset=utf-8"
 HEADER_API_KEY = "X-API-Key"
 PROBLEM_TYPE_BASE_URL = "https://petrichor.dev/problems/"
 WATCHDOG_GRACE_SECONDS = 5
@@ -145,6 +149,35 @@ def _accepts_petri_json(*, accept_header: str | None) -> bool:
         if media in ACCEPTABLE_MEDIA_TYPES:
             return True
     return False
+
+
+CONTRACT_JSON_MEDIA = "application/contract+json"
+CONTRACT_MARKDOWN_MEDIA = "text/markdown"
+CONTRACT_ACCEPTABLE_MEDIA_TYPES = frozenset(
+    {
+        "*/*",
+        "application/*",
+        "application/contract+json",
+        "application/json",
+        "text/*",
+        "text/markdown",
+    }
+)
+
+
+def _negotiate_contract_media(*, accept_header: str | None) -> Literal["markdown", "json"] | None:
+    """Negotiate the contract representation: markdown, contract+json, or None (406)."""
+    if accept_header is None or not accept_header.strip():
+        return "json"
+    for entry in accept_header.split(","):
+        media = entry.split(";", maxsplit=1)[0].strip().lower()
+        if media == CONTRACT_MARKDOWN_MEDIA:
+            return "markdown"
+    for entry in accept_header.split(","):
+        media = entry.split(";", maxsplit=1)[0].strip().lower()
+        if media in CONTRACT_ACCEPTABLE_MEDIA_TYPES:
+            return "json"
+    return None
 
 
 class ProblemPayload(BaseModel):
@@ -1738,6 +1771,180 @@ def _get_arbitrations(
     )
 
 
+def _get_session_contract(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    store: ModelStore,
+    session_store: SessionStore,
+    run_store: RunStore,
+    arbitrator: ProfileArbitrator | None,
+    arbitration_store: ArbitrationStore | None,
+    session_id: str,
+) -> Iterable[bytes]:
+    """The contract of a session, negotiated as contract+json or Markdown (spec §4.8)."""
+    media = _negotiate_contract_media(accept_header=environ.get("HTTP_ACCEPT"))
+    if media is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_ACCEPTABLE,
+                reason="not_acceptable",
+                detail=(
+                    "The contract is served as application/contract+json; version=1.0"
+                    " or text/markdown."
+                ),
+            ),
+        )
+    session = session_store.get(session_id=SessionId(session_id))
+    if session is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="session_not_found",
+                detail=f"No session with id {session_id!r}.",
+            ),
+        )
+    profile_state = arbitrator.get(session_id=SessionId(session_id)) if arbitrator else None
+    if profile_state is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="profile_not_found",
+                detail=f"No proposed profile for session {session_id!r}.",
+            ),
+        )
+    model = store.get(model_id=session.model_id)
+    if model is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="model_not_found",
+                detail=f"No model with id {session.model_id!r}.",
+            ),
+        )
+    history = (
+        arbitration_store.history(session_id=SessionId(session_id))
+        if arbitration_store is not None
+        else []
+    )
+    runs = [run for run_id in session.run_ids if (run := run_store.get(run_id=run_id)) is not None]
+    document = build_contract(
+        session=session,
+        profile_state=profile_state,
+        model=model,
+        catalog=load_catalog(),
+        arbitration_history=history,
+        runs=runs,
+        journal=session_store.journal(session_id=SessionId(session_id)),
+    )
+    logger.debug(
+        "api_contract_exported",
+        session_id=session_id,
+        media=media,
+        questions=len(document.questions),
+    )
+    if media == "markdown":
+        return _respond(
+            start_response=start_response,
+            status=HTTPStatus.OK,
+            content_type=CONTENT_TYPE_MARKDOWN,
+            body=render_markdown(document=document).encode("utf-8"),
+        )
+    body_out = json.dumps(document.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.OK,
+        content_type=CONTENT_TYPE_CONTRACT_JSON,
+        body=body_out.encode("utf-8"),
+    )
+
+
+def _dispatch_session_read(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    method: str,
+    remainder: str,
+    store: ModelStore,
+    session_store: SessionStore,
+    arbitrator: ProfileArbitrator | None,
+    state_graph_explorer: StateGraphExplorer | None,
+) -> Iterable[bytes] | None:
+    """Route the journal, plain-read, in-situ and profile sub-resources, or None."""
+    if remainder.endswith(SESSION_JOURNAL_SUFFIX):
+        session_id = remainder[: -len(SESSION_JOURNAL_SUFFIX)]
+        if method == "GET" and session_id and "/" not in session_id:
+            return _get_session_journal(
+                environ=environ,
+                start_response=start_response,
+                session_store=session_store,
+                session_id=session_id,
+            )
+    elif method == "GET" and remainder and "/" not in remainder:
+        return _get_session(
+            environ=environ,
+            start_response=start_response,
+            session_store=session_store,
+            session_id=remainder,
+        )
+    result = _dispatch_session_insitu(
+        environ=environ,
+        start_response=start_response,
+        method=method,
+        remainder=remainder,
+        store=store,
+        session_store=session_store,
+        arbitrator=arbitrator,
+        state_graph_explorer=state_graph_explorer,
+    )
+    if result is None and arbitrator is not None:
+        result = _dispatch_session_profile(
+            environ=environ,
+            start_response=start_response,
+            method=method,
+            remainder=remainder,
+            arbitrator=arbitrator,
+        )
+    return result
+
+
+def _dispatch_session_contract(  # noqa: PLR0913 - one keyword per routed dependency (ADR-0003)
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    method: str,
+    remainder: str,
+    store: ModelStore,
+    run_store: RunStore,
+    session_store: SessionStore,
+    arbitrator: ProfileArbitrator | None,
+    arbitration_store: ArbitrationStore | None,
+) -> Iterable[bytes] | None:
+    """Route the contract sub-resource of a session, or None (spec §4.8, issue #17)."""
+    if remainder.endswith(SESSION_CONTRACT_SUFFIX):
+        session_id = remainder[: -len(SESSION_CONTRACT_SUFFIX)]
+        if method == "GET" and session_id and "/" not in session_id:
+            return _get_session_contract(
+                environ=environ,
+                start_response=start_response,
+                store=store,
+                session_store=session_store,
+                run_store=run_store,
+                arbitrator=arbitrator,
+                arbitration_store=arbitration_store,
+                session_id=session_id,
+            )
+    return None
+
+
 def _dispatch_sessions_root(
     *,
     environ: WSGIEnvironment,
@@ -1776,6 +1983,7 @@ def _dispatch_sessions(  # noqa: PLR0913 - one keyword per routed dependency (AD
     method: str,
     path: str,
     store: ModelStore,
+    run_store: RunStore,
     session_store: SessionStore,
     arbitrator: ProfileArbitrator | None = None,
     state_graph_explorer: StateGraphExplorer | None = None,
@@ -1803,41 +2011,28 @@ def _dispatch_sessions(  # noqa: PLR0913 - one keyword per routed dependency (AD
                 arbitration_store=arbitration_store,
             )
         if result is None:
-            if remainder.endswith(SESSION_JOURNAL_SUFFIX):
-                session_id = remainder[: -len(SESSION_JOURNAL_SUFFIX)]
-                if method == "GET" and session_id and "/" not in session_id:
-                    result = _get_session_journal(
-                        environ=environ,
-                        start_response=start_response,
-                        session_store=session_store,
-                        session_id=session_id,
-                    )
-            elif method == "GET" and remainder and "/" not in remainder:
-                result = _get_session(
-                    environ=environ,
-                    start_response=start_response,
-                    session_store=session_store,
-                    session_id=remainder,
-                )
-            else:
-                result = _dispatch_session_insitu(
-                    environ=environ,
-                    start_response=start_response,
-                    method=method,
-                    remainder=remainder,
-                    store=store,
-                    session_store=session_store,
-                    arbitrator=arbitrator,
-                    state_graph_explorer=state_graph_explorer,
-                )
-                if result is None and arbitrator is not None:
-                    result = _dispatch_session_profile(
-                        environ=environ,
-                        start_response=start_response,
-                        method=method,
-                        remainder=remainder,
-                        arbitrator=arbitrator,
-                    )
+            result = _dispatch_session_contract(
+                environ=environ,
+                start_response=start_response,
+                method=method,
+                remainder=remainder,
+                store=store,
+                run_store=run_store,
+                session_store=session_store,
+                arbitrator=arbitrator,
+                arbitration_store=arbitration_store,
+            )
+        if result is None:
+            result = _dispatch_session_read(
+                environ=environ,
+                start_response=start_response,
+                method=method,
+                remainder=remainder,
+                store=store,
+                session_store=session_store,
+                arbitrator=arbitrator,
+                state_graph_explorer=state_graph_explorer,
+            )
         if result is None:
             result = _problem_response(
                 start_response=start_response,
@@ -1914,6 +2109,7 @@ def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
                 method=method,
                 path=path,
                 store=store,
+                run_store=run_store,
                 session_store=session_store,
                 arbitrator=arbitrator,
                 state_graph_explorer=state_graph_explorer,
