@@ -118,8 +118,9 @@ async function loadQuestions() {
       const camps = document.createElement("ul");
       camps.className = "controversy-camps";
       for (const proof of question.proofs) {
+        if (proof.status !== "done" || !proof.verdict) continue;
         const camp = document.createElement("li");
-        camp.textContent = proof.tool_version + " : verdict " + (proof.verdict || "—");
+        camp.textContent = proof.tool_version + " : verdict " + proof.verdict;
         camps.append(camp);
       }
       cross.append(camps);
