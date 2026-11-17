@@ -23,7 +23,7 @@ from petrichor.engines.mini_engine import (
     resolve_static_payload,
 )
 from petrichor.model_store import ModelStore
-from petrichor.petri_canonical import CanonicalModel, build_canonical_model
+from petrichor.petri_canonical import CanonicalModel, JsonValue, build_canonical_model
 from petrichor.pnml_import import import_pnml
 from petrichor.run_store import RunStore
 
@@ -51,7 +51,7 @@ class MiniStaticResolver:
 
     def resolve_static(
         self, *, model: CanonicalModel, question: CheckQuestion
-    ) -> dict[str, object]:
+    ) -> dict[str, JsonValue]:
         return resolve_static_payload(model=model, question=question)
 
     def non_vacuity_guard(
