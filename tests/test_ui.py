@@ -6,6 +6,9 @@ themselves carry no data and are served without authentication - every data
 call goes through the authenticated API.
 """
 
+import io
+from typing import TYPE_CHECKING
+
 import httpx
 import structlog.testing
 from pydantic import SecretStr
@@ -14,6 +17,9 @@ from petrichor.api.app import create_app
 from petrichor.api.settings import ApiSettings
 from petrichor.model_store import ModelStore
 from petrichor.run_store import RunStore
+
+if TYPE_CHECKING:
+    from wsgiref.types import WSGIEnvironment
 
 TEST_API_KEY = "test-key"
 AUTH_HEADERS = {"X-API-Key": TEST_API_KEY}
@@ -99,16 +105,16 @@ class TestStaticUi:
         app = create_app(settings=settings, store=ModelStore(), run_store=RunStore(), runner=None)
         captured: dict[str, str] = {}
 
-        def start_response(status: str, headers: list) -> None:
+        def start_response(status: str, headers: list[tuple[str, str]]) -> None:
             captured["status"] = status
 
-        environ = {
+        environ: WSGIEnvironment = {
             "REQUEST_METHOD": "GET",
             "PATH_INFO": "/ui/../app.py",
             "HTTP_X_API_KEY": TEST_API_KEY,
-            "wsgi.input": None,
+            "wsgi.input": io.BytesIO(b""),
         }
-        body = b"".join(app(environ, start_response))  # type: ignore[arg-type]
+        body = b"".join(app(environ, start_response))
         assert captured["status"].startswith("404")
         # The problem document is returned, never the source file content.
         assert b"petrichor.dev/problems/not_found" in body
