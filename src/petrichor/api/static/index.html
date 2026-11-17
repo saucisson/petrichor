@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Petrichor — élicitation</title>
+  <link rel="stylesheet" href="/ui/styles.css">
+</head>
+<body>
+  <header>
+    <h1>Petrichor — session d'élicitation</h1>
+    <label for="api-key">Clé API</label>
+    <input id="api-key" type="password" autocomplete="off" aria-label="Clé API">
+    <label for="session-id">Session</label>
+    <input id="session-id" type="text" autocomplete="off" aria-label="Identifiant de session (reprise)">
+    <button id="resume-session" type="button">Reprendre la session</button>
+  </header>
+  <nav aria-label="Étapes">
+    <ol id="steps">
+      <li><button type="button" data-step="amorcage" aria-current="step">1. Amorçage</button></li>
+      <li><button type="button" data-step="questions">2. Questions statiques</button></li>
+      <li><button type="button" data-step="verifications">3. Vérifications MC</button></li>
+      <li><button type="button" data-step="synthese">4. Synthèse</button></li>
+    </ol>
+  </nav>
+  <main>
+    <section id="step-amorcage" aria-labelledby="h-amorcage">
+      <h2 id="h-amorcage">Amorçage</h2>
+      <p>Importez un modèle PNML, créez une session, arbitrez le profil sémantique proposé.</p>
+      <input id="pnml-file" type="file" accept=".pnml,.xml" aria-label="Fichier PNML">
+      <button id="import-model" type="button">Importer le modèle et créer la session</button>
+      <div id="profile" aria-live="polite"></div>
+    </section>
+    <section id="step-questions" hidden aria-labelledby="h-questions">
+      <h2 id="h-questions">Questions statiques</h2>
+      <p>Cartes-question : arbitrez chaque question (Impossible / C'est normal / Vérifier d'abord).</p>
+      <ul id="question-cards"></ul>
+    </section>
+    <section id="step-verifications" hidden aria-labelledby="h-verifications">
+      <h2 id="h-verifications">Vérifications MC</h2>
+      <p>Runs disponibles de la session (mock / statiques) — aucun verdict n'est inventé ici.</p>
+      <ul id="run-list"></ul>
+    </section>
+    <section id="step-synthese" hidden aria-labelledby="h-synthese">
+      <h2 id="h-synthese">Synthèse</h2>
+      <p>Le contrat de la session, exportable en Markdown.</p>
+      <button id="export-markdown" type="button">Télécharger le contrat (Markdown)</button>
+      <pre id="contract-preview" aria-live="polite"></pre>
+    </section>
+  </main>
+  <script src="/ui/app.js"></script>
+</body>
+</html>
