@@ -18,7 +18,7 @@ from typing import Literal, NewType, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from petrichor.petri_canonical import HASH_PREFIX, JsonValue, ModelId
+from petrichor.petri_canonical import HASH_PREFIX, CanonicalModel, JsonValue, ModelId
 
 type CheckFamilyName = Literal[
     "reachability", "safety", "liveness", "recovery", "deadlock", "structural"
@@ -127,6 +127,42 @@ class CheckRunner(Protocol):
 
     def run(self, *, question: CheckQuestion, timeout_seconds: int) -> CheckOutcome:
         """Execute one check question within the timeout."""
+        ...
+
+
+class StaticFirstProbe(BaseModel):
+    """The outcome of one static-first probe on a degraded question (issue #25, spec §18.4).
+
+    A decided verdict carries the static proof in ``output``; an unknown
+    verdict carries the reduced model and the projected formula so the
+    exhaustive run can go on the reduced net (MCC « +red » pipeline).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    verdict: Literal["satisfied", "violated", "unknown"]
+    output: dict[str, JsonValue] | None = None
+    """The normalized static proof, present exactly when the verdict is decided."""
+    reduced_model: dict[str, JsonValue] | None = None
+    """The canonical model of the reduced net, present exactly when undecided."""
+    projected_formula: str | None = None
+    """The formula projected on the reduced net, present exactly when undecided."""
+    tool_version: ToolVersion
+    """The pinned version of the reducer behind this probe."""
+
+
+class StaticFirstProber(Protocol):
+    """The static-first port: probe a degraded question before any MC run (issue #25).
+
+    Implementations live in ``petrichor.engines`` and return plain data: the
+    API never interprets a verdict, it stores and serves the payload verbatim
+    (spec §19.4 verdict lock, same rule as `StaticResolver`).
+    """
+
+    def probe(
+        self, *, model: CanonicalModel, question: CheckQuestion, timeout_seconds: int
+    ) -> StaticFirstProbe:
+        """Try to decide one question statically (reducer mode, spec §18.1)."""
         ...
 
 

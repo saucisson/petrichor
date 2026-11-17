@@ -51,6 +51,8 @@ from petrichor.checks import (
     CheckRunner,
     QualificationLookup,
     RunId,
+    StaticFirstProber,
+    ToolVersion,
     run_key,
 )
 from petrichor.contract import build_contract, render_markdown
@@ -582,6 +584,63 @@ def _triage_and_resolve_static(
     return triage, guard, static_output
 
 
+def _static_first_probe(
+    *,
+    static_first_prober: StaticFirstProber,
+    model: CanonicalModel,
+    family: CheckFamilyName,
+    request: CheckRequest,
+    question: CheckQuestion,
+    triage: QuestionTriage,
+    timeout_seconds: int,
+) -> tuple[QuestionTriage, dict[str, JsonValue] | None, CheckQuestion, ToolVersion]:
+    """Probe a degraded question with the reducer before any MC run (spec §18.4, issue #25).
+
+    A decided probe is a static proof - no MC run is emitted, the triage
+    becomes an explicit ``statique`` proof and the output is labeled
+    ``technique: static``. An undecided probe yields the reduced net and the
+    projected formula: the returned execution question targets the reduced
+    model while the caller keeps the original question for the idempotence
+    key. Both paths use the same clause states as the §14 triage - a proof or
+    an explicit degradation, never a home-made verdict.
+    """
+    probe = static_first_prober.probe(
+        model=model, question=question, timeout_seconds=timeout_seconds
+    )
+    logger.debug(
+        "api_check_static_first_probed",
+        family=family,
+        kind=request.kind,
+        verdict=probe.verdict,
+        tool_version=probe.tool_version,
+    )
+    if probe.verdict != "unknown" and probe.output is not None:
+        static_output = {**probe.output, "technique": "static"}
+        proved_triage = QuestionTriage(
+            kind="statique",
+            justification=(
+                f"Preuve statique d'abord ({probe.tool_version}) — aucun run MC"
+                " (spec §18.4, issue #25)."
+            ),
+        )
+        return proved_triage, static_output, question, probe.tool_version
+    if probe.reduced_model is not None:
+        reduced_question = CheckQuestion(
+            family=family,
+            kind=request.kind,
+            formula=probe.projected_formula or question.formula,
+            parameters={**question.parameters, "model": probe.reduced_model},
+        )
+        logger.debug(
+            "api_check_static_first_reduced",
+            family=family,
+            kind=request.kind,
+            formula=reduced_question.formula,
+        )
+        return triage, None, reduced_question, STATIC_TOOL_VERSION
+    return triage, None, question, STATIC_TOOL_VERSION
+
+
 def _post_check(  # noqa: PLR0913 - one keyword per routed dependency (ADR-0003)
     *,
     environ: WSGIEnvironment,
@@ -593,6 +652,7 @@ def _post_check(  # noqa: PLR0913 - one keyword per routed dependency (ADR-0003)
     settings: ApiSettings,
     qualification: QualificationLookup | None,
     static_resolver: StaticResolver | None,
+    static_first_prober: StaticFirstProber | None,
 ) -> Iterable[bytes]:
     """Accept a check question: 202 + Location, idempotent by (model, question) hash.
 
@@ -654,7 +714,28 @@ def _post_check(  # noqa: PLR0913 - one keyword per routed dependency (ADR-0003)
         request=request,
         question=question,
     )
-    tool_version = STATIC_TOOL_VERSION
+    # Static-first (opt-in, spec §18.4, issue #25): a question the embedded
+    # engine could not decide (dégradé, typically a net beyond its capacity)
+    # is probed by the reducer before any exhaustive MC run. The idempotence
+    # key always covers the original question.
+    execution_question = question
+    static_tool_version = STATIC_TOOL_VERSION
+    if (
+        static_output is None
+        and triage.kind == "dégradé"
+        and settings.static_first
+        and static_first_prober is not None
+    ):
+        triage, static_output, execution_question, static_tool_version = _static_first_probe(
+            static_first_prober=static_first_prober,
+            model=model,
+            family=family,
+            request=request,
+            question=question,
+            triage=triage,
+            timeout_seconds=timeout_seconds,
+        )
+    tool_version = static_tool_version
     if static_output is None:
         if runner is None:
             return _problem_response(
@@ -742,7 +823,7 @@ def _post_check(  # noqa: PLR0913 - one keyword per routed dependency (ADR-0003)
                     "runner": runner,
                     "run_store": run_store,
                     "run_id": run.run_id,
-                    "question": question,
+                    "question": execution_question,
                     "timeout_seconds": timeout_seconds,
                     "started_monotonic": started_monotonic,
                     "qualification": qualification,
@@ -918,6 +999,7 @@ def _dispatch_checks_and_runs(  # noqa: PLR0913 - one keyword per routed depende
     runner: CheckRunner | None,
     qualification: QualificationLookup | None,
     static_resolver: StaticResolver | None,
+    static_first_prober: StaticFirstProber | None,
 ) -> Iterable[bytes] | None:
     """Route /v1/checks/{family} and /v1/runs/{run_id}, or return None."""
     if path.startswith(CHECKS_PATH_PREFIX):
@@ -933,6 +1015,7 @@ def _dispatch_checks_and_runs(  # noqa: PLR0913 - one keyword per routed depende
                 settings=settings,
                 qualification=qualification,
                 static_resolver=static_resolver,
+                static_first_prober=static_first_prober,
             )
         return _problem_response(
             start_response=start_response,
@@ -2130,6 +2213,7 @@ def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
     qualification: QualificationLookup | None = None,
     state_graph_explorer: StateGraphExplorer | None = None,
     static_resolver: StaticResolver | None = None,
+    static_first_prober: StaticFirstProber | None = None,
     arbitration_store: ArbitrationStore | None = None,
 ) -> WSGIApp:
     """Build the WSGI application: auth first, then routing and negotiation."""
@@ -2178,6 +2262,7 @@ def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
                 runner=runner,
                 qualification=qualification,
                 static_resolver=static_resolver,
+                static_first_prober=static_first_prober,
             )
         if routed is None and session_store is not None:
             routed = _dispatch_sessions(
