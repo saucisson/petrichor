@@ -367,6 +367,80 @@ paths:
           $ref: "#/components/responses/NotFound"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+  /sessions/{session_id}/arbitration-requests:
+    post:
+      summary: Arbitrate one question card (accept / refuse / verify-first)
+      description: >-
+        Records one human decision on a generated question card (spec §4.8,
+        §12.7). A repeated question is a REVISION: a new decision is recorded
+        and the previous one stays in the history and the journal
+        (avant/après). No automatic fusion of questions ever happens here -
+        convergence is a separate human-only decision (P34). Every decision is
+        appended to the session journal as an `arbitration_decided` entry.
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [question_id, decision]
+              additionalProperties: false
+              properties:
+                question_id:
+                  type: string
+                decision:
+                  enum: [accept, refuse, verify-first]
+      responses:
+        "201":
+          description: The recorded decision plus the question's decision history.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  record:
+                    $ref: "#/components/schemas/ArbitrationRecord"
+                  question_history:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ArbitrationRecord"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+  /sessions/{session_id}/arbitrations:
+    get:
+      summary: The full append-only arbitration history of a session
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Every decision of the session, in append order.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  decisions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ArbitrationRecord"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
   /sessions/{session_id}/profile:
     get:
       summary: Read the proposed + arbitrated semantic profile of a session (spec §14)
@@ -560,6 +634,21 @@ components:
           type: string
         detail:
           type: object
+    ArbitrationRecord:
+      type: object
+      required: [session_id, question_id, decision, timestamp, previous_decision]
+      properties:
+        session_id:
+          type: string
+        question_id:
+          type: string
+        decision:
+          enum: [accept, refuse, verify-first]
+        timestamp:
+          type: number
+        previous_decision:
+          enum: [accept, refuse, verify-first]
+          nullable: true
     ArbitrationDecision:
       type: object
       required: [entry_id, accepted, chosen_role]
