@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Literal, NewType
 import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
-from petrichor.checks import RunId, RunStatus
+from petrichor.checks import CheckFamilyName, KindPattern, RunId, RunStatus
 from petrichor.elicitation import (
     ElicitationCatalog,
     GeneratedQuestion,
@@ -74,8 +74,8 @@ class ContractQuestion(BaseModel):
 
     question_id: QuestionId
     template_id: TemplateId
-    family: str
-    kind: str
+    family: CheckFamilyName
+    kind: KindPattern
     formula: str = Field(min_length=1)
     triage: TriageKind
     risk: int = Field(ge=1, le=5)
