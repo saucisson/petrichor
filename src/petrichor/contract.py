@@ -27,6 +27,12 @@ from petrichor.elicitation import (
     instantiate_questions,
     order_questions,
 )
+from petrichor.examinations import (
+    CounterVariant,
+    ExaminationName,
+    examination_for,
+    safety_counter_variants,
+)
 from petrichor.llm.schemas import SemanticProfile
 from petrichor.petri_canonical import JsonValue, ModelId
 from petrichor.profile import EntryId, ProfileState
@@ -84,6 +90,10 @@ class ContractQuestion(BaseModel):
     role: str = Field(min_length=1)
     status: ContractQuestionStatus
     proofs: tuple[ContractProof, ...] = ()
+    examination: ExaminationName
+    """The MCC examination of the question (spec §17.3, issue #30)."""
+    counter_variant: CounterVariant | None = None
+    """The independent complement verification of a safety question (spec §17.3)."""
 
 
 class ContractProfileEntry(BaseModel):
@@ -198,6 +208,12 @@ def build_contract(
             role=question.role,
             status=latest.get(question.question_id, "pending"),
             proofs=_proofs_for_question(question=question, runs=runs),
+            examination=examination_for(family=question.family, kind=question.kind),
+            counter_variant=(
+                safety_counter_variants(kind=question.kind, formula=question.formula)[1]
+                if question.family == "safety"
+                else None
+            ),
         )
         for question in ordered
     )
