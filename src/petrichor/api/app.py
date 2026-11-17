@@ -33,6 +33,7 @@ import threading
 import time
 from collections.abc import Callable, Iterable
 from http import HTTPStatus
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TypeGuard
 from wsgiref.types import StartResponse, WSGIEnvironment
 
@@ -117,6 +118,17 @@ CONTENT_TYPE_PETRI_JSON = "application/petri+json; version=1.0"
 CONTENT_TYPE_PROBLEM_JSON = "application/problem+json"
 CONTENT_TYPE_CONTRACT_JSON = "application/contract+json; version=1.0"
 CONTENT_TYPE_MARKDOWN = "text/markdown; charset=utf-8"
+UI_PATH = "/ui/"
+UI_INDEX = "index.html"
+CONTENT_TYPE_HTML = "text/html; charset=utf-8"
+CONTENT_TYPE_JAVASCRIPT = "text/javascript; charset=utf-8"
+CONTENT_TYPE_CSS = "text/css; charset=utf-8"
+UI_STATIC_DIRECTORY = Path(__file__).parent / "static"
+UI_CONTENT_TYPES = {
+    "index.html": CONTENT_TYPE_HTML,
+    "app.js": CONTENT_TYPE_JAVASCRIPT,
+    "styles.css": CONTENT_TYPE_CSS,
+}
 HEADER_API_KEY = "X-API-Key"
 PROBLEM_TYPE_BASE_URL = "https://petrichor.dev/problems/"
 WATCHDOG_GRACE_SECONDS = 5
@@ -2057,6 +2069,48 @@ def _dispatch_sessions(  # noqa: PLR0913 - one keyword per routed dependency (AD
     return result
 
 
+def _dispatch_ui(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    method: str,
+    path: str,
+) -> Iterable[bytes] | None:
+    """Serve the static elicitation UI (spec §9, issue #18), or None.
+
+    The UI assets carry no data and are public; every data call they make
+    goes through the authenticated /v1 API.
+    """
+    if method != "GET":
+        return None
+    if path == "/":
+        return _respond(
+            start_response=start_response,
+            status=HTTPStatus.FOUND,
+            content_type=CONTENT_TYPE_HTML,
+            body=b"",
+            extra_headers=[("Location", UI_PATH)],
+        )
+    if path == UI_PATH:
+        path = UI_PATH + UI_INDEX
+    if path.startswith(UI_PATH):
+        name = path.removeprefix(UI_PATH)
+        content_type = UI_CONTENT_TYPES.get(name)
+        if content_type is None:
+            return None
+        asset = UI_STATIC_DIRECTORY / name
+        if not asset.is_file():
+            return None
+        logger.debug("api_ui_asset_served", path=path, bytes=asset.stat().st_size)
+        return _respond(
+            start_response=start_response,
+            status=HTTPStatus.OK,
+            content_type=content_type,
+            body=asset.read_bytes(),
+        )
+    return None
+
+
 def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
     *,
     settings: ApiSettings,
@@ -2076,6 +2130,12 @@ def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
         method = environ.get("REQUEST_METHOD", "GET").upper()
         path = environ.get("PATH_INFO", "/")
         logger.debug("api_request_received", method=method, path=path)
+        # The static UI assets carry no data and are public (spec §9, issue #18).
+        routed = _dispatch_ui(
+            environ=environ, start_response=start_response, method=method, path=path
+        )
+        if routed is not None:
+            return routed
         if not _is_authorized(environ=environ, settings=settings):
             logger.warning("api_request_unauthorized", method=method, path=path)
             return _problem_response(
