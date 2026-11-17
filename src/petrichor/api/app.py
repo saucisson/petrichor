@@ -39,6 +39,7 @@ from wsgiref.types import StartResponse, WSGIEnvironment
 import structlog
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from petrichor.arbitration import ArbitrationDecisionKind, ArbitrationStore
 from petrichor.checks import (
     FAMILY_PATTERNS,
     CheckCompleted,
@@ -51,6 +52,7 @@ from petrichor.checks import (
     RunId,
     run_key,
 )
+from petrichor.elicitation import QuestionId
 from petrichor.insitu import build_net_overlay
 from petrichor.petri_canonical import (
     Arc,
@@ -97,6 +99,8 @@ QUALIFICATION_PATH = "/v1/qualification"
 SESSIONS_PATH = "/v1/sessions"
 SESSION_PATH_PREFIX = "/v1/sessions/"
 SESSION_JOURNAL_SUFFIX = "/journal"
+ARBITRATION_REQUESTS_SUFFIX = "/arbitration-requests"
+ARBITRATIONS_SUFFIX = "/arbitrations"
 SESSION_PROFILE_SUFFIX = "/profile"
 SESSION_ARBITRATE_SUFFIX = "/profile/arbitrate"
 SESSION_COVERAGE_SUFFIX = "/coverage"
@@ -1534,6 +1538,39 @@ def _dispatch_session_insitu(
     return None
 
 
+def _dispatch_session_arbitration(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    method: str,
+    remainder: str,
+    session_store: SessionStore,
+    arbitration_store: ArbitrationStore,
+) -> Iterable[bytes] | None:
+    """Route the arbitration sub-resources of a session, or None (spec §4.8, issue #16)."""
+    if remainder.endswith(ARBITRATION_REQUESTS_SUFFIX):
+        session_id = remainder[: -len(ARBITRATION_REQUESTS_SUFFIX)]
+        if method == "POST" and session_id and "/" not in session_id:
+            return _post_arbitration_request(
+                environ=environ,
+                start_response=start_response,
+                session_store=session_store,
+                arbitration_store=arbitration_store,
+                session_id=session_id,
+            )
+    elif remainder.endswith(ARBITRATIONS_SUFFIX):
+        session_id = remainder[: -len(ARBITRATIONS_SUFFIX)]
+        if method == "GET" and session_id and "/" not in session_id:
+            return _get_arbitrations(
+                environ=environ,
+                start_response=start_response,
+                session_store=session_store,
+                arbitration_store=arbitration_store,
+                session_id=session_id,
+            )
+    return None
+
+
 def _dispatch_session_profile(
     *,
     environ: WSGIEnvironment,
@@ -1574,7 +1611,165 @@ def _dispatch_session_profile(
     return None
 
 
-def _dispatch_sessions(
+class ArbitrationRequestBody(BaseModel):
+    """The body of ``POST /v1/sessions/{sid}/arbitration-requests`` (spec §4.8)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    question_id: QuestionId = Field(min_length=1)
+    decision: ArbitrationDecisionKind
+
+
+def _post_arbitration_request(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    session_store: SessionStore,
+    arbitration_store: ArbitrationStore,
+    session_id: str,
+) -> Iterable[bytes]:
+    """Accept, refuse or revise one question card; the previous decision stays (spec §12.7)."""
+    if session_store.get(session_id=SessionId(session_id)) is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="session_not_found",
+                detail=f"No session with id {session_id!r}.",
+            ),
+        )
+    try:
+        length = int(environ.get("CONTENT_LENGTH", "") or 0)
+    except ValueError:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.BAD_REQUEST,
+                reason="invalid_content_length",
+                detail="The Content-Length header is not an integer.",
+            ),
+        )
+    body = environ["wsgi.input"].read(length)
+    try:
+        payload = ArbitrationRequestBody.model_validate(json.loads(body.decode("utf-8")))
+    except (UnicodeDecodeError, json.JSONDecodeError, ValidationError) as error:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.UNPROCESSABLE_ENTITY,
+                reason="invalid_arbitration_request",
+                detail=f"The arbitration request body is invalid: {error}",
+            ),
+        )
+    record = arbitration_store.decide(
+        session_id=SessionId(session_id),
+        question_id=payload.question_id,
+        decision=payload.decision,
+    )
+    session_store.append_journal_entry(
+        session_id=SessionId(session_id),
+        event="arbitration_decided",
+        detail={
+            "question_id": str(payload.question_id),
+            "decision": payload.decision,
+            "previous_decision": record.previous_decision,
+        },
+    )
+    logger.debug(
+        "api_arbitration_decided",
+        session_id=session_id,
+        question_id=str(payload.question_id),
+        decision=payload.decision,
+        previous_decision=record.previous_decision,
+    )
+    history = arbitration_store.for_question(
+        session_id=SessionId(session_id), question_id=payload.question_id
+    )
+    body_out = json.dumps(
+        {
+            "record": record.model_dump(mode="json"),
+            "question_history": [r.model_dump(mode="json") for r in history],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.CREATED,
+        content_type=CONTENT_TYPE_JSON,
+        body=body_out.encode("utf-8"),
+    )
+
+
+def _get_arbitrations(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    session_store: SessionStore,
+    arbitration_store: ArbitrationStore,
+    session_id: str,
+) -> Iterable[bytes]:
+    """The full append-only arbitration history of a session (spec §4.8)."""
+    if session_store.get(session_id=SessionId(session_id)) is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="session_not_found",
+                detail=f"No session with id {session_id!r}.",
+            ),
+        )
+    history = arbitration_store.history(session_id=SessionId(session_id))
+    logger.debug("api_arbitrations_read", session_id=session_id, decisions=len(history))
+    body_out = json.dumps(
+        {"decisions": [r.model_dump(mode="json") for r in history]},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.OK,
+        content_type=CONTENT_TYPE_JSON,
+        body=body_out.encode("utf-8"),
+    )
+
+
+def _dispatch_sessions_root(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    method: str,
+    store: ModelStore,
+    session_store: SessionStore,
+) -> Iterable[bytes] | None:
+    """Route the /v1/sessions collection, or None when the path is not it."""
+    if method == "POST":
+        return _post_session(
+            environ=environ,
+            start_response=start_response,
+            store=store,
+            session_store=session_store,
+        )
+    if method == "GET":
+        return _get_sessions(
+            environ=environ, start_response=start_response, session_store=session_store
+        )
+    return _problem_response(
+        start_response=start_response,
+        environ=environ,
+        payload=_problem(
+            status=HTTPStatus.METHOD_NOT_ALLOWED,
+            reason="method_not_allowed",
+            detail=f"{method} is not supported on {SESSIONS_PATH}.",
+        ),
+    )
+
+
+def _dispatch_sessions(  # noqa: PLR0913 - one keyword per routed dependency (ADR-0003)
     *,
     environ: WSGIEnvironment,
     start_response: StartResponse,
@@ -1584,68 +1779,65 @@ def _dispatch_sessions(
     session_store: SessionStore,
     arbitrator: ProfileArbitrator | None = None,
     state_graph_explorer: StateGraphExplorer | None = None,
+    arbitration_store: ArbitrationStore | None = None,
 ) -> Iterable[bytes] | None:
     """Route the /v1/sessions resources, or return None when the path is not one."""
     result: Iterable[bytes] | None = None
     if path == SESSIONS_PATH:
-        if method == "POST":
-            result = _post_session(
-                environ=environ,
-                start_response=start_response,
-                store=store,
-                session_store=session_store,
-            )
-        elif method == "GET":
-            result = _get_sessions(
-                environ=environ, start_response=start_response, session_store=session_store
-            )
-        else:
-            result = _problem_response(
-                start_response=start_response,
-                environ=environ,
-                payload=_problem(
-                    status=HTTPStatus.METHOD_NOT_ALLOWED,
-                    reason="method_not_allowed",
-                    detail=f"{method} is not supported on {SESSIONS_PATH}.",
-                ),
-            )
+        result = _dispatch_sessions_root(
+            environ=environ,
+            start_response=start_response,
+            method=method,
+            store=store,
+            session_store=session_store,
+        )
     elif path.startswith(SESSION_PATH_PREFIX):
         remainder = path.removeprefix(SESSION_PATH_PREFIX)
-        if remainder.endswith(SESSION_JOURNAL_SUFFIX):
-            session_id = remainder[: -len(SESSION_JOURNAL_SUFFIX)]
-            if method == "GET" and session_id and "/" not in session_id:
-                result = _get_session_journal(
-                    environ=environ,
-                    start_response=start_response,
-                    session_store=session_store,
-                    session_id=session_id,
-                )
-        elif method == "GET" and remainder and "/" not in remainder:
-            result = _get_session(
-                environ=environ,
-                start_response=start_response,
-                session_store=session_store,
-                session_id=remainder,
-            )
-        else:
-            result = _dispatch_session_insitu(
+        if arbitration_store is not None:
+            result = _dispatch_session_arbitration(
                 environ=environ,
                 start_response=start_response,
                 method=method,
                 remainder=remainder,
-                store=store,
                 session_store=session_store,
-                arbitrator=arbitrator,
-                state_graph_explorer=state_graph_explorer,
+                arbitration_store=arbitration_store,
             )
-            if result is None and arbitrator is not None:
-                result = _dispatch_session_profile(
+        if result is None:
+            if remainder.endswith(SESSION_JOURNAL_SUFFIX):
+                session_id = remainder[: -len(SESSION_JOURNAL_SUFFIX)]
+                if method == "GET" and session_id and "/" not in session_id:
+                    result = _get_session_journal(
+                        environ=environ,
+                        start_response=start_response,
+                        session_store=session_store,
+                        session_id=session_id,
+                    )
+            elif method == "GET" and remainder and "/" not in remainder:
+                result = _get_session(
+                    environ=environ,
+                    start_response=start_response,
+                    session_store=session_store,
+                    session_id=remainder,
+                )
+            else:
+                result = _dispatch_session_insitu(
                     environ=environ,
                     start_response=start_response,
                     method=method,
                     remainder=remainder,
+                    store=store,
+                    session_store=session_store,
                     arbitrator=arbitrator,
+                    state_graph_explorer=state_graph_explorer,
                 )
+                if result is None and arbitrator is not None:
+                    result = _dispatch_session_profile(
+                        environ=environ,
+                        start_response=start_response,
+                        method=method,
+                        remainder=remainder,
+                        arbitrator=arbitrator,
+                    )
         if result is None:
             result = _problem_response(
                 start_response=start_response,
@@ -1672,6 +1864,7 @@ def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
     qualification: QualificationLookup | None = None,
     state_graph_explorer: StateGraphExplorer | None = None,
     static_resolver: StaticResolver | None = None,
+    arbitration_store: ArbitrationStore | None = None,
 ) -> WSGIApp:
     """Build the WSGI application: auth first, then routing and negotiation."""
 
@@ -1724,6 +1917,7 @@ def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
                 session_store=session_store,
                 arbitrator=arbitrator,
                 state_graph_explorer=state_graph_explorer,
+                arbitration_store=arbitration_store,
             )
         if routed is not None:
             return routed
