@@ -21,6 +21,7 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from petrichor.checks import FAMILY_PATTERNS, CheckFamilyName, KindPattern
+from petrichor.profile import GroupId
 from petrichor.triage import STATIC_KINDS, TriageKind
 
 if TYPE_CHECKING:
@@ -73,7 +74,7 @@ class CoverageGridEntry(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    group_id: str = Field(min_length=1)
+    group_id: GroupId = Field(min_length=1)
     label: str = Field(min_length=1)
     role: str = Field(min_length=1)
 
@@ -101,7 +102,7 @@ class GeneratedQuestion(BaseModel):
     triage: TriageKind
     risk: int = Field(ge=1, le=5)
     cost: int = Field(ge=0)
-    covers: tuple[str, ...]
+    covers: tuple[GroupId, ...]
     """The coverage groups this question mentions (spec §14.6)."""
 
     scenario: str = Field(min_length=1)
@@ -131,7 +132,7 @@ def load_catalog(*, path: Path = CATALOG_PATH) -> ElicitationCatalog:
     return catalog
 
 
-def question_id(*, template_id: TemplateId, group_id: str, formula: str) -> QuestionId:
+def question_id(*, template_id: TemplateId, group_id: GroupId, formula: str) -> QuestionId:
     """The stable identifier of a question: content hash of template + group + formula."""
     material = f"{template_id}\n{group_id}\n{formula}"
     digest = hashlib.sha256(material.encode("utf-8")).hexdigest()
@@ -165,9 +166,11 @@ def instantiate_questions(
         for entry in profile.entries:
             if not entry.role.startswith(template.role):
                 continue
-            group = next(
-                (g.group_id for g in catalog.coverage_grid if g.role == template.role),
-                entry.id,
+            group = GroupId(
+                next(
+                    (g.group_id for g in catalog.coverage_grid if g.role == template.role),
+                    entry.id,
+                )
             )
             formula = _instantiate_formula(template=template, elements=entry.elements, model=model)
             questions.append(
@@ -191,23 +194,25 @@ def instantiate_questions(
     logger.debug(
         "elicitation_questions_generated",
         questions=len(questions),
-        statique=sum(1 for q in questions if q.triage == "statique"),
-        mc=sum(1 for q in questions if q.triage == "MC"),
+        statique=sum(1 for question in questions if question.triage == "statique"),
+        mc=sum(1 for question in questions if question.triage == "MC"),
     )
     return tuple(questions)
 
 
 def order_questions(
-    *, questions: tuple[GeneratedQuestion, ...], uncovered_groups: frozenset[str] | set[str]
+    *,
+    questions: tuple[GeneratedQuestion, ...],
+    uncovered_groups: frozenset[GroupId] | set[GroupId],
 ) -> tuple[GeneratedQuestion, ...]:
     """Order the solicitation: holes first, then risk desc x cost asc (§14.3/§14.6)."""
     ordered = sorted(
         questions,
-        key=lambda q: (
-            0 if any(group in uncovered_groups for group in q.covers) else 1,
-            -q.risk,
-            q.cost,
-            q.question_id,
+        key=lambda question: (
+            0 if any(group in uncovered_groups for group in question.covers) else 1,
+            -question.risk,
+            question.cost,
+            question.question_id,
         ),
     )
     logger.debug(
