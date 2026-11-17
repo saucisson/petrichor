@@ -110,7 +110,7 @@ paths:
           required: true
           schema:
             type: string
-            enum: [reachability, safety, liveness, recovery, deadlock]
+            enum: [reachability, safety, liveness, recovery, deadlock, structural]
       requestBody:
         required: true
         content:
@@ -827,7 +827,7 @@ components:
           enum: [running, done, error]
         family:
           type: string
-          enum: [reachability, safety, liveness, recovery, deadlock]
+          enum: [reachability, safety, liveness, recovery, deadlock, structural]
         kind:
           type: string
         formula:

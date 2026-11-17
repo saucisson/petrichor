@@ -15,8 +15,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from petrichor.petri_canonical import HASH_PREFIX, JsonValue
 
-CheckFamily = Literal["reachability", "safety", "liveness", "recovery", "deadlock"]
-"""The five check families of spec §12.1; one endpoint per family, never polymorphic."""
+CheckFamily = Literal["reachability", "safety", "liveness", "recovery", "deadlock", "structural"]
+"""The six check families of spec §12.1; one endpoint per family, never polymorphic."""
 
 Verdict = Literal["satisfied", "violated", "unknown"]
 """The closed set of normalized verdicts a driver may return."""

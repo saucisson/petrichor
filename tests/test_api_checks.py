@@ -241,7 +241,7 @@ class TestPostCheck:
 
     def test_unknown_family_returns_404(self) -> None:
         client, model_id, _ = build_client(FakeRunner())
-        response = post_check(client, "structural", check_payload(model_id))
+        response = post_check(client, "bogus", check_payload(model_id))
         assert response.status_code == 404
         assert response.json()["extensions"]["reason"] == "check_family_not_found"
 

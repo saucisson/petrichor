@@ -1,0 +1,135 @@
+{
+  "version": "v1",
+  "templates": [
+    {
+      "id": "tpl_res_shared_more",
+      "role": "ressource partagée",
+      "guideword": "More",
+      "family": "safety",
+      "kind": "safety.invariant",
+      "risk": 5,
+      "cost": 0,
+      "scenario": "double détention",
+      "formula_template": "AG ({place} <= 1)"
+    },
+    {
+      "id": "tpl_res_shared_aswell",
+      "role": "ressource partagée",
+      "guideword": "As well as",
+      "family": "safety",
+      "kind": "safety.conservation",
+      "risk": 4,
+      "cost": 0,
+      "scenario": "perte / duplication",
+      "formula_template": "AG ({place} + {place_b} + {place_c} == 3)"
+    },
+    {
+      "id": "tpl_res_shared_no",
+      "role": "ressource partagée",
+      "guideword": "No",
+      "family": "recovery",
+      "kind": "recovery.unconditional",
+      "risk": 4,
+      "cost": 1,
+      "scenario": "captive à jamais",
+      "formula_template": "AG EF ({place} >= 1)"
+    },
+    {
+      "id": "tpl_autom_state_more",
+      "role": "état d'automate",
+      "guideword": "More",
+      "family": "safety",
+      "kind": "safety.state_invariant",
+      "risk": 3,
+      "cost": 0,
+      "scenario": "états simultanés",
+      "formula_template": "AG ({place} <= 1)"
+    },
+    {
+      "id": "tpl_critsec_no",
+      "role": "section critique",
+      "guideword": "No",
+      "family": "liveness",
+      "kind": "liveness.conditional",
+      "risk": 5,
+      "cost": 2,
+      "scenario": "gel en section critique",
+      "formula_template": "AG ({place} == 1 -> AF {place} == 0)"
+    },
+    {
+      "id": "tpl_hold_less",
+      "role": "détention intermédiaire",
+      "guideword": "Less",
+      "family": "liveness",
+      "kind": "liveness.conditional_disj",
+      "risk": 4,
+      "cost": 2,
+      "scenario": "geste commencé, jamais fini",
+      "formula_template": "AG ({place} == 1 -> AF ({place} == 0 or {place_b} == 1))"
+    },
+    {
+      "id": "tpl_global_no",
+      "role": "motif global",
+      "guideword": "No",
+      "family": "deadlock",
+      "kind": "deadlock",
+      "risk": 5,
+      "cost": 1,
+      "scenario": "impasse totale",
+      "formula_template": "EF DEADLOCK"
+    },
+    {
+      "id": "tpl_global_late",
+      "role": "motif global",
+      "guideword": "Late",
+      "family": "liveness",
+      "kind": "liveness.unconditional",
+      "risk": 3,
+      "cost": 3,
+      "scenario": "famine sous vivacité globale",
+      "formula_template": "AG AF ({place} >= 1)"
+    },
+    {
+      "id": "tpl_acq_early",
+      "role": "acquisition",
+      "guideword": "Early",
+      "family": "structural",
+      "kind": "structural.precondition",
+      "risk": 3,
+      "cost": 0,
+      "scenario": "ordre d'acquisition inversé",
+      "formula_template": "AG ({place} <= 1)"
+    },
+    {
+      "id": "tpl_rel_early",
+      "role": "libération",
+      "guideword": "Early",
+      "family": "structural",
+      "kind": "structural.producer",
+      "risk": 3,
+      "cost": 0,
+      "scenario": "restitution anticipée",
+      "formula_template": "AG ({place} <= 1)"
+    },
+    {
+      "id": "tpl_flow_reverse",
+      "role": "flux critique",
+      "guideword": "Reverse",
+      "family": "structural",
+      "kind": "structural.unique_producer",
+      "risk": 4,
+      "cost": 0,
+      "scenario": "chemin court-circuité",
+      "formula_template": "AG ({place} <= 1)"
+    }
+  ],
+  "coverage_grid": [
+    {"group_id": "grp_reflexion", "label": "réflexion", "role": "état d'automate"},
+    {"group_id": "grp_detention", "label": "détention", "role": "détention intermédiaire"},
+    {"group_id": "grp_repas", "label": "repas", "role": "section critique"},
+    {"group_id": "grp_ressource", "label": "ressource", "role": "ressource partagée"},
+    {"group_id": "grp_acq_gauche", "label": "acquisition gauche", "role": "acquisition"},
+    {"group_id": "grp_acq_droite", "label": "acquisition droite", "role": "acquisition"},
+    {"group_id": "grp_liberation", "label": "libération", "role": "libération"}
+  ]
+}
