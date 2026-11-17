@@ -28,6 +28,7 @@ from petrichor.state_graph import StateGraphUnsupportedError
 from petrichor.triage import (
     STATIC_KINDS,
     CapacityReport,
+    GuardKind,
     NonVacuityGuard,
     StaticUndecidableError,
 )
@@ -1007,6 +1008,53 @@ def resolve_static_payload(
     }
 
 
+def _ef_ag_guard(
+    *,
+    pattern: re.Pattern[str],
+    guard: GuardKind,
+    label: str,
+    text: str,
+    initial: dict[str, int],
+    vacuous_if_holds: bool,
+) -> NonVacuityGuard | None:
+    """Guard of an ``EF φ`` / ``AG ψ`` formula on the initial marking, None when not one."""
+    match = pattern.fullmatch(text)
+    if match is None:
+        return None
+    comparison = _parse_comparison(text=match.group("inner"))
+    if comparison is None:
+        return None
+    place, operator, value = comparison
+    if place not in initial:
+        return NonVacuityGuard(
+            guard=guard,
+            status="not_applicable",
+            detail=f"Place {place!r} of the guard is not in the model.",
+        )
+    holds = _satisfies(place=place, operator=operator, value=value, marking=initial)
+    formula_text = f"{label} ({place} {operator} {value})"
+    vacuous = holds if vacuous_if_holds else not holds
+    if vacuous:
+        detail = (
+            f"{formula_text}: the initial marking already satisfies it,"
+            " the property is vacuous on this model."
+            if vacuous_if_holds
+            else f"{formula_text}: the initial marking already violates it,"
+            " the property is vacuous on this model."
+        )
+    else:
+        detail = (
+            f"{formula_text}: the initial marking does not satisfy it yet."
+            if vacuous_if_holds
+            else f"{formula_text}: the initial marking satisfies it, the guard holds."
+        )
+    return NonVacuityGuard(
+        guard=guard,
+        status="vacuous" if vacuous else "ok",
+        detail=detail,
+    )
+
+
 def non_vacuity_guard(
     *, model: CanonicalModel, family: CheckFamilyName, kind: KindPattern, formula: str
 ) -> NonVacuityGuard:
@@ -1025,52 +1073,26 @@ def non_vacuity_guard(
             status="not_applicable",
             detail="EF DEADLOCK carries its own deadlock guard, not an EF φ guard (spec §14.4).",
         )
-    ef_match = EF_FORMULA_PATTERN.fullmatch(text)
-    if ef_match is not None:
-        comparison = _parse_comparison(text=ef_match.group("inner"))
-        if comparison is not None:
-            place, operator, value = comparison
-            if place not in initial:
-                return NonVacuityGuard(
-                    guard="ef_phi",
-                    status="not_applicable",
-                    detail=f"Place {place!r} of the guard is not in the model.",
-                )
-            holds = _satisfies(place=place, operator=operator, value=value, marking=initial)
-            formula_text = f"EF ({place} {operator} {value})"
-            return NonVacuityGuard(
-                guard="ef_phi",
-                status="vacuous" if holds else "ok",
-                detail=(
-                    f"{formula_text}: the initial marking already satisfies it,"
-                    " the property is vacuous on this model."
-                    if holds
-                    else f"{formula_text}: the initial marking does not satisfy it yet."
-                ),
-            )
-    ag_match = AG_FORMULA_PATTERN.fullmatch(text)
-    if ag_match is not None:
-        comparison = _parse_comparison(text=ag_match.group("inner"))
-        if comparison is not None:
-            place, operator, value = comparison
-            if place not in initial:
-                return NonVacuityGuard(
-                    guard="ag_psi",
-                    status="not_applicable",
-                    detail=f"Place {place!r} of the guard is not in the model.",
-                )
-            holds = _satisfies(place=place, operator=operator, value=value, marking=initial)
-            formula_text = f"AG ({place} {operator} {value})"
-            return NonVacuityGuard(
-                guard="ag_psi",
-                status="ok" if holds else "vacuous",
-                detail=(
-                    f"{formula_text}: the initial marking satisfies it, the guard holds."
-                    if holds
-                    else f"{formula_text}: the initial marking already violates it,"
-                    " the property is vacuous on this model."
-                ),
-            )
+    ef_guard = _ef_ag_guard(
+        pattern=EF_FORMULA_PATTERN,
+        guard="ef_phi",
+        label="EF",
+        text=text,
+        initial=initial,
+        vacuous_if_holds=True,
+    )
+    if ef_guard is not None:
+        return ef_guard
+    ag_guard = _ef_ag_guard(
+        pattern=AG_FORMULA_PATTERN,
+        guard="ag_psi",
+        label="AG",
+        text=text,
+        initial=initial,
+        vacuous_if_holds=False,
+    )
+    if ag_guard is not None:
+        return ag_guard
     return NonVacuityGuard(
         guard=None,
         status="not_applicable",

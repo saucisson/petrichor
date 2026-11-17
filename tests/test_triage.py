@@ -141,13 +141,15 @@ class TestTriageProperties:
     def test_property_triage_follows_family_and_capacity(
         self, kind: str, place_count: int, state_count: int | None, probed: bool
     ) -> None:
-        cap = capacity(place_count=place_count, state_count=state_count) if probed else None
-        triage = triage_question(kind=KindPattern(kind), capacity=cap)
+        capacity_report = (
+            capacity(place_count=place_count, state_count=state_count) if probed else None
+        )
+        triage = triage_question(kind=KindPattern(kind), capacity=capacity_report)
         assert triage.kind in {"statique", "MC", "dégradé"}
         assert triage.justification
         if kind not in STATIC_KINDS:
             assert triage.kind == "MC"
-        elif cap is None or not cap.within_static_capacity:
+        elif capacity_report is None or not capacity_report.within_static_capacity:
             assert triage.kind == "dégradé"
         else:
             assert triage.kind == "statique"
@@ -161,13 +163,13 @@ class TestTriageProperties:
     def test_property_capacity_flags_are_exact(
         self, place_count: int, state_count: int | None
     ) -> None:
-        cap = capacity(place_count=place_count, state_count=state_count)
-        assert cap.within_invariant_capacity == (
+        capacity_report = capacity(place_count=place_count, state_count=state_count)
+        assert capacity_report.within_invariant_capacity == (
             place_count <= MAX_PLACES_FOR_INVARIANT_ENUMERATION
         )
-        assert cap.within_state_capacity == (state_count is not None)
-        assert cap.within_static_capacity == (
-            cap.within_invariant_capacity and cap.within_state_capacity
+        assert capacity_report.within_state_capacity == (state_count is not None)
+        assert capacity_report.within_static_capacity == (
+            capacity_report.within_invariant_capacity and capacity_report.within_state_capacity
         )
 
 
