@@ -589,7 +589,6 @@ def _post_check(  # noqa: PLR0913 - one keyword per routed dependency (ADR-0003)
             "model": json.loads(canonical_json(payload=semantic_projection(model=model))),
         },
     )
-    # Triage from the pattern family and the current capacity (spec §14.2).
     triage, guard, static_output = _triage_and_resolve_static(
         static_resolver=static_resolver,
         model=model,
@@ -664,7 +663,6 @@ def _post_check(  # noqa: PLR0913 - one keyword per routed dependency (ADR-0003)
     run, created = result.run, result.created
     if created:
         if static_output is not None:
-            # Static resolution: no MC run, no tool time, no watchdog (spec §18.1, §14.2).
             run_store.mark_done(
                 run_id=run.run_id,
                 output=static_output,
