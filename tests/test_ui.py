@@ -78,6 +78,11 @@ class TestStaticUi:
         # the Synthèse step negotiates the Markdown export (spec §4.8).
         assert "run.output.verdict" in script
         assert "text/markdown" in script
+        # Question cards show the cross-verification status and, on controversy,
+        # both camps; the Synthèse step lists the arbitration journal (issue #31).
+        assert "cross_status" in script
+        assert "controversial" in script
+        assert "journal-list" in script
         # Session reprenable: the session id is persisted client-side (P11).
         assert "petrichor.sessionId" in script
 

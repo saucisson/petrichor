@@ -148,6 +148,8 @@ class TestOrchestratorConcordance:
         assert result.arbitration.status == "not_needed"
         assert len(result.verdicts) == 2
         assert all(v.verdict == "satisfied" for v in result.verdicts)
+        # Each per-tool verdict carries the pinned tool version (issue #31, spec §17.4).
+        assert all(v.tool_version == EngineVersion("1.0.0") for v in result.verdicts)
 
     def test_both_engines_agree_violated(self) -> None:
         pairing = default_pairing_matrix()

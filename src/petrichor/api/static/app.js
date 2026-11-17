@@ -109,6 +109,23 @@ async function loadQuestions() {
     const status = document.createElement("p");
     status.className = "status";
     status.textContent = "Statut : " + question.status;
+    const cross = document.createElement("p");
+    cross.className = "cross-status";
+    if (question.cross_status === "verified_by_n") {
+      cross.textContent = "Vérifiée par " + question.verified_by + " outils.";
+    } else if (question.cross_status === "controversial") {
+      cross.textContent = "Clause controversée — remontée à l'ingénieur, jamais tranchée ici.";
+      const camps = document.createElement("ul");
+      camps.className = "controversy-camps";
+      for (const proof of question.proofs) {
+        const camp = document.createElement("li");
+        camp.textContent = proof.tool_version + " : verdict " + (proof.verdict || "—");
+        camps.append(camp);
+      }
+      cross.append(camps);
+    } else {
+      cross.textContent = "Non vérifiée.";
+    }
     const decisions = document.createElement("div");
     decisions.className = "decisions";
     for (const decision of ["refuse", "accept", "verify-first"]) {
@@ -118,7 +135,7 @@ async function loadQuestions() {
       button.addEventListener("click", () => decide(question.question_id, decision));
       decisions.append(button);
     }
-    card.append(formula, status, decisions);
+    card.append(formula, status, cross, decisions);
     list.append(card);
   }
 }
@@ -161,6 +178,26 @@ async function loadContractMarkdown() {
     return;
   }
   preview.textContent = await response.text();
+  await loadJournal();
+}
+
+async function loadJournal() {
+  const response = await api("/v1/sessions/" + state.sessionId + "/contract", {
+    headers: headers({ Accept: "application/contract+json; version=1.0" }),
+  });
+  const list = document.getElementById("journal-list");
+  if (!list) return;
+  list.textContent = "";
+  if (response.status !== 200) return;
+  const contract = await response.json();
+  for (const entry of contract.journal) {
+    const item = document.createElement("li");
+    const detail = entry.detail && typeof entry.detail === "object"
+      ? Object.entries(entry.detail).map(([key, value]) => key + "=" + value).join(", ")
+      : "";
+    item.textContent = entry.event + (detail ? " — " + detail : "");
+    list.append(item);
+  }
 }
 
 function downloadMarkdown() {

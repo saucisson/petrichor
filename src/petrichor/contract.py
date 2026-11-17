@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Literal, NewType
 import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
-from petrichor.checks import CheckFamilyName, KindPattern, RunId, RunStatus
+from petrichor.checks import CheckFamilyName, KindPattern, RunId, RunStatus, ToolVersion
 from petrichor.elicitation import (
     ElicitationCatalog,
     GeneratedQuestion,
@@ -59,6 +59,14 @@ RunLink = NewType("RunLink", str)
 type ContractQuestionStatus = Literal["pending", "accept", "refuse", "verify-first"]
 """The status of a question card: its latest arbitration, or pending."""
 
+type CrossStatus = Literal["unverified", "verified_by_n", "controversial"]
+"""The cross-verification status of a clause (spec §17.4, issue #31).
+
+``verified_by_n`` when every done proof agrees on one verdict;
+``controversial`` when done proofs disagree — reported, never resolved here;
+``unverified`` while no proof is done.
+"""
+
 
 class ContractProof(BaseModel):
     """One available proof of a question: a run of the session, by link (spec §4.8)."""
@@ -71,6 +79,15 @@ class ContractProof(BaseModel):
     triage: TriageKind
     verdict: str | None = None
     """The verdict of a done run, when the run output carries one."""
+
+    tool_version: ToolVersion
+    """The pinned version of the tool that executed the run (spec §12.5)."""
+
+    technique: str | None = None
+    """The technique reported by the run output, when present."""
+
+    cost_tool_seconds: float | None = Field(default=None, ge=0)
+    """The measured tool time of the run, when the output carries a cost."""
 
 
 class ContractQuestion(BaseModel):
@@ -94,6 +111,10 @@ class ContractQuestion(BaseModel):
     """The MCC examination of the question (spec §17.3, issue #30)."""
     counter_variant: CounterVariant | None = None
     """The independent complement verification of a safety question (spec §17.3)."""
+    cross_status: CrossStatus
+    """The computed cross-verification status of the clause (spec §17.4, issue #31)."""
+    verified_by: int = Field(ge=0)
+    """How many done proofs agree on the verdict; 0 when unverified or controversial."""
 
 
 class ContractProfileEntry(BaseModel):
@@ -164,6 +185,9 @@ def _proofs_for_question(
         if run.formula != question.formula:
             continue
         verdict = run.output.get("verdict") if run.output is not None else None
+        technique = run.output.get("technique") if run.output is not None else None
+        cost = run.output.get("cost") if run.output is not None else None
+        cost_tool_seconds = cost.get("tool_seconds") if isinstance(cost, dict) else None
         proofs.append(
             ContractProof(
                 run_id=run.run_id,
@@ -171,9 +195,34 @@ def _proofs_for_question(
                 status=run.status,
                 triage=run.triage.kind,
                 verdict=verdict if isinstance(verdict, str) else None,
+                tool_version=run.tool_version,
+                technique=technique if isinstance(technique, str) else None,
+                cost_tool_seconds=(
+                    float(cost_tool_seconds)
+                    if isinstance(cost_tool_seconds, (int, float))
+                    else None
+                ),
             )
         )
     return tuple(proofs)
+
+
+def cross_status_for_proofs(*, proofs: tuple[ContractProof, ...]) -> tuple[CrossStatus, int]:
+    """The cross-verification status computed from the done proofs (spec §17.4, issue #31).
+
+    Every done proof agreeing on one verdict → ``verified_by_n`` with the
+    count of agreeing proofs. Done proofs disagreeing → ``controversial``
+    (reported to the engineer, never resolved here). No done proof →
+    ``unverified``.
+    """
+    verdicts = [
+        proof.verdict for proof in proofs if proof.status == "done" and proof.verdict is not None
+    ]
+    if not verdicts:
+        return "unverified", 0
+    if len(set(verdicts)) == 1:
+        return "verified_by_n", len(verdicts)
+    return "controversial", 0
 
 
 def build_contract(
@@ -194,8 +243,12 @@ def build_contract(
         uncovered_groups={group.group_id for group in profile_state.uncovered_groups()},
     )
     latest = _latest_decisions(arbitration_history=arbitration_history)
-    questions = tuple(
-        ContractQuestion(
+
+    def _with_cross_status(question: GeneratedQuestion) -> ContractQuestion:
+        """Build one contract question with its computed cross-verification status."""
+        proofs = _proofs_for_question(question=question, runs=runs)
+        cross_status, verified_by = cross_status_for_proofs(proofs=proofs)
+        return ContractQuestion(
             question_id=question.question_id,
             template_id=question.template_id,
             family=question.family,
@@ -207,16 +260,18 @@ def build_contract(
             scenario=question.scenario,
             role=question.role,
             status=latest.get(question.question_id, "pending"),
-            proofs=_proofs_for_question(question=question, runs=runs),
+            proofs=proofs,
             examination=examination_for(family=question.family, kind=question.kind),
             counter_variant=(
                 safety_counter_variants(kind=question.kind, formula=question.formula)[1]
                 if question.family == "safety"
                 else None
             ),
+            cross_status=cross_status,
+            verified_by=verified_by,
         )
-        for question in ordered
-    )
+
+    questions = tuple(_with_cross_status(question) for question in ordered)
     arbitrated_ids = {
         arbitration.entry_id: arbitration for arbitration in profile_state.arbitrations
     }
@@ -257,6 +312,15 @@ def build_contract(
 def _iso_timestamp(timestamp: float) -> str:
     """Render a journal timestamp as a deterministic ISO-8601 UTC string."""
     return datetime.fromtimestamp(timestamp, tz=UTC).isoformat()
+
+
+def _render_cross_status(question: ContractQuestion) -> str:
+    """The human-readable cross-verification status of one question (spec §17.4)."""
+    if question.cross_status == "verified_by_n":
+        return f"vérifiée par {question.verified_by} outils"
+    if question.cross_status == "controversial":
+        return "controversée"
+    return "non vérifiée"
 
 
 def render_markdown(*, document: ContractDocument) -> str:
@@ -300,19 +364,25 @@ def render_markdown(*, document: ContractDocument) -> str:
         lines += [
             f"### {family}",
             "",
-            "| ID | Formule | Triage | Risque | Coût | Statut | Preuves |",
+            "| ID | Formule | Triage | Risque | Coût | Statut | Vérif. croisée | Preuves |",
         ]
-        lines.append("| --- | --- | --- | --- | --- | --- | --- |")
+        lines.append("| --- | --- | --- | --- | --- | --- | --- | --- |")
         for question in (q for q in document.questions if q.family == family):
             proofs = (
                 ", ".join(f"[{proof.run_id}]({proof.link})" for proof in question.proofs)
                 if question.proofs
                 else "—"
             )
+            cross = _render_cross_status(question)
             lines.append(
                 f"| `{question.question_id}` | {question.formula} | {question.triage}"
-                f" | {question.risk} | {question.cost} | {question.status} | {proofs} |"
+                f" | {question.risk} | {question.cost} | {question.status} | {cross} | {proofs} |"
             )
+            if question.cross_status == "controversial":
+                camps = " ; ".join(
+                    f"{proof.tool_version} → {proof.verdict}" for proof in question.proofs
+                )
+                lines.append(f"  - Controverse remontée à l'ingénieur — camps : {camps}.")
         lines.append("")
     lines += ["## Journal", "", "| Horodatage | Événement | Détail |", "| --- | --- | --- |"]
     for journal_entry in document.journal:

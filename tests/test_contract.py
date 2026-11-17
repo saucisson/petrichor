@@ -24,7 +24,14 @@ from petrichor.arbitration import (
     ArbitrationRecord,
     ArbitrationStore,
 )
-from petrichor.checks import CheckFamilyName, CheckQuestion, KindPattern, ToolVersion, run_key
+from petrichor.checks import (
+    FAMILY_PATTERNS,
+    CheckFamilyName,
+    CheckQuestion,
+    KindPattern,
+    ToolVersion,
+    run_key,
+)
 from petrichor.contract import build_contract, render_markdown
 from petrichor.elicitation import QuestionId, load_catalog
 from petrichor.examinations import EXAMINATION_BY_KIND
@@ -140,6 +147,7 @@ def admit_done_run(  # noqa: PLR0913 - one keyword per admitted field (ADR-0003)
     formula: str,
     triage_kind: TriageKind,
     verdict: str,
+    extra_output: dict[str, object] | None = None,
 ) -> str:
     """Admit one run on a question formula, attach it to the session, finish it."""
     question = CheckQuestion(family=family, kind=kind, formula=formula)
@@ -159,7 +167,7 @@ def admit_done_run(  # noqa: PLR0913 - one keyword per admitted field (ADR-0003)
     session_store.append_run(session_id=SessionId(session_id), run_id=run.run_id)
     run_store.mark_done(
         run_id=run.run_id,
-        output={"verdict": verdict},
+        output={"verdict": verdict, **(extra_output or {})},
         command=["mock"],
         measured_seconds=0.1,
     )
@@ -281,6 +289,100 @@ class TestContractExport:
 
         markdown = client.get(f"/v1/sessions/{session_id}/contract", headers=MARKDOWN_HEADERS).text
         assert f"[{run_id}](/v1/runs/{run_id})" in markdown
+
+    def test_cross_status_verified_by_n_and_per_tool_proof_fields(self, tmp_path: Path) -> None:
+        """Concordant proofs expose verdict/technique/cost/version and verified_by_n (#31)."""
+        client, session_store, run_store, arbitrator, _ = build_client(tmp_path)
+        session_id = create_session(client)
+        model_id = client.get(f"/v1/sessions/{session_id}", headers=AUTH_HEADERS).json()["model_id"]
+        propose_and_arbitrate(client, arbitrator, session_id)
+        document = get_contract_json(client, session_id)
+        question = document["questions"][0]
+        family = cast("CheckFamilyName", question["family"])
+        kind = cast("KindPattern", question["kind"])
+        other_kind = next(candidate for candidate in FAMILY_PATTERNS[family] if candidate != kind)
+        admit_done_run(
+            run_store=run_store,
+            session_store=session_store,
+            session_id=session_id,
+            model_id=model_id,
+            family=family,
+            kind=kind,
+            formula=question["formula"],
+            triage_kind="MC",
+            verdict="safe",
+            extra_output={"technique": "explicit", "cost": {"tool_seconds": 0.5}},
+        )
+        admit_done_run(
+            run_store=run_store,
+            session_store=session_store,
+            session_id=session_id,
+            model_id=model_id,
+            family=family,
+            kind=cast("KindPattern", other_kind),
+            formula=question["formula"],
+            triage_kind="MC",
+            verdict="safe",
+        )
+        document = get_contract_json(client, session_id)
+        exported = next(
+            q for q in document["questions"] if q["question_id"] == question["question_id"]
+        )
+        assert exported["cross_status"] == "verified_by_n"
+        assert exported["verified_by"] == 2
+        assert len(exported["proofs"]) == 2
+        proof = exported["proofs"][0]
+        assert proof["tool_version"] == "mock"
+        assert proof["technique"] == "explicit"
+        assert proof["cost_tool_seconds"] == 0.5
+        markdown = client.get(f"/v1/sessions/{session_id}/contract", headers=MARKDOWN_HEADERS).text
+        assert "vérifiée par 2 outils" in markdown
+
+    def test_discordant_proofs_make_the_clause_controversial_with_both_camps(
+        self, tmp_path: Path
+    ) -> None:
+        """Discordant done proofs → controversial, both camps shown, never resolved (#31)."""
+        client, session_store, run_store, arbitrator, _ = build_client(tmp_path)
+        session_id = create_session(client)
+        model_id = client.get(f"/v1/sessions/{session_id}", headers=AUTH_HEADERS).json()["model_id"]
+        propose_and_arbitrate(client, arbitrator, session_id)
+        document = get_contract_json(client, session_id)
+        question = document["questions"][0]
+        family = cast("CheckFamilyName", question["family"])
+        kind = cast("KindPattern", question["kind"])
+        other_kind = next(candidate for candidate in FAMILY_PATTERNS[family] if candidate != kind)
+        admit_done_run(
+            run_store=run_store,
+            session_store=session_store,
+            session_id=session_id,
+            model_id=model_id,
+            family=family,
+            kind=kind,
+            formula=question["formula"],
+            triage_kind="MC",
+            verdict="safe",
+        )
+        admit_done_run(
+            run_store=run_store,
+            session_store=session_store,
+            session_id=session_id,
+            model_id=model_id,
+            family=family,
+            kind=cast("KindPattern", other_kind),
+            formula=question["formula"],
+            triage_kind="MC",
+            verdict="violated",
+        )
+        document = get_contract_json(client, session_id)
+        exported = next(
+            q for q in document["questions"] if q["question_id"] == question["question_id"]
+        )
+        assert exported["cross_status"] == "controversial"
+        assert exported["verified_by"] == 0
+        markdown = client.get(f"/v1/sessions/{session_id}/contract", headers=MARKDOWN_HEADERS).text
+        assert "controversée" in markdown
+        assert "mock → safe" in markdown
+        assert "mock → violated" in markdown
 
     def test_contract_is_replayable_from_session_state(self, tmp_path: Path) -> None:
         client, _, _, arbitrator, _ = build_client(tmp_path)
