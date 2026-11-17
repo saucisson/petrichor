@@ -8,6 +8,7 @@ the session state alone.
 """
 
 from pathlib import Path
+from typing import cast
 
 import httpx
 import structlog.testing
@@ -16,14 +17,14 @@ from pydantic import SecretStr
 from petrichor.api.app import create_app
 from petrichor.api.settings import ApiSettings
 from petrichor.arbitration import ArbitrationStore
-from petrichor.checks import CheckQuestion, ToolVersion, run_key
+from petrichor.checks import CheckFamilyName, CheckQuestion, KindPattern, ToolVersion, run_key
 from petrichor.llm.schemas import ProfileEntry, SemanticProfile
 from petrichor.model_store import ModelStore
 from petrichor.petri_canonical import ModelId
 from petrichor.profile import ProfileArbitrator
 from petrichor.run_store import RunAdmission, RunStore
 from petrichor.session_store import SessionId, SessionStore
-from petrichor.triage import QuestionTriage
+from petrichor.triage import QuestionTriage, TriageKind
 
 FIXTURES = Path(__file__).parent / "fixtures"
 PHILOSOPHES3_PNML = (FIXTURES / "philosophes3.pnml").read_text(encoding="utf-8")
@@ -123,24 +124,24 @@ def admit_done_run(  # noqa: PLR0913 - one keyword per admitted field (ADR-0003)
     session_store: SessionStore,
     session_id: str,
     model_id: str,
-    family: str,
-    kind: str,
+    family: CheckFamilyName,
+    kind: KindPattern,
     formula: str,
-    triage_kind: str,
+    triage_kind: TriageKind,
     verdict: str,
 ) -> str:
     """Admit one run on a question formula, attach it to the session, finish it."""
-    question = CheckQuestion(family=family, kind=kind, formula=formula)  # type: ignore[arg-type]
+    question = CheckQuestion(family=family, kind=kind, formula=formula)
     admission = RunAdmission(
         key=run_key(model_id=ModelId(model_id), question=question),
-        family=family,  # type: ignore[arg-type]
-        kind=kind,  # type: ignore[arg-type]
+        family=family,
+        kind=kind,
         formula=formula,
         model_id=ModelId(model_id),
         timeout_seconds=30,
         tool_version=ToolVersion("mock"),
         session_budget_seconds=600.0,
-        triage=QuestionTriage(kind=triage_kind, justification="preuve disponible"),  # type: ignore[arg-type]
+        triage=QuestionTriage(kind=triage_kind, justification="preuve disponible"),
     )
     admitted = run_store.admit(admission=admission, reservation_seconds=0.0)
     run = admitted.run
@@ -223,8 +224,8 @@ class TestContractExport:
             session_store=session_store,
             session_id=session_id,
             model_id=model_id,
-            family=question["family"],
-            kind=question["kind"],
+            family=cast("CheckFamilyName", question["family"]),
+            kind=cast("KindPattern", question["kind"]),
             formula=question["formula"],
             triage_kind="statique",
             verdict="safe",
@@ -302,12 +303,13 @@ class TestContractExport:
         client, _, _, arbitrator, _ = build_client(tmp_path)
         session_id = create_session(client)
         propose_and_arbitrate(client, arbitrator, session_id)
-        response = client.get(
-            f"/v1/sessions/{session_id}/contract",
-            headers={**AUTH_HEADERS, "Accept": "image/png"},
-        )
-        assert response.status_code == 406
-        assert response.json()["extensions"]["reason"] == "not_acceptable"
+        for unacceptable in ("image/png", "application/json", "text/*"):
+            response = client.get(
+                f"/v1/sessions/{session_id}/contract",
+                headers={**AUTH_HEADERS, "Accept": unacceptable},
+            )
+            assert response.status_code == 406
+            assert response.json()["extensions"]["reason"] == "not_acceptable"
 
     def test_contract_401_without_api_key(self, tmp_path: Path) -> None:
         client, _, _, _, _ = build_client(tmp_path)
