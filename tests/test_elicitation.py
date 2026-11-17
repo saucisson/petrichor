@@ -10,10 +10,10 @@ import json
 from typing import TYPE_CHECKING
 
 import pytest
+import structlog.testing
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from philosophes3 import build_philosophes3
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 from petrichor.checks import FAMILY_PATTERNS
 from petrichor.elicitation import (
@@ -25,6 +25,9 @@ from petrichor.elicitation import (
     question_id,
 )
 from petrichor.llm.schemas import ProfileEntry, SemanticProfile
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 PHILOSOPHES3_PROFILE = SemanticProfile(
     entries=(
@@ -119,13 +122,13 @@ class TestInstantiationOnPhilosophes3:
             catalog=catalog, profile=PHILOSOPHES3_PROFILE, model=model
         )
         assert len(questions) == 11
-        assert len({q.question_id for q in questions}) == 11
+        assert len({question.question_id for question in questions}) == 11
         for question in questions:
             assert question.question_id.startswith("q_")
             assert question.formula
             assert question.kind in FAMILY_PATTERNS[question.family]
-        statique = [q for q in questions if q.triage == "statique"]
-        mc = [q for q in questions if q.triage == "MC"]
+        statique = [question for question in questions if question.triage == "statique"]
+        mc = [question for question in questions if question.triage == "MC"]
         assert len(statique) == 6
         assert len(mc) == 5
 
@@ -134,8 +137,10 @@ class TestInstantiationOnPhilosophes3:
         model = build_philosophes3()
         first = instantiate_questions(catalog=catalog, profile=PHILOSOPHES3_PROFILE, model=model)
         second = instantiate_questions(catalog=catalog, profile=PHILOSOPHES3_PROFILE, model=model)
-        assert [q.question_id for q in first] == [q.question_id for q in second]
-        assert [q.formula for q in first] == [q.formula for q in second]
+        assert [question.question_id for question in first] == [
+            question.question_id for question in second
+        ]
+        assert [question.formula for question in first] == [question.formula for question in second]
 
     def test_formula_placeholders_are_filled_from_the_entry_elements(self) -> None:
         catalog = load_catalog()
@@ -143,7 +148,7 @@ class TestInstantiationOnPhilosophes3:
         questions = instantiate_questions(
             catalog=catalog, profile=PHILOSOPHES3_PROFILE, model=model
         )
-        by_template = {q.template_id: q for q in questions}
+        by_template = {question.template_id: question for question in questions}
         assert by_template["tpl_res_shared_more"].formula == "AG (fork_1 <= 1)"
         assert by_template["tpl_res_shared_aswell"].formula == "AG (fork_1 + fork_2 + fork_3 == 3)"
         assert by_template["tpl_global_no"].formula == "EF DEADLOCK"
@@ -178,9 +183,88 @@ class TestSolicitationOrder:
             catalog=catalog, profile=PHILOSOPHES3_PROFILE, model=model
         )
         ordered = order_questions(questions=questions, uncovered_groups=set())
-        keys = [(-q.risk, q.cost, q.question_id) for q in ordered]
+        keys = [(-question.risk, question.cost, question.question_id) for question in ordered]
         assert keys == sorted(keys)
 
     def test_catalog_model_roundtrip(self) -> None:
         catalog = load_catalog()
         assert ElicitationCatalog.model_validate(catalog.model_dump(mode="json")) == catalog
+
+
+class TestNarrationEvents:
+    def test_catalog_load_narration_is_pinned(self) -> None:
+        with structlog.testing.capture_logs() as logs:
+            catalog = load_catalog()
+        loaded = next(e for e in logs if e["event"] == "elicitation_catalog_loaded")
+        assert loaded["version"] == "v1"
+        assert loaded["templates"] == 11
+        assert loaded["coverage_groups"] == 7
+        assert len(catalog.templates) == 11
+
+    def test_generation_and_ordering_narration_is_pinned(self) -> None:
+        catalog = load_catalog()
+        model = build_philosophes3()
+        with structlog.testing.capture_logs() as logs:
+            questions = instantiate_questions(
+                catalog=catalog, profile=PHILOSOPHES3_PROFILE, model=model
+            )
+            ordered = order_questions(questions=questions, uncovered_groups={"grp_repas"})
+        generated = next(e for e in logs if e["event"] == "elicitation_questions_generated")
+        assert generated["questions"] == 11
+        assert generated["statique"] == 6
+        assert generated["mc"] == 5
+        ordered_event = next(e for e in logs if e["event"] == "elicitation_questions_ordered")
+        assert ordered_event["questions"] == 11
+        assert ordered_event["uncovered"] == 1
+        assert len(ordered) == 11
+
+
+ROLES = [
+    "état d'automate",
+    "détention intermédiaire",
+    "section critique",
+    "ressource partagée",
+    "acquisition",
+    "libération",
+    "motif global",
+    "flux critique",
+]
+ELEMENTS = ["think_1..3", "hasL_1..3", "eat_1..3", "fork_1..3", "rel_i", "motif global"]
+
+
+class TestPropertyTier:
+    @pytest.mark.property
+    @settings(deadline=None, max_examples=25)
+    @given(
+        roles=st.lists(st.sampled_from(ROLES), max_size=8),
+        elements=st.lists(st.sampled_from(ELEMENTS), max_size=8),
+        uncovered=st.sets(st.sampled_from(["grp_repas", "grp_ressource", "grp_liberation"])),
+    )
+    def test_ids_are_stable_and_ordering_targets_holes_first(
+        self, roles: list[str], elements: list[str], uncovered: set[str]
+    ) -> None:
+        profile = SemanticProfile(
+            entries=tuple(
+                ProfileEntry(
+                    id=f"entry_{index}",
+                    elements=elements[index] if index < len(elements) else "think_1..3",
+                    role=role,
+                    conf=0.9,
+                    evidence="property corpus",
+                )
+                for index, role in enumerate(roles)
+            )
+        )
+        catalog = load_catalog()
+        model = build_philosophes3()
+        first = instantiate_questions(catalog=catalog, profile=profile, model=model)
+        second = instantiate_questions(catalog=catalog, profile=profile, model=model)
+        assert [question.question_id for question in first] == [
+            question.question_id for question in second
+        ]
+        ordered = order_questions(questions=first, uncovered_groups=uncovered)
+        assert len(ordered) == len(first)
+        hole_keys = [
+            0 if any(group in uncovered for group in question.covers) else 1 for question in ordered
+        ]
+        assert hole_keys == sorted(hole_keys)
