@@ -31,7 +31,14 @@ type TriageKind = Literal["statique", "MC", "dégradé"]
 """The triage of a question: static, model-checked, or explicitly degraded."""
 
 STATIC_KINDS: frozenset[str] = frozenset(
-    {"safety.invariant", "safety.conservation", "safety.state_invariant"}
+    {
+        "safety.invariant",
+        "safety.conservation",
+        "safety.state_invariant",
+        "structural.precondition",
+        "structural.producer",
+        "structural.unique_producer",
+    }
 )
 """The patterns reducible to the three static targets of spec §14.2."""
 

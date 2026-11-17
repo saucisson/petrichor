@@ -20,8 +20,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from petrichor.petri_canonical import HASH_PREFIX, JsonValue, ModelId
 
-type CheckFamilyName = Literal["reachability", "safety", "liveness", "recovery", "deadlock"]
-"""The five check families of spec §12.1; one endpoint per family."""
+type CheckFamilyName = Literal[
+    "reachability", "safety", "liveness", "recovery", "deadlock", "structural"
+]
+"""The six check families of spec §12.1; one endpoint per family."""
 
 type RunStatus = Literal["running", "done", "error"]
 """The lifecycle states of an asynchronous run (spec §5: polling only)."""
@@ -55,6 +57,9 @@ FAMILY_PATTERNS: dict[CheckFamilyName, frozenset[str]] = {
     ),
     "recovery": frozenset({"recovery.unconditional"}),
     "deadlock": frozenset({"deadlock"}),
+    "structural": frozenset(
+        {"structural.precondition", "structural.producer", "structural.unique_producer"}
+    ),
 }
 """The closed set of accepted ``kind`` patterns per family (spec §14.1, §17.3)."""
 
