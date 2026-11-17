@@ -24,3 +24,5 @@ class ApiSettings(BaseSettings):
     """Timeout of one check run; a timeout is an explicit error state, never a verdict."""
     session_budget_seconds: float = Field(default=DEFAULT_SESSION_BUDGET_SECONDS, gt=0)
     """Session budget cap in tool seconds (spec §12.4): cumulative measured cost, no carry-over."""
+    static_first: bool = Field(default=False)
+    """Opt-in static-first proof on degraded questions (spec §18.4, issue #25); off by default."""
