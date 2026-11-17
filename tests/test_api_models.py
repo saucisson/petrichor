@@ -21,6 +21,7 @@ from pydantic import SecretStr
 
 from petrichor.api import WSGIApp, create_app
 from petrichor.api.settings import ApiSettings
+from petrichor.arbitration import ArbitrationStore
 from petrichor.main import build_server, main
 from petrichor.model_store import ModelStore
 from petrichor.petri_canonical import ModelId
@@ -327,6 +328,7 @@ class TestCompositionRoot:
             run_store=RunStore(),
             session_store=SessionStore(directory=tmp_path / "sessions"),
             arbitrator=ProfileArbitrator(),
+            arbitration_store=ArbitrationStore(directory=tmp_path / "arbitrations"),
         )
         assert isinstance(server.application, Callable)
         assert server.server_port == 8080
