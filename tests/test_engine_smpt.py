@@ -13,6 +13,8 @@ import stat
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from philosophes3 import build_philosophes3
 
 from petrichor.engines.api_runner import SMPT_SERVICE_NAME, SmptCheckRunner
@@ -41,6 +43,7 @@ from petrichor.engines.smpt_server import (
 from petrichor.petri_canonical import semantic_projection
 
 if TYPE_CHECKING:
+    from fractions import Fraction
     from pathlib import Path
 
 MODEL = semantic_projection(model=build_philosophes3())
@@ -68,9 +71,9 @@ exit 0
 """
 
 FAKE_SMPT_INVARIANTS = """#!/bin/sh
-# Fake SMPT: two polyhedral invariants, one with a negative coefficient.
+# Fake SMPT: polyhedral invariants, one negative and one fractional coefficient.
 echo "INVARIANT places=fork_1,fork_2,fork_3 coeffs=1,1,1 bound=3"
-echo "INVARIANT places=eat_1,think_1 coeffs=1,-1 bound=0"
+echo "INVARIANT places=eat_1,think_1 coeffs=1/2,-1 bound=0"
 echo "States: 0"
 exit 0
 """
@@ -121,10 +124,10 @@ def test_parse_states_explored_and_trace() -> None:
 
 
 def test_parse_polyhedral_invariants_normalizes_lines() -> None:
-    """INVARIANT lines become polyhedral_invariant objects, negative coeffs allowed."""
+    """INVARIANT lines become polyhedral_invariant objects; coeffs may be negative/fractional."""
     stdout = (
         "INVARIANT places=fork_1,fork_2,fork_3 coeffs=1,1,1 bound=3\n"
-        "INVARIANT places=eat_1,think_1 coeffs=1,-1 bound=0\n"
+        "INVARIANT places=eat_1,think_1 coeffs=1/2,-1 bound=0\n"
     )
     invariants = parse_polyhedral_invariants(stdout=stdout)
     assert invariants == [
@@ -137,7 +140,7 @@ def test_parse_polyhedral_invariants_normalizes_lines() -> None:
         {
             "kind": "polyhedral_invariant",
             "places": ["eat_1", "think_1"],
-            "coefficients": [1, -1],
+            "coefficients": ["1/2", -1],
             "bound": 0,
         },
     ]
@@ -147,6 +150,14 @@ def test_parse_polyhedral_invariants_rejects_malformed_line() -> None:
     """A places/coeffs length mismatch is a typed QuestionError, never a guess."""
     with pytest.raises(QuestionError):
         parse_polyhedral_invariants(stdout="INVARIANT places=a,b coeffs=1 bound=0\n")
+
+
+def test_parse_polyhedral_invariants_rejects_non_rational_coefficient() -> None:
+    """A non-rational coefficient is a typed QuestionError, never a bare ValueError."""
+    with pytest.raises(QuestionError):
+        parse_polyhedral_invariants(stdout="INVARIANT places=a coeffs=abc bound=0\n")
+    with pytest.raises(QuestionError):
+        parse_polyhedral_invariants(stdout="INVARIANT places=a coeffs=1/0 bound=0\n")
 
 
 def test_build_normalized_output_satisfied_with_witness() -> None:
@@ -266,7 +277,7 @@ def test_handle_invariants_with_fake_binary(
     output = json.loads(payload.decode("utf-8"))
     assert output["technique"] == "smpt-1.0"
     assert len(output["invariants"]) == 2
-    assert output["invariants"][1]["coefficients"] == [1, -1]
+    assert output["invariants"][1]["coefficients"] == ["1/2", -1]
 
 
 def test_handle_check_narration_events(
@@ -331,3 +342,40 @@ def test_smpt_check_runner_wiring(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     assert driver._engine_name == SMPT_ENGINE_NAME
     assert driver._service_name == SMPT_SERVICE_NAME
     assert f"petrichor-engine-{SMPT_ENGINE_NAME}:{SMPT_ENGINE_VERSION}" == SMPT_ENGINE_IMAGE
+
+
+@pytest.mark.property
+@settings(deadline=None, max_examples=50)
+@given(
+    entries=st.lists(
+        st.tuples(
+            st.text(alphabet="abc", min_size=1, max_size=3),
+            st.fractions(min_value=-9, max_value=9),
+        ),
+        min_size=1,
+        max_size=4,
+    ),
+    bound=st.integers(min_value=-9, max_value=9),
+)
+def test_property_polyhedral_invariants_round_trip(
+    entries: list[tuple[str, Fraction]], bound: int
+) -> None:
+    """Any INVARIANT line round-trips through the normalization (property tier, ADR-0012)."""
+    places = [place for place, _ in entries]
+    coefficients = [coefficient for _, coefficient in entries]
+    line = (
+        f"INVARIANT places={','.join(places)}"
+        f" coeffs={','.join(str(c) for c in coefficients)} bound={bound}\n"
+    )
+    expected = [
+        c.numerator if c.denominator == 1 else f"{c.numerator}/{c.denominator}"
+        for c in coefficients
+    ]
+    assert parse_polyhedral_invariants(stdout=line) == [
+        {
+            "kind": "polyhedral_invariant",
+            "places": places,
+            "coefficients": expected,
+            "bound": bound,
+        }
+    ]
