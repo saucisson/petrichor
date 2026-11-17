@@ -17,7 +17,7 @@ from pydantic import SecretStr
 
 from petrichor.api.app import create_app
 from petrichor.api.settings import ApiSettings
-from petrichor.arbitration import ArbitrationStore
+from petrichor.arbitration import ArbitrationDecisionKind, ArbitrationStore
 from petrichor.elicitation import QuestionId
 from petrichor.model_store import ModelStore
 from petrichor.run_store import RunStore
@@ -189,7 +189,7 @@ class TestArbitrationDecisions:
         assert store_event["decision"] == "accept"
 
 
-DECISIONS = ["accept", "refuse", "verify-first"]
+DECISIONS: list[ArbitrationDecisionKind] = ["accept", "refuse", "verify-first"]
 
 
 class TestArbitrationStorePropertyTier:
@@ -200,7 +200,7 @@ class TestArbitrationStorePropertyTier:
         decisions=st.lists(st.sampled_from(DECISIONS), min_size=1, max_size=10),
     )
     def test_append_only_order_and_revision_chaining(
-        self, cards: list[str], decisions: list[str]
+        self, cards: list[str], decisions: list[ArbitrationDecisionKind]
     ) -> None:
         # tmp_path is function-scoped: one directory shared by every Hypothesis
         # example, so each example needs its own fresh directory.
@@ -209,7 +209,7 @@ class TestArbitrationStorePropertyTier:
             self._check_append_only(store, cards=cards, decisions=decisions)
 
     def _check_append_only(
-        self, store: ArbitrationStore, *, cards: list[str], decisions: list[str]
+        self, store: ArbitrationStore, *, cards: list[str], decisions: list[ArbitrationDecisionKind]
     ) -> None:
         session_id = SessionId("ses_prop")
         for index, decision in enumerate(decisions):
@@ -217,7 +217,7 @@ class TestArbitrationStorePropertyTier:
             store.decide(
                 session_id=session_id,
                 question_id=QuestionId(card),
-                decision=decision,  # type: ignore[arg-type]
+                decision=decision,
             )
         history = store.history(session_id=session_id)
         assert [r.decision for r in history] == decisions
