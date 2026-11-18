@@ -91,11 +91,20 @@ from petrichor.triage import (
     StaticUndecidableError,
     triage_question,
 )
+from petrichor.witness import (
+    WitnessError,
+    WitnessId,
+    WitnessStore,
+    narrate_steps,
+    normalize_witness_output,
+    witness_record_of,
+)
 
 if TYPE_CHECKING:
     from petrichor.api.settings import ApiSettings
     from petrichor.convergence import ConvergenceStore
     from petrichor.elicitation import GeneratedQuestion
+    from petrichor.llm.provider import LLMProvider
     from petrichor.model_store import ModelStore
     from petrichor.profile import ProfileState
 
@@ -107,6 +116,9 @@ MODELS_PATH = "/v1/models"
 MODEL_PATH_PREFIX = "/v1/models/"
 CHECKS_PATH_PREFIX = "/v1/checks/"
 RUNS_PATH_PREFIX = "/v1/runs/"
+WITNESS_SUFFIX = "/witness"
+WITNESSES_PATH = "/v1/witnesses"
+WITNESSES_PATH_PREFIX = "/v1/witnesses/"
 QUALIFICATION_PATH = "/v1/qualification"
 SESSIONS_PATH = "/v1/sessions"
 SESSION_PATH_PREFIX = "/v1/sessions/"
@@ -492,12 +504,15 @@ def _execute_run(
     timeout_seconds: int,
     started_monotonic: float,
     qualification: QualificationLookup | None,
+    witness_store: WitnessStore | None = None,
 ) -> None:
     """Run one check on a background thread and record its explicit outcome.
 
     The cost of the run is the wall-clock tool time measured around the
     runner call (spec §12.4) - never an estimate - and is archived with the
-    run together with the command the runner reports (spec §12.5).
+    run together with the command the runner reports (spec §12.5). A witness
+    in the output is normalized to §16, stored once and referenced by the
+    run (spec §16, issue #32).
     """
     logger.debug("check_run_started", run_id=run_id, family=question.family, kind=question.kind)
     try:
@@ -533,6 +548,15 @@ def _execute_run(
             measured_seconds=measured_seconds,
             engine_qualified=engine_qualified,
         )
+        if witness_store is not None:
+            try:
+                document = normalize_witness_output(run_id=run_id, output=outcome.output)
+            except WitnessError as error:
+                logger.error("check_run_witness_invalid", run_id=run_id, error=str(error))
+                document = None
+            if document is not None:
+                witness_store.store(record=witness_record_of(document=document))
+                witness_store.add_reference(witness_id=document.witness_id, run_id=run_id)
         logger.debug(
             "check_run_finished", run_id=run_id, status="done", measured_seconds=measured_seconds
         )
@@ -688,6 +712,7 @@ def _post_check(  # noqa: PLR0913 - one keyword per routed dependency (ADR-0003)
     qualification: QualificationLookup | None,
     static_resolver: StaticResolver | None,
     static_first_prober: StaticFirstProber | None,
+    witness_store: WitnessStore | None = None,
 ) -> Iterable[bytes]:
     """Accept a check question: 202 + Location, idempotent by (model, question) hash.
 
@@ -862,6 +887,7 @@ def _post_check(  # noqa: PLR0913 - one keyword per routed dependency (ADR-0003)
                     "timeout_seconds": timeout_seconds,
                     "started_monotonic": started_monotonic,
                     "qualification": qualification,
+                    "witness_store": witness_store,
                 },
                 daemon=True,
             )
@@ -918,6 +944,130 @@ def _get_run(
         )
     logger.debug("api_run_read", run_id=run.run_id, status=run.status)
     body = json.dumps(run.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.OK,
+        content_type=CONTENT_TYPE_JSON,
+        body=body.encode("utf-8"),
+    )
+
+
+def _get_run_witness(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    run_store: RunStore,
+    store: ModelStore,
+    witness_store: WitnessStore,
+    llm_provider: LLMProvider | None,
+    run_id: str,
+) -> Iterable[bytes]:
+    """The §16 witness document of one run, with its per-step LLM narrations (issue #32).
+
+    The structure comes from the tool (markings, firings, cyclicity,
+    back-edge); the narrations are LLM propositions labeled
+    ``provenance: llm``, never verdicts (spec §16, §19.4).
+    """
+    run = run_store.get(run_id=RunId(run_id))
+    if run is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="run_not_found",
+                detail=f"No run with id {run_id!r}.",
+            ),
+        )
+    if run.output is None or run.output.get("witness") is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="witness_not_found",
+                detail=f"Run {run_id!r} carries no witness (status {run.status!r}).",
+            ),
+        )
+    try:
+        document = normalize_witness_output(run_id=run.run_id, output=run.output)
+    except WitnessError as error:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                reason="witness_invalid",
+                detail=str(error),
+            ),
+        )
+    if document is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="witness_not_found",
+                detail=f"Run {run_id!r} carries no normalizable witness.",
+            ),
+        )
+    if llm_provider is not None:
+        model = store.get(model_id=run.model_id)
+        if model is not None:
+            document = document.model_copy(
+                update={
+                    "narrations": narrate_steps(
+                        provider=llm_provider,
+                        model_hash=model.content_hash,
+                        steps=document.steps,
+                    )
+                }
+            )
+    logger.debug(
+        "api_run_witness_read",
+        run_id=run.run_id,
+        witness_id=document.witness_id,
+        steps=len(document.steps),
+        narrations=len(document.narrations),
+    )
+    body = json.dumps(document.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.OK,
+        content_type=CONTENT_TYPE_JSON,
+        body=body.encode("utf-8"),
+    )
+
+
+def _get_witness(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    witness_store: WitnessStore,
+    witness_id: str,
+) -> Iterable[bytes]:
+    """One stored witness with its referencing runs (stored once, referenced n times, §16)."""
+    record = witness_store.get(witness_id=WitnessId(witness_id))
+    if record is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="witness_not_found",
+                detail=f"No witness with id {witness_id!r}.",
+            ),
+        )
+    references = witness_store.references(witness_id=record.witness_id)
+    logger.debug("api_witness_read", witness_id=record.witness_id, references=len(references))
+    body = json.dumps(
+        {
+            "record": record.model_dump(mode="json"),
+            "referenced_by": [str(run_id) for run_id in references],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     return _respond(
         start_response=start_response,
         status=HTTPStatus.OK,
@@ -1022,7 +1172,7 @@ def _dispatch_qualification(
     )
 
 
-def _dispatch_checks_and_runs(  # noqa: PLR0913 - one keyword per routed dependency (ADR-0003)
+def _dispatch_checks_and_runs(  # noqa: PLR0913, PLR0911 - one keyword per routed dependency (ADR-0003)
     *,
     environ: WSGIEnvironment,
     start_response: StartResponse,
@@ -1035,8 +1185,10 @@ def _dispatch_checks_and_runs(  # noqa: PLR0913 - one keyword per routed depende
     qualification: QualificationLookup | None,
     static_resolver: StaticResolver | None,
     static_first_prober: StaticFirstProber | None,
+    witness_store: WitnessStore | None = None,
+    llm_provider: LLMProvider | None = None,
 ) -> Iterable[bytes] | None:
-    """Route /v1/checks/{family} and /v1/runs/{run_id}, or return None."""
+    """Route /v1/checks/{family}, /v1/runs/{run_id} and the witnesses, or return None."""
     if path.startswith(CHECKS_PATH_PREFIX):
         family = path.removeprefix(CHECKS_PATH_PREFIX)
         if method == "POST" and "/" not in family and _is_check_family(family):
@@ -1048,6 +1200,7 @@ def _dispatch_checks_and_runs(  # noqa: PLR0913 - one keyword per routed depende
                 runner=runner,
                 family=family,
                 settings=settings,
+                witness_store=witness_store,
                 qualification=qualification,
                 static_resolver=static_resolver,
                 static_first_prober=static_first_prober,
@@ -1063,6 +1216,16 @@ def _dispatch_checks_and_runs(  # noqa: PLR0913 - one keyword per routed depende
         )
     if path.startswith(RUNS_PATH_PREFIX):
         run_id = path.removeprefix(RUNS_PATH_PREFIX)
+        if method == "GET" and run_id.endswith(WITNESS_SUFFIX) and witness_store is not None:
+            return _get_run_witness(
+                environ=environ,
+                start_response=start_response,
+                run_store=run_store,
+                store=store,
+                witness_store=witness_store,
+                llm_provider=llm_provider,
+                run_id=run_id[: -len(WITNESS_SUFFIX)],
+            )
         if method == "GET" and run_id and "/" not in run_id:
             return _get_run(
                 environ=environ,
@@ -1076,6 +1239,24 @@ def _dispatch_checks_and_runs(  # noqa: PLR0913 - one keyword per routed depende
             payload=_problem(
                 status=HTTPStatus.METHOD_NOT_ALLOWED if method != "GET" else HTTPStatus.NOT_FOUND,
                 reason="method_not_allowed" if method != "GET" else "run_not_found",
+                detail=f"No resource at {path}.",
+            ),
+        )
+    if path.startswith(WITNESSES_PATH_PREFIX) and witness_store is not None:
+        witness_id = path.removeprefix(WITNESSES_PATH_PREFIX)
+        if method == "GET" and witness_id and "/" not in witness_id:
+            return _get_witness(
+                environ=environ,
+                start_response=start_response,
+                witness_store=witness_store,
+                witness_id=witness_id,
+            )
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.METHOD_NOT_ALLOWED if method != "GET" else HTTPStatus.NOT_FOUND,
+                reason="method_not_allowed" if method != "GET" else "witness_not_found",
                 detail=f"No resource at {path}.",
             ),
         )
@@ -2566,6 +2747,8 @@ def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
     static_first_prober: StaticFirstProber | None = None,
     arbitration_store: ArbitrationStore | None = None,
     convergence_store: ConvergenceStore | None = None,
+    witness_store: WitnessStore | None = None,
+    llm_provider: LLMProvider | None = None,
 ) -> WSGIApp:
     """Build the WSGI application: auth first, then routing and negotiation."""
 
@@ -2614,6 +2797,8 @@ def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
                 qualification=qualification,
                 static_resolver=static_resolver,
                 static_first_prober=static_first_prober,
+                witness_store=witness_store,
+                llm_provider=llm_provider,
             )
         if routed is None and session_store is not None:
             routed = _dispatch_sessions(

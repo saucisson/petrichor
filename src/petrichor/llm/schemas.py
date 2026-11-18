@@ -12,8 +12,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-type LlmUsage = Literal["semantic-profile", "reading", "clarification", "cluster"]
-"""The closed set of LLM usages of spec §15."""
+type LlmUsage = Literal["semantic-profile", "reading", "clarification", "cluster", "narration"]
+"""The closed set of LLM usages of spec §15 (narration added by issue #32, spec §16)."""
 
 type ClusterCause = Literal["model", "specification"]
 """The closed set of cluster causes (spec §15)."""
@@ -86,3 +86,15 @@ class ClusterList(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     clusters: tuple[Cluster, ...]
+
+
+class NarrationCorpus(BaseModel):
+    """The golden `narration` document: one scripted sentence per transition (spec §16).
+
+    Narrations are LLM propositions: they describe a fired transition, they
+    never carry a verdict (the guard test scans this corpus, spec §19.4).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    narrations: dict[str, str]
