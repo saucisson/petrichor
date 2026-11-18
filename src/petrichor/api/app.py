@@ -35,6 +35,7 @@ from collections.abc import Callable, Iterable
 from http import HTTPStatus
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TypeGuard
+from urllib.parse import unquote
 from wsgiref.types import StartResponse, WSGIEnvironment
 
 import structlog
@@ -66,6 +67,7 @@ from petrichor.elicitation import (
     questions_converge,
 )
 from petrichor.insitu import build_net_overlay
+from petrichor.llm.provider import FormulaText, LLMDegradationError
 from petrichor.petri_canonical import (
     Arc,
     CanonicalModel,
@@ -110,6 +112,7 @@ if TYPE_CHECKING:
     from petrichor.llm.provider import LLMProvider
     from petrichor.model_store import ModelStore
     from petrichor.profile import ProfileState
+    from petrichor.question_edits import FormulaEditStore
 
 logger = structlog.get_logger(__name__)
 
@@ -138,6 +141,9 @@ SESSION_ANNOTATIONS_SUFFIX = "/annotations"
 SESSION_NET_OVERLAY_SUFFIX = "/net-overlay"
 SESSION_CONTRACT_SUFFIX = "/contract"
 SESSION_BUDGET_SUFFIX = "/budget"
+QUESTIONS_SEGMENT = "/questions/"
+FORMULA_SUFFIX = "/formula"
+READING_SUFFIX = "/reading"
 DEFAULT_SESSIONS_PAGE_LIMIT = 100
 MAX_SESSIONS_PAGE_LIMIT = 500
 DEFAULT_CONVERGENCES_PAGE_LIMIT = 100
@@ -1627,6 +1633,242 @@ def _get_session_journal(
     )
 
 
+class FormulaEditBody(BaseModel):
+    """The body of ``POST /v1/sessions/{sid}/questions/{qid}/formula`` (spec §9, issue #37)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    formula: str = Field(min_length=1)
+
+
+def _post_question_formula(  # noqa: PLR0913 - one keyword per routed dependency (ADR-0003)
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    session_store: SessionStore,
+    store: ModelStore,
+    arbitrator: ProfileArbitrator | None,
+    edit_store: FormulaEditStore,
+    llm_provider: LLMProvider | None,
+    session_id: str,
+    question_id: str,
+) -> Iterable[bytes]:
+    """Edit the formula of one question card: journaled, re-read, re-verifiable (§9, #37).
+
+    The edit is append-only (old and new formula both kept in the journal -
+    the witness of the old formula is never lost), the new formula gets its
+    inverse reading (formule → langage, LLM proposition ``provenance: llm``)
+    and is re-verified through the standard check chain.
+    """
+    context = _convergence_context(
+        session_store=session_store, store=store, arbitrator=arbitrator, session_id=session_id
+    )
+    if isinstance(context, ProblemPayload):
+        return _problem_response(start_response=start_response, environ=environ, payload=context)
+    session, profile_state, model = context
+    try:
+        length = int(environ.get("CONTENT_LENGTH", "") or 0)
+    except ValueError:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.BAD_REQUEST,
+                reason="invalid_content_length",
+                detail="The Content-Length header is not an integer.",
+            ),
+        )
+    body = environ["wsgi.input"].read(length)
+    try:
+        payload = FormulaEditBody.model_validate(json.loads(body.decode("utf-8")))
+    except (UnicodeDecodeError, json.JSONDecodeError, ValidationError) as error:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.UNPROCESSABLE_ENTITY,
+                reason="invalid_formula_edit",
+                detail=f"The formula edit body is invalid: {error}",
+            ),
+        )
+    generated = instantiate_questions(
+        catalog=load_catalog(), profile=arbitrated_profile(profile_state=profile_state), model=model
+    )
+    question = next((q for q in generated if q.question_id == QuestionId(question_id)), None)
+    if question is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="question_not_found",
+                detail=f"No generated question with id {question_id!r} in session {session_id!r}.",
+            ),
+        )
+    old_formula = edit_store.latest_formula(
+        session_id=session.session_id, question_id=question.question_id, original=question.formula
+    )
+    record = edit_store.edit(
+        session_id=session.session_id,
+        question_id=question.question_id,
+        old_formula=old_formula,
+        new_formula=payload.formula,
+    )
+    session_store.append_journal_entry(
+        session_id=session.session_id,
+        event="formula_edited",
+        detail={
+            "question_id": str(question.question_id),
+            "old_formula": old_formula,
+            "new_formula": payload.formula,
+        },
+    )
+    reading = _read_formula(llm_provider=llm_provider, model=model, formula=payload.formula)
+    logger.debug(
+        "api_question_formula_edited",
+        session_id=session_id,
+        question_id=question_id,
+        old_formula=old_formula,
+        new_formula=payload.formula,
+    )
+    body_out = json.dumps(
+        {"record": record.model_dump(mode="json"), "reading": reading},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.CREATED,
+        content_type=CONTENT_TYPE_JSON,
+        body=body_out.encode("utf-8"),
+    )
+
+
+def _read_formula(
+    *, llm_provider: LLMProvider | None, model: CanonicalModel, formula: str
+) -> dict[str, JsonValue] | None:
+    """The inverse reading of a formula (formule → langage), an LLM proposition (spec §9).
+
+    Degrades explicitly (None with a note) when no reading is available -
+    never a fabricated reading.
+    """
+    if llm_provider is None:
+        return None
+    try:
+        reading = llm_provider.reading(model_hash=model.content_hash, formula=FormulaText(formula))
+    except LLMDegradationError:
+        logger.warning("api_formula_reading_degraded", formula=formula)
+        return {"degraded": True, "note": "Aucune lecture scriptée pour cette formule."}
+    return {**reading.model_dump(mode="json"), "provenance": "llm", "degraded": False}
+
+
+def _get_reading(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    session_store: SessionStore,
+    store: ModelStore,
+    llm_provider: LLMProvider | None,
+    session_id: str,
+) -> Iterable[bytes]:
+    """The inverse reading of any formula of a session (formule → langage, spec §9, issue #37)."""
+    session = session_store.get(session_id=SessionId(session_id))
+    if session is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="session_not_found",
+                detail=f"No session with id {session_id!r}.",
+            ),
+        )
+    query = environ.get("QUERY_STRING", "")
+    params: dict[str, str] = {}
+    for pair in query.split("&"):
+        if "=" in pair:
+            key, value = pair.split("=", maxsplit=1)
+            params[key] = unquote(value)
+    formula = params.get("formula", "")
+    if not formula:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.UNPROCESSABLE_ENTITY,
+                reason="missing_formula",
+                detail='The "formula" query parameter is required.',
+            ),
+        )
+    model = store.get(model_id=session.model_id)
+    if model is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="model_not_found",
+                detail=f"No model with id {session.model_id!r}.",
+            ),
+        )
+    reading = _read_formula(llm_provider=llm_provider, model=model, formula=formula)
+    logger.debug("api_reading_read", session_id=session_id, formula=formula)
+    body_out = json.dumps(
+        {"formula": formula, "reading": reading},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.OK,
+        content_type=CONTENT_TYPE_JSON,
+        body=body_out.encode("utf-8"),
+    )
+
+
+def _dispatch_session_questions(  # noqa: PLR0913 - one keyword per routed dependency (ADR-0003)
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    method: str,
+    remainder: str,
+    session_store: SessionStore,
+    store: ModelStore,
+    arbitrator: ProfileArbitrator | None,
+    edit_store: FormulaEditStore,
+    llm_provider: LLMProvider | None,
+) -> Iterable[bytes] | None:
+    """Route the question-editing sub-resources of a session, or None (spec §9, issue #37)."""
+    if remainder.endswith(READING_SUFFIX):
+        session_id = remainder[: -len(READING_SUFFIX)]
+        if method == "GET" and session_id and "/" not in session_id:
+            return _get_reading(
+                environ=environ,
+                start_response=start_response,
+                session_store=session_store,
+                store=store,
+                llm_provider=llm_provider,
+                session_id=session_id,
+            )
+        return None
+    if QUESTIONS_SEGMENT in remainder:
+        session_id, _, tail = remainder.partition(QUESTIONS_SEGMENT)
+        question_id, _, suffix = tail.partition("/")
+        if session_id and question_id and suffix == "formula" and method == "POST":
+            return _post_question_formula(
+                environ=environ,
+                start_response=start_response,
+                session_store=session_store,
+                store=store,
+                arbitrator=arbitrator,
+                edit_store=edit_store,
+                llm_provider=llm_provider,
+                session_id=session_id,
+                question_id=question_id,
+            )
+    return None
+
+
 def _get_session_budget(
     *,
     environ: WSGIEnvironment,
@@ -2866,6 +3108,8 @@ def _dispatch_sessions(  # noqa: PLR0913 - one keyword per routed dependency (AD
     state_graph_explorer: StateGraphExplorer | None = None,
     arbitration_store: ArbitrationStore | None = None,
     convergence_store: ConvergenceStore | None = None,
+    edit_store: FormulaEditStore | None = None,
+    llm_provider: LLMProvider | None = None,
 ) -> Iterable[bytes] | None:
     """Route the /v1/sessions resources, or return None when the path is not one."""
     result: Iterable[bytes] | None = None
@@ -2900,6 +3144,18 @@ def _dispatch_sessions(  # noqa: PLR0913 - one keyword per routed dependency (AD
                 convergence_store=convergence_store,
                 store=store,
                 arbitrator=arbitrator,
+            )
+        if result is None and edit_store is not None:
+            result = _dispatch_session_questions(
+                environ=environ,
+                start_response=start_response,
+                method=method,
+                remainder=remainder,
+                session_store=session_store,
+                store=store,
+                arbitrator=arbitrator,
+                edit_store=edit_store,
+                llm_provider=llm_provider,
             )
         if result is None:
             result = _dispatch_session_contract(
@@ -3007,6 +3263,7 @@ def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
     convergence_store: ConvergenceStore | None = None,
     witness_store: WitnessStore | None = None,
     llm_provider: LLMProvider | None = None,
+    edit_store: FormulaEditStore | None = None,
 ) -> WSGIApp:
     """Build the WSGI application: auth first, then routing and negotiation."""
 
@@ -3077,6 +3334,8 @@ def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
                 state_graph_explorer=state_graph_explorer,
                 arbitration_store=arbitration_store,
                 convergence_store=convergence_store,
+                edit_store=edit_store,
+                llm_provider=llm_provider,
             )
         if routed is not None:
             return routed

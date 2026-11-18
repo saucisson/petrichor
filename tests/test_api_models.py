@@ -29,6 +29,7 @@ from petrichor.model_store import ModelStore
 from petrichor.petri_canonical import ModelId
 from petrichor.pnml_import import import_pnml
 from petrichor.profile import ProfileArbitrator
+from petrichor.question_edits import FormulaEditStore
 from petrichor.run_store import RunStore
 from petrichor.session_store import SessionStore
 from petrichor.witness import WitnessStore
@@ -335,6 +336,7 @@ class TestCompositionRoot:
             convergence_store=ConvergenceStore(directory=tmp_path / "convergences"),
             witness_store=WitnessStore(directory=tmp_path / "witnesses"),
             llm_provider=DeterministicMockProvider(),
+            edit_store=FormulaEditStore(directory=tmp_path / "formula_edits"),
         )
         assert isinstance(server.application, Callable)
         assert server.server_port == 8080
