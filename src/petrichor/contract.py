@@ -19,6 +19,7 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
 from petrichor.checks import CheckFamilyName, KindPattern, RunId, RunStatus, ToolVersion
+from petrichor.convergence import CONVERGENCE_HINT_TEXT, ConvergenceRecord
 from petrichor.elicitation import (
     ElicitationCatalog,
     GeneratedQuestion,
@@ -40,6 +41,8 @@ from petrichor.session_store import SessionId
 from petrichor.triage import TriageKind
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from petrichor.arbitration import ArbitrationRecord
     from petrichor.petri_canonical import CanonicalModel
     from petrichor.run_store import StoredRun
@@ -56,8 +59,9 @@ RUN_LINK_PREFIX = "/v1/runs/"
 RunLink = NewType("RunLink", str)
 """The API link of one proof run, e.g. ``/v1/runs/run_7c2a9f``."""
 
-type ContractQuestionStatus = Literal["pending", "accept", "refuse", "verify-first"]
-"""The status of a question card: its latest arbitration, or pending."""
+type ContractQuestionStatus = Literal["pending", "accept", "refuse", "verify-first", "covered"]
+"""The status of a question card: its latest arbitration, ``covered`` when a
+human fusion covers it (spec §12.2), or pending."""
 
 type CrossStatus = Literal["unverified", "verified_by_n", "controversial"]
 """The cross-verification status of a clause (spec §17.4, issue #31).
@@ -115,6 +119,10 @@ class ContractQuestion(BaseModel):
     """The computed cross-verification status of the clause (spec §17.4, issue #31)."""
     verified_by: int = Field(ge=0)
     """How many done proofs agree on the verdict; 0 when unverified or controversial."""
+    covered_by: QuestionId | None = None
+    """The surviving question of the human fusion covering this one (spec §12.2)."""
+    convergence_hint: QuestionId | None = None
+    """The earlier generated question this one converges with (spec §14.5, issue #34)."""
 
 
 class ContractProfileEntry(BaseModel):
@@ -176,6 +184,31 @@ def _latest_decisions(
     return latest
 
 
+def _latest_revision_timestamps(
+    *, arbitration_history: list[ArbitrationRecord]
+) -> dict[QuestionId, float]:
+    """The timestamp of the latest REVISION of each question (spec §12.7).
+
+    Only a revision (a decision with a ``previous_decision``) reopens the
+    covered clauses - a first decision on the surviving question does not.
+    """
+    timestamps: dict[QuestionId, float] = {}
+    for record in arbitration_history:
+        if record.previous_decision is not None:
+            timestamps[record.question_id] = record.timestamp
+    return timestamps
+
+
+def _latest_fusions(
+    *, convergence_history: Sequence[ConvergenceRecord]
+) -> dict[QuestionId, ConvergenceRecord]:
+    """The latest fusion of each covered question, in append order (last wins)."""
+    fusions: dict[QuestionId, ConvergenceRecord] = {}
+    for record in convergence_history:
+        fusions[record.question_id] = record
+    return fusions
+
+
 def _proofs_for_question(
     *, question: GeneratedQuestion, runs: list[StoredRun]
 ) -> tuple[ContractProof, ...]:
@@ -234,6 +267,7 @@ def build_contract(
     arbitration_history: list[ArbitrationRecord],
     runs: list[StoredRun],
     journal: list[JournalEntry],
+    convergence_history: Sequence[ConvergenceRecord] = (),
 ) -> ContractDocument:
     """Build the contract document purely from the session state (replayable)."""
     arbitrated = arbitrated_profile(profile_state=profile_state)
@@ -243,11 +277,30 @@ def build_contract(
         uncovered_groups={group.group_id for group in profile_state.uncovered_groups()},
     )
     latest = _latest_decisions(arbitration_history=arbitration_history)
+    revision_at = _latest_revision_timestamps(arbitration_history=arbitration_history)
+    fusions = _latest_fusions(convergence_history=convergence_history)
+
+    def _status_for(
+        *, question: GeneratedQuestion
+    ) -> tuple[ContractQuestionStatus, QuestionId | None]:
+        """The status of one question and its covering proposition, if any.
+
+        A human fusion covers the question (spec §12.2) - unless the
+        surviving question was REVISED after the fusion: revising an
+        arbitration reopens the clauses of the questions it covers
+        (spec §12.7), so the covered question falls back to its own latest
+        decision. The journal keeps both decisions either way.
+        """
+        fusion = fusions.get(question.question_id)
+        if fusion is not None and revision_at.get(fusion.proposition_id, 0.0) <= fusion.timestamp:
+            return "covered", fusion.proposition_id
+        return latest.get(question.question_id, "pending"), None
 
     def _with_cross_status(*, question: GeneratedQuestion) -> ContractQuestion:
         """Build one contract question with its computed cross-verification status."""
         proofs = _proofs_for_question(question=question, runs=runs)
         cross_status, verified_by = cross_status_for_proofs(proofs=proofs)
+        status, covered_by = _status_for(question=question)
         return ContractQuestion(
             question_id=question.question_id,
             template_id=question.template_id,
@@ -259,7 +312,7 @@ def build_contract(
             cost=question.cost,
             scenario=question.scenario,
             role=question.role,
-            status=latest.get(question.question_id, "pending"),
+            status=status,
             proofs=proofs,
             examination=examination_for(family=question.family, kind=question.kind),
             counter_variant=(
@@ -269,6 +322,8 @@ def build_contract(
             ),
             cross_status=cross_status,
             verified_by=verified_by,
+            covered_by=covered_by,
+            convergence_hint=question.convergence_hint,
         )
 
     questions = tuple(_with_cross_status(question=question) for question in ordered)
@@ -304,6 +359,7 @@ def build_contract(
         session_id=session.session_id,
         questions=len(questions),
         arbitrated=sum(1 for entry in profile if entry.accepted),
+        covered=sum(1 for question in questions if question.status == "covered"),
         journal_entries=len(journal),
     )
     return document
@@ -321,6 +377,13 @@ def _render_cross_status(*, question: ContractQuestion) -> str:
     if question.cross_status == "controversial":
         return "controversée"
     return "non vérifiée"
+
+
+def _render_question_status(*, question: ContractQuestion) -> str:
+    """The human-readable status of one question card (spec §12.2, §12.7)."""
+    if question.status == "covered" and question.covered_by is not None:
+        return f"couverte par `{question.covered_by}` — plus jamais resolicitée"
+    return question.status
 
 
 def render_markdown(*, document: ContractDocument) -> str:
@@ -374,10 +437,16 @@ def render_markdown(*, document: ContractDocument) -> str:
                 else "—"
             )
             cross = _render_cross_status(question=question)
+            status = _render_question_status(question=question)
             lines.append(
                 f"| `{question.question_id}` | {question.formula} | {question.triage}"
-                f" | {question.risk} | {question.cost} | {question.status} | {cross} | {proofs} |"
+                f" | {question.risk} | {question.cost} | {status} | {cross} | {proofs} |"
             )
+            if question.convergence_hint is not None:
+                lines.append(
+                    f"  - Alerte de convergence : {CONVERGENCE_HINT_TEXT}"
+                    f" (`{question.convergence_hint}`)."
+                )
             if question.cross_status == "controversial":
                 camps = " ; ".join(
                     f"{proof.tool_version} → {proof.verdict}"

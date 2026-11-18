@@ -55,8 +55,13 @@ from petrichor.checks import (
     ToolVersion,
     run_key,
 )
-from petrichor.contract import build_contract, render_markdown
-from petrichor.elicitation import QuestionId, load_catalog
+from petrichor.contract import arbitrated_profile, build_contract, render_markdown
+from petrichor.elicitation import (
+    QuestionId,
+    instantiate_questions,
+    load_catalog,
+    questions_converge,
+)
 from petrichor.insitu import build_net_overlay
 from petrichor.petri_canonical import (
     Arc,
@@ -89,7 +94,10 @@ from petrichor.triage import (
 
 if TYPE_CHECKING:
     from petrichor.api.settings import ApiSettings
+    from petrichor.convergence import ConvergenceStore
+    from petrichor.elicitation import GeneratedQuestion
     from petrichor.model_store import ModelStore
+    from petrichor.profile import ProfileState
 
 logger = structlog.get_logger(__name__)
 
@@ -105,6 +113,7 @@ SESSION_PATH_PREFIX = "/v1/sessions/"
 SESSION_JOURNAL_SUFFIX = "/journal"
 ARBITRATION_REQUESTS_SUFFIX = "/arbitration-requests"
 ARBITRATIONS_SUFFIX = "/arbitrations"
+CONVERGENCES_SUFFIX = "/convergences"
 SESSION_PROFILE_SUFFIX = "/profile"
 SESSION_ARBITRATE_SUFFIX = "/profile/arbitrate"
 SESSION_COVERAGE_SUFFIX = "/coverage"
@@ -1683,6 +1692,7 @@ def _dispatch_session_arbitration(
     remainder: str,
     session_store: SessionStore,
     arbitration_store: ArbitrationStore,
+    convergence_store: ConvergenceStore | None = None,
 ) -> Iterable[bytes] | None:
     """Route the arbitration sub-resources of a session, or None (spec §4.8, issue #16)."""
     if remainder.endswith(ARBITRATION_REQUESTS_SUFFIX):
@@ -1693,6 +1703,7 @@ def _dispatch_session_arbitration(
                 start_response=start_response,
                 session_store=session_store,
                 arbitration_store=arbitration_store,
+                convergence_store=convergence_store,
                 session_id=session_id,
             )
     elif remainder.endswith(ARBITRATIONS_SUFFIX):
@@ -1705,6 +1716,42 @@ def _dispatch_session_arbitration(
                 arbitration_store=arbitration_store,
                 session_id=session_id,
             )
+    return None
+
+
+def _dispatch_session_convergence(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    method: str,
+    remainder: str,
+    session_store: SessionStore,
+    convergence_store: ConvergenceStore,
+    store: ModelStore,
+    arbitrator: ProfileArbitrator | None,
+) -> Iterable[bytes] | None:
+    """Route the convergence sub-resources of a session, or None (spec §4.8, §12.2, issue #34)."""
+    if remainder.endswith(CONVERGENCES_SUFFIX):
+        session_id = remainder[: -len(CONVERGENCES_SUFFIX)]
+        if session_id and "/" not in session_id:
+            if method == "POST":
+                return _post_convergence(
+                    environ=environ,
+                    start_response=start_response,
+                    session_store=session_store,
+                    convergence_store=convergence_store,
+                    store=store,
+                    arbitrator=arbitrator,
+                    session_id=session_id,
+                )
+            if method == "GET":
+                return _get_convergences(
+                    environ=environ,
+                    start_response=start_response,
+                    session_store=session_store,
+                    convergence_store=convergence_store,
+                    session_id=session_id,
+                )
     return None
 
 
@@ -1763,9 +1810,15 @@ def _post_arbitration_request(
     start_response: StartResponse,
     session_store: SessionStore,
     arbitration_store: ArbitrationStore,
+    convergence_store: ConvergenceStore | None,
     session_id: str,
 ) -> Iterable[bytes]:
-    """Accept, refuse or revise one question card; the previous decision stays (spec §12.7)."""
+    """Accept, refuse or revise one question card; the previous decision stays (spec §12.7).
+
+    A revision also reopens the clauses of the questions covered by
+    convergence with this one (spec §12.7, issue #34): the reopening is
+    journaled, and the journal keeps the old and the new decision alike.
+    """
     if session_store.get(session_id=SessionId(session_id)) is None:
         return _problem_response(
             start_response=start_response,
@@ -1815,6 +1868,29 @@ def _post_arbitration_request(
             "previous_decision": record.previous_decision,
         },
     )
+    if record.previous_decision is not None and convergence_store is not None:
+        reopened = [
+            fusion.question_id
+            for fusion in convergence_store.covered_by_proposition(
+                session_id=SessionId(session_id), proposition_id=payload.question_id
+            )
+            if fusion.timestamp < record.timestamp
+        ]
+        if reopened:
+            session_store.append_journal_entry(
+                session_id=SessionId(session_id),
+                event="convergence_reopened",
+                detail={
+                    "proposition_id": str(payload.question_id),
+                    "reopened": [str(question_id) for question_id in reopened],
+                },
+            )
+            logger.debug(
+                "api_convergence_reopened",
+                session_id=session_id,
+                proposition_id=str(payload.question_id),
+                reopened=len(reopened),
+            )
     logger.debug(
         "api_arbitration_decided",
         session_id=session_id,
@@ -1875,7 +1951,202 @@ def _get_arbitrations(
     )
 
 
-def _get_session_contract(
+class ConvergenceRequestBody(BaseModel):
+    """The body of ``POST /v1/sessions/{sid}/convergences`` (spec §4.8, §12.2)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    question_id: QuestionId = Field(min_length=1)
+    """The question to cover (never solicited again once fused)."""
+
+    proposition_id: QuestionId = Field(min_length=1)
+    """The surviving question the covered one converges with."""
+
+
+def _post_convergence(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    session_store: SessionStore,
+    convergence_store: ConvergenceStore,
+    store: ModelStore,
+    arbitrator: ProfileArbitrator | None,
+    session_id: str,
+) -> Iterable[bytes]:
+    """Fuse one question into a converging surviving one - a human-only decision (spec §12.2).
+
+    Only Arbitrer merges: the two questions must be generated for the
+    session and must actually converge (spec §14.5); anything else is a
+    ``422`` - automatic or arbitrary fusion is forbidden.
+    """
+    context = _convergence_context(
+        session_store=session_store, store=store, arbitrator=arbitrator, session_id=session_id
+    )
+    if isinstance(context, ProblemPayload):
+        return _problem_response(start_response=start_response, environ=environ, payload=context)
+    parsed = _parse_convergence_body(environ=environ)
+    if isinstance(parsed, ProblemPayload):
+        return _problem_response(start_response=start_response, environ=environ, payload=parsed)
+    _, profile_state, model = context
+    generated = instantiate_questions(
+        catalog=load_catalog(), profile=arbitrated_profile(profile_state=profile_state), model=model
+    )
+    by_id = {question.question_id: question for question in generated}
+    rejection = _fusion_rejection(payload=parsed, by_id=by_id)
+    if rejection is not None:
+        return _problem_response(start_response=start_response, environ=environ, payload=rejection)
+    record = convergence_store.fuse(
+        session_id=SessionId(session_id),
+        question_id=parsed.question_id,
+        proposition_id=parsed.proposition_id,
+    )
+    session_store.append_journal_entry(
+        session_id=SessionId(session_id),
+        event="convergence_fused",
+        detail={
+            "question_id": str(parsed.question_id),
+            "proposition_id": str(parsed.proposition_id),
+        },
+    )
+    logger.debug(
+        "api_convergence_fused",
+        session_id=session_id,
+        question_id=str(parsed.question_id),
+        proposition_id=str(parsed.proposition_id),
+    )
+    body_out = json.dumps(
+        {"record": record.model_dump(mode="json")},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.CREATED,
+        content_type=CONTENT_TYPE_JSON,
+        body=body_out.encode("utf-8"),
+    )
+
+
+def _convergence_context(
+    *,
+    session_store: SessionStore,
+    store: ModelStore,
+    arbitrator: ProfileArbitrator | None,
+    session_id: str,
+) -> tuple[StoredSession, ProfileState, CanonicalModel] | ProblemPayload:
+    """Resolve the session, its arbitrated profile state and its model, or a problem payload."""
+    session = session_store.get(session_id=SessionId(session_id))
+    if session is None:
+        return _problem(
+            status=HTTPStatus.NOT_FOUND,
+            reason="session_not_found",
+            detail=f"No session with id {session_id!r}.",
+        )
+    profile_state = arbitrator.get(session_id=SessionId(session_id)) if arbitrator else None
+    if profile_state is None:
+        return _problem(
+            status=HTTPStatus.NOT_FOUND,
+            reason="profile_not_found",
+            detail=f"No proposed profile for session {session_id!r}.",
+        )
+    model = store.get(model_id=session.model_id)
+    if model is None:
+        return _problem(
+            status=HTTPStatus.NOT_FOUND,
+            reason="model_not_found",
+            detail=f"No model with id {session.model_id!r}.",
+        )
+    return session, profile_state, model
+
+
+def _parse_convergence_body(*, environ: WSGIEnvironment) -> ConvergenceRequestBody | ProblemPayload:
+    """Parse the convergence request body, or a problem payload when invalid."""
+    try:
+        length = int(environ.get("CONTENT_LENGTH", "") or 0)
+    except ValueError:
+        return _problem(
+            status=HTTPStatus.BAD_REQUEST,
+            reason="invalid_content_length",
+            detail="The Content-Length header is not an integer.",
+        )
+    body = environ["wsgi.input"].read(length)
+    try:
+        return ConvergenceRequestBody.model_validate(json.loads(body.decode("utf-8")))
+    except (UnicodeDecodeError, json.JSONDecodeError, ValidationError) as error:
+        return _problem(
+            status=HTTPStatus.UNPROCESSABLE_ENTITY,
+            reason="invalid_convergence_request",
+            detail=f"The convergence request body is invalid: {error}",
+        )
+
+
+def _fusion_rejection(
+    *, payload: ConvergenceRequestBody, by_id: dict[QuestionId, GeneratedQuestion]
+) -> ProblemPayload | None:
+    """Why the fusion is rejected, or None when it is a valid human fusion (spec §14.5)."""
+    if payload.question_id == payload.proposition_id:
+        return _problem(
+            status=HTTPStatus.UNPROCESSABLE_ENTITY,
+            reason="convergence_rejected",
+            detail="A question cannot cover itself.",
+        )
+    covered = by_id.get(payload.question_id)
+    proposition = by_id.get(payload.proposition_id)
+    if covered is None or proposition is None:
+        unknown = sorted(
+            str(question_id)
+            for question_id in (payload.question_id, payload.proposition_id)
+            if question_id not in by_id
+        )
+        return _problem(
+            status=HTTPStatus.UNPROCESSABLE_ENTITY,
+            reason="convergence_rejected",
+            detail=f"Both question ids must be generated for this session; unknown: {unknown}.",
+        )
+    if not questions_converge(first=covered, second=proposition):
+        return _problem(
+            status=HTTPStatus.UNPROCESSABLE_ENTITY,
+            reason="convergence_rejected",
+            detail="The two questions do not converge (spec §14.5); fusion is human-only.",
+        )
+    return None
+
+
+def _get_convergences(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    session_store: SessionStore,
+    convergence_store: ConvergenceStore,
+    session_id: str,
+) -> Iterable[bytes]:
+    """The full append-only fusion history of a session (spec §4.8, §12.2)."""
+    if session_store.get(session_id=SessionId(session_id)) is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="session_not_found",
+                detail=f"No session with id {session_id!r}.",
+            ),
+        )
+    history = convergence_store.history(session_id=SessionId(session_id))
+    logger.debug("api_convergences_read", session_id=session_id, fusions=len(history))
+    body_out = json.dumps(
+        {"convergences": [r.model_dump(mode="json") for r in history]},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.OK,
+        content_type=CONTENT_TYPE_JSON,
+        body=body_out.encode("utf-8"),
+    )
+
+
+def _get_session_contract(  # noqa: PLR0913 - one keyword per routed dependency (ADR-0003)
     *,
     environ: WSGIEnvironment,
     start_response: StartResponse,
@@ -1884,6 +2155,7 @@ def _get_session_contract(
     run_store: RunStore,
     arbitrator: ProfileArbitrator | None,
     arbitration_store: ArbitrationStore | None,
+    convergence_store: ConvergenceStore | None,
     session_id: str,
 ) -> Iterable[bytes]:
     """The contract of a session, negotiated as contract+json or Markdown (spec §4.8)."""
@@ -1939,6 +2211,11 @@ def _get_session_contract(
         if arbitration_store is not None
         else []
     )
+    fusions = (
+        convergence_store.history(session_id=SessionId(session_id))
+        if convergence_store is not None
+        else []
+    )
     runs = [run for run_id in session.run_ids if (run := run_store.get(run_id=run_id)) is not None]
     document = build_contract(
         session=session,
@@ -1948,6 +2225,7 @@ def _get_session_contract(
         arbitration_history=history,
         runs=runs,
         journal=session_store.journal(session_id=SessionId(session_id)),
+        convergence_history=fusions,
     )
     logger.debug(
         "api_contract_exported",
@@ -2031,6 +2309,7 @@ def _dispatch_session_contract(  # noqa: PLR0913 - one keyword per routed depend
     session_store: SessionStore,
     arbitrator: ProfileArbitrator | None,
     arbitration_store: ArbitrationStore | None,
+    convergence_store: ConvergenceStore | None = None,
 ) -> Iterable[bytes] | None:
     """Route the contract sub-resource of a session, or None (spec §4.8, issue #17)."""
     if remainder.endswith(SESSION_CONTRACT_SUFFIX):
@@ -2044,6 +2323,7 @@ def _dispatch_session_contract(  # noqa: PLR0913 - one keyword per routed depend
                 run_store=run_store,
                 arbitrator=arbitrator,
                 arbitration_store=arbitration_store,
+                convergence_store=convergence_store,
                 session_id=session_id,
             )
     return None
@@ -2092,6 +2372,7 @@ def _dispatch_sessions(  # noqa: PLR0913 - one keyword per routed dependency (AD
     arbitrator: ProfileArbitrator | None = None,
     state_graph_explorer: StateGraphExplorer | None = None,
     arbitration_store: ArbitrationStore | None = None,
+    convergence_store: ConvergenceStore | None = None,
 ) -> Iterable[bytes] | None:
     """Route the /v1/sessions resources, or return None when the path is not one."""
     result: Iterable[bytes] | None = None
@@ -2113,6 +2394,18 @@ def _dispatch_sessions(  # noqa: PLR0913 - one keyword per routed dependency (AD
                 remainder=remainder,
                 session_store=session_store,
                 arbitration_store=arbitration_store,
+                convergence_store=convergence_store,
+            )
+        if result is None and convergence_store is not None:
+            result = _dispatch_session_convergence(
+                environ=environ,
+                start_response=start_response,
+                method=method,
+                remainder=remainder,
+                session_store=session_store,
+                convergence_store=convergence_store,
+                store=store,
+                arbitrator=arbitrator,
             )
         if result is None:
             result = _dispatch_session_contract(
@@ -2125,6 +2418,7 @@ def _dispatch_sessions(  # noqa: PLR0913 - one keyword per routed dependency (AD
                 session_store=session_store,
                 arbitrator=arbitrator,
                 arbitration_store=arbitration_store,
+                convergence_store=convergence_store,
             )
         if result is None:
             result = _dispatch_session_read(
@@ -2215,6 +2509,7 @@ def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
     static_resolver: StaticResolver | None = None,
     static_first_prober: StaticFirstProber | None = None,
     arbitration_store: ArbitrationStore | None = None,
+    convergence_store: ConvergenceStore | None = None,
 ) -> WSGIApp:
     """Build the WSGI application: auth first, then routing and negotiation."""
 
@@ -2276,6 +2571,7 @@ def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
                 arbitrator=arbitrator,
                 state_graph_explorer=state_graph_explorer,
                 arbitration_store=arbitration_store,
+                convergence_store=convergence_store,
             )
         if routed is not None:
             return routed

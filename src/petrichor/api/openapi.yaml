@@ -411,9 +411,14 @@ paths:
         Records one human decision on a generated question card (spec §4.8,
         §12.7). A repeated question is a REVISION: a new decision is recorded
         and the previous one stays in the history and the journal
-        (avant/après). No automatic fusion of questions ever happens here -
-        convergence is a separate human-only decision (P34). Every decision is
-        appended to the session journal as an `arbitration_decided` entry.
+        (avant/après). Revising the arbitration of a question also reopens
+        the clauses of the questions covered by convergence with it
+        (spec §12.7): the reopening is appended to the journal as a
+        `convergence_reopened` entry, and the journal keeps the old and the
+        new decision alike. No automatic fusion of questions ever happens
+        here - convergence is a separate human-only decision
+        (`POST /convergences`). Every decision is appended to the session
+        journal as an `arbitration_decided` entry.
       parameters:
         - name: session_id
           in: path
@@ -474,6 +479,77 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/ArbitrationRecord"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /sessions/{session_id}/convergences:
+    post:
+      summary: Fuse one question into a converging surviving one (human-only, spec §12.2)
+      description: >-
+        Records one human fusion of two converging generated questions
+        (spec §4.8, §12.2, §14.5): the `question_id` is marked `covered` in
+        the contract and never solicited again. Only Arbitrer merges - the
+        two questions must be generated for the session and must converge
+        (same family.kind, same targets up to symmetry indices or identical
+        normalized formula), otherwise `422` convergence_rejected. Automatic
+        fusion is forbidden. The fusion is appended to the session journal as
+        a `convergence_fused` entry.
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [question_id, proposition_id]
+              additionalProperties: false
+              properties:
+                question_id:
+                  type: string
+                proposition_id:
+                  type: string
+      responses:
+        "201":
+          description: The recorded fusion.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  record:
+                    $ref: "#/components/schemas/ConvergenceRecord"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+    get:
+      summary: The full append-only fusion history of a session (spec §4.8, §12.2)
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Every fusion of the session, in append order.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  convergences:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ConvergenceRecord"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
@@ -726,6 +802,20 @@ components:
         previous_decision:
           enum: [accept, refuse, verify-first]
           nullable: true
+    ConvergenceRecord:
+      type: object
+      required: [session_id, question_id, proposition_id, timestamp]
+      properties:
+        session_id:
+          type: string
+        question_id:
+          type: string
+          description: The covered question - never solicited again once fused.
+        proposition_id:
+          type: string
+          description: The surviving question the covered one converges with.
+        timestamp:
+          type: number
     ContractDocument:
       type: object
       required: [version, session_id, model_id, profile, questions, journal]
@@ -785,7 +875,15 @@ components:
               role:
                 type: string
               status:
-                enum: [pending, accept, refuse, verify-first]
+                enum: [pending, accept, refuse, verify-first, covered]
+              covered_by:
+                type: string
+                nullable: true
+                description: The surviving question of the human fusion covering this one (spec §12.2); null when not covered.
+              convergence_hint:
+                type: string
+                nullable: true
+                description: The earlier generated question this one converges with (spec §14.5); null when original.
               proofs:
                 type: array
                 items:
