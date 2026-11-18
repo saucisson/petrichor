@@ -27,8 +27,7 @@ FROM python:3.15-slim AS runtime
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         default-jre-headless \
-    && rm -rf /var/lib/apt/lists/* \
-
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /opt/its-tools /opt/its-tools
 RUN mkdir -p /usr/local/bin     && printf '#!/bin/sh\nexec java -jar /opt/its-tools/its-tools.jar "$@"\n' > /usr/local/bin/its \
     && chmod +x /usr/local/bin/its

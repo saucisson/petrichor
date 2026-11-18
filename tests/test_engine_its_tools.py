@@ -11,11 +11,32 @@ import stat
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
+import structlog.testing
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from philosophes3 import build_philosophes3
 
-from petrichor.engines.contract import EngineQuestion
+from petrichor.checks import (
+    CheckCompleted,
+    CheckFailed,
+    CheckQuestion,
+    KindPattern,
+)
+from petrichor.engines.api_runner import ItsToolsCheckRunner
+from petrichor.engines.archive import RunArchive
+from petrichor.engines.contract import (
+    DEFAULT_TIMEOUT_SECONDS,
+    ITS_TOOLS_ENGINE_NAME,
+    ITS_TOOLS_ENGINE_VERSION,
+    Cost,
+    DriverError,
+    EngineQuestion,
+    EngineTimeoutError,
+    InputHash,
+    NormalizedOutput,
+    RunRecord,
+    new_run_id,
+)
 from petrichor.engines.its_tools_server import (
     DEADLOCK_QUERY,
     ItsToolsHandler,
@@ -471,3 +492,101 @@ def test_handle_reduce_narration_events(
     assert "its_tools_reduce_received" in messages
     assert "its_tools_reduce_question_parsed" in messages
     assert "its_tools_reducer_completed" in messages
+
+
+class _StubDriver:
+    """A driver stub programmed with one outcome, to exercise the runner paths."""
+
+    def __init__(self, *, outcome: RunRecord | Exception) -> None:
+        self._outcome = outcome
+
+    def run(self, *, question: EngineQuestion, timeout_seconds: int) -> RunRecord:
+        if isinstance(self._outcome, Exception):
+            raise self._outcome
+        return self._outcome
+
+
+def _runner_question() -> CheckQuestion:
+    """A deadlock check question carrying the Philosophes-3 model."""
+    return CheckQuestion(
+        family="deadlock",
+        kind=KindPattern("deadlock"),
+        formula="EF DEADLOCK",
+        parameters={"model": MODEL},
+    )
+
+
+def _completed_record() -> RunRecord:
+    """The archived record of a successful run, as the driver would return it."""
+    return RunRecord(
+        run_id=new_run_id(),
+        engine=ITS_TOOLS_ENGINE_NAME,
+        engine_version=ITS_TOOLS_ENGINE_VERSION,
+        command=["docker", "compose", "run", "its-tools"],
+        timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
+        input_hash=InputHash("sha256:" + "0" * 64),
+        output=NormalizedOutput(
+            verdict="satisfied",
+            witness=None,
+            cost=Cost(tool_seconds=0.1, states_explored=14),
+            technique="its-tools-10052022",
+        ),
+        measured_seconds=0.2,
+        archived_at="2026-11-10T00:00:00+00:00",
+    )
+
+
+class TestItsToolsCheckRunnerNarration:
+    """The runner's log events are part of the narration contract: pinned here.
+
+    The container itself stays deferred (the ITS-Tools image cannot build
+    yet - its pinned tag is a p2 dump, follow-up); the runner paths are
+    exercised with a stub driver, like the verifypn runner's.
+    """
+
+    def test_completed_run_is_narrated(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        runner = ItsToolsCheckRunner(archive=RunArchive(directory=tmp_path / "runs"))
+        record = _completed_record()
+        monkeypatch.setattr(runner, "_driver", _StubDriver(outcome=record))
+        with structlog.testing.capture_logs() as events:
+            outcome = runner.run(question=_runner_question(), timeout_seconds=30)
+        assert isinstance(outcome, CheckCompleted)
+        completed = [event for event in events if event["event"] == "runner_run_completed"]
+        assert len(completed) == 1
+        assert completed[0]["run_id"] == record.run_id
+        assert completed[0]["engine"] == ITS_TOOLS_ENGINE_NAME
+        assert completed[0]["verdict"] == "satisfied"
+
+    def test_timeout_is_narrated_as_a_warning(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        runner = ItsToolsCheckRunner(archive=RunArchive(directory=tmp_path / "runs"))
+        monkeypatch.setattr(
+            runner, "_driver", _StubDriver(outcome=EngineTimeoutError("exceeded 30s"))
+        )
+        with structlog.testing.capture_logs() as events:
+            outcome = runner.run(question=_runner_question(), timeout_seconds=30)
+        assert isinstance(outcome, CheckFailed)
+        assert outcome.kind == "timeout"
+        timeouts = [event for event in events if event["event"] == "runner_timeout"]
+        assert len(timeouts) == 1
+        assert timeouts[0]["family"] == "deadlock"
+        assert timeouts[0]["kind"] == "deadlock"
+
+    def test_driver_error_is_narrated_as_a_warning(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        runner = ItsToolsCheckRunner(archive=RunArchive(directory=tmp_path / "runs"))
+        monkeypatch.setattr(
+            runner, "_driver", _StubDriver(outcome=DriverError("compose up failed"))
+        )
+        with structlog.testing.capture_logs() as events:
+            outcome = runner.run(question=_runner_question(), timeout_seconds=30)
+        assert isinstance(outcome, CheckFailed)
+        assert outcome.kind == "engine_error"
+        errors = [event for event in events if event["event"] == "runner_engine_error"]
+        assert len(errors) == 1
+        assert errors[0]["family"] == "deadlock"
+        assert errors[0]["error"] == "compose up failed"

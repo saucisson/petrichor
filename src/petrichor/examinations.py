@@ -16,6 +16,7 @@ from typing import Literal, NewType
 from pydantic import BaseModel, ConfigDict, Field
 
 from petrichor.checks import FAMILY_PATTERNS, CheckFamilyName, KindPattern
+from petrichor.pql import pql_formula
 
 ExaminationName = NewType("ExaminationName", str)
 """An MCC examination name, e.g. ``CTLCardinality`` (spec §17.3)."""
@@ -108,10 +109,11 @@ def safety_counter_variants(
 def dialect_query(*, engine: EngineDialect, examination: ExaminationName, formula: str) -> str:
     """Translate one examination into the query dialect of a qualified tool (spec §17.3).
 
-    verifypn (PQL) and its-tools accept CTL as-is; the deadlock examination
-    maps to the fixed ``EF deadlock`` query on every tool; smpt covers
-    reachability only - a CTL/LTL examination on smpt is a typed error, never
-    a silent rewrite (spec §17.2).
+    verifypn (PQL) needs the MCC implication rewritten (``pql_formula``);
+    its-tools accepts CTL as-is; the deadlock examination maps to the fixed
+    ``EF deadlock`` query on every tool; smpt covers reachability only - a
+    CTL/LTL examination on smpt is a typed error, never a silent rewrite
+    (spec §17.2).
     """
     if examination == REACHABILITY_DEADLOCK:
         return DEADLOCK_QUERY
@@ -119,4 +121,6 @@ def dialect_query(*, engine: EngineDialect, examination: ExaminationName, formul
         raise UnknownKindError(
             f"SMPT covers no {examination!r} examination (reachability only, spec §17.2)."
         )
+    if engine == "verifypn":
+        return pql_formula(formula=formula)
     return formula
