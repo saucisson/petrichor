@@ -307,6 +307,29 @@ def _tool_seconds_of(*, run: StoredRun) -> float:
     return float(tool_seconds)
 
 
+def fairness_of_question(
+    *, question: GeneratedQuestion, runs: list[StoredRun]
+) -> tuple[Fairness, RunId | None, FairnessStatus]:
+    """The fairness hypothesis of a clause and its repairing run (spec §14.7, issue #35).
+
+    Only liveness clauses carry a fairness hypothesis; the repairing run is
+    the LATEST session run on the same formula with a non-``none`` fairness.
+    When no wired tool supports fairness natively, the status is the
+    explicit ``unverifiable-under-fairness`` degradation.
+    """
+    if question.family != "liveness":
+        return "none", None, "none"
+    fairness_runs = [
+        run for run in runs if run.formula == question.formula and run.fairness != "none"
+    ]
+    if not fairness_runs:
+        return "none", None, "none"
+    latest = fairness_runs[-1]
+    supported = bool(latest.output and latest.output.get("fairness_supported"))
+    status: FairnessStatus = "tool-specific" if supported else "unverifiable-under-fairness"
+    return latest.fairness, latest.run_id, status
+
+
 def build_contract(
     *,
     session: StoredSession,
@@ -345,34 +368,14 @@ def build_contract(
             return "covered", fusion.proposition_id
         return latest.get(question.question_id, "pending"), None
 
-    def _fairness_of(
-        *, question: GeneratedQuestion
-    ) -> tuple[Fairness, RunId | None, FairnessStatus]:
-        """The fairness hypothesis of a clause and its repairing run (spec §14.7, issue #35).
-
-        Only liveness clauses carry a fairness hypothesis; the repairing run
-        is the latest session run on the same formula with a non-``none``
-        fairness. When no wired tool supports fairness natively, the status
-        is the explicit ``unverifiable-under-fairness`` degradation.
-        """
-        if question.family != "liveness":
-            return "none", None, "none"
-        fairness_runs = [
-            run for run in runs if run.formula == question.formula and run.fairness != "none"
-        ]
-        if not fairness_runs:
-            return "none", None, "none"
-        latest = fairness_runs[-1]
-        supported = bool(latest.output and latest.output.get("fairness_supported"))
-        status: FairnessStatus = "tool-specific" if supported else "unverifiable-under-fairness"
-        return latest.fairness, latest.run_id, status
-
     def _with_cross_status(*, question: GeneratedQuestion) -> ContractQuestion:
         """Build one contract question with its computed cross-verification status."""
         proofs = _proofs_for_question(question=question, runs=runs)
         cross_status, verified_by = cross_status_for_proofs(proofs=proofs)
         status, covered_by = _status_for(question=question)
-        fairness, repairs_run_id, fairness_status = _fairness_of(question=question)
+        fairness, repairs_run_id, fairness_status = fairness_of_question(
+            question=question, runs=runs
+        )
         return ContractQuestion(
             question_id=question.question_id,
             template_id=question.template_id,

@@ -10,6 +10,7 @@ thread-safe: runs are executed on background threads and polled over HTTP.
 """
 
 import threading
+from typing import Literal
 from uuid import uuid4
 
 import structlog
@@ -87,7 +88,7 @@ class StoredRun(BaseModel):
     session-less run, accounted against the global bucket."""
     fairness: Fairness = "none"
     """The fairness parameter of the run (spec §14.7, issue #35)."""
-    semantics: str | None = None
+    semantics: Literal["tool-specific"] | None = None
     """``tool-specific`` when the run carries a fairness parameter no wired
     tool supports natively (spec §17.5); such runs are never inter-tool
     comparable."""
