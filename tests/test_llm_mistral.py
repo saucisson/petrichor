@@ -7,7 +7,7 @@
 """
 
 import json
-from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import httpx
 import pytest
@@ -17,6 +17,9 @@ from pydantic import BaseModel, SecretStr
 from petrichor.api.app import create_app
 from petrichor.api.settings import ApiSettings
 from petrichor.llm import schemas
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 from petrichor.llm.mistral import PROMPT_TEMPLATES, MistralProvider
 from petrichor.llm.provider import DeterministicMockProvider, LLMDegradationError
 from petrichor.main import select_llm_provider
