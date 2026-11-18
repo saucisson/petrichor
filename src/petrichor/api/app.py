@@ -122,6 +122,7 @@ RUNS_PATH_PREFIX = "/v1/runs/"
 WITNESS_SUFFIX = "/witness"
 WITNESSES_PATH = "/v1/witnesses"
 WITNESSES_PATH_PREFIX = "/v1/witnesses/"
+LLM_USAGE_PATH = "/v1/llm/usage"
 QUALIFICATION_PATH = "/v1/qualification"
 SESSIONS_PATH = "/v1/sessions"
 SESSION_PATH_PREFIX = "/v1/sessions/"
@@ -1276,6 +1277,45 @@ def _dispatch_models(
             ),
         )
     return None
+
+
+def _get_llm_usage(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    llm_provider: LLMProvider | None,
+) -> Iterable[bytes]:
+    """The accumulated LLM cost, displayed apart from the tool-time budget (spec §12.4, issue #36).
+
+    The MC budget counts only tool seconds; the LLM cost (tokens) is exposed
+    here, separately, never mixed into it.
+    """
+    if llm_provider is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+                reason="llm_not_configured",
+                detail="No LLM provider is wired into this server.",
+            ),
+        )
+    totals = llm_provider.usage_totals()
+    logger.debug("api_llm_usage_read", provider=totals.get("provider"), calls=totals.get("calls"))
+    body = json.dumps(
+        {
+            "llm": totals,
+            "budget_note": "LLM cost is NOT part of the MC tool-time budget (spec §12.4).",
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.OK,
+        content_type=CONTENT_TYPE_JSON,
+        body=body.encode("utf-8"),
+    )
 
 
 def _dispatch_qualification(
@@ -3001,6 +3041,10 @@ def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
                 method=method,
                 path=path,
                 qualification=qualification,
+            )
+        if routed is None and path == LLM_USAGE_PATH and method == "GET":
+            routed = _get_llm_usage(
+                environ=environ, start_response=start_response, llm_provider=llm_provider
             )
         if routed is None:
             routed = _dispatch_checks_and_runs(

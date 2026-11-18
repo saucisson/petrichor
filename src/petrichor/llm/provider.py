@@ -82,6 +82,14 @@ class LLMProvider(ABC):
         transition degrades explicitly (``LLMDegradationError``).
         """
 
+    @abstractmethod
+    def usage_totals(self) -> dict[str, object]:
+        """The accumulated LLM cost of the provider.
+
+        Displayed apart from the tool-time budget, which counts only tool
+        seconds (spec §12.4, issue #36).
+        """
+
 
 class DeterministicMockProvider(LLMProvider):
     """Serves the golden files verbatim; never invents an answer (spec §15)."""
@@ -89,6 +97,17 @@ class DeterministicMockProvider(LLMProvider):
     def __init__(self, *, golden_root: Path = DEFAULT_GOLDEN_ROOT) -> None:
         """Bind the provider to a golden corpus root (defaults to the shipped corpus)."""
         self._golden_root = golden_root
+        self._calls = 0
+
+    def usage_totals(self) -> dict[str, object]:
+        """The mock costs no tokens; only the call count is tracked (spec §12.4)."""
+        return {
+            "provider": "mock",
+            "calls": self._calls,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        }
 
     def semantic_profile(self, *, model_hash: ContentHash) -> SemanticProfile:
         """Serve the scripted profile of the corpus."""
@@ -128,6 +147,7 @@ class DeterministicMockProvider(LLMProvider):
         self, *, usage: LlmUsage, model_hash: ContentHash, output_type: type[OutputType]
     ) -> OutputType:
         """Load and validate one golden file, with a bounded re-request on failure."""
+        self._calls += 1
         path = self._golden_root / model_hash / f"{usage}.json"
         for attempt in range(1, MAX_LLM_ATTEMPTS + 1):
             try:

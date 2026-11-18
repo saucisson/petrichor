@@ -20,7 +20,8 @@ from petrichor.api import create_app
 from petrichor.api.settings import ApiSettings
 from petrichor.arbitration import ArbitrationStore
 from petrichor.convergence import ConvergenceStore
-from petrichor.llm.provider import DeterministicMockProvider
+from petrichor.llm.mistral import MistralProvider
+from petrichor.llm.provider import DeterministicMockProvider, LLMProvider
 from petrichor.model_store import ModelStore
 from petrichor.profile import ProfileArbitrator
 from petrichor.run_store import RunStore
@@ -53,7 +54,7 @@ def build_server(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
     arbitration_store: ArbitrationStore,
     convergence_store: ConvergenceStore,
     witness_store: WitnessStore,
-    llm_provider: DeterministicMockProvider,
+    llm_provider: LLMProvider,
 ) -> WSGIServer:
     """Assemble the WSGI server around the application."""
     app = create_app(
@@ -69,6 +70,19 @@ def build_server(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
         llm_provider=llm_provider,
     )
     return make_server(DEFAULT_HOST, DEFAULT_PORT, app)
+
+
+def select_llm_provider(*, settings: ApiSettings) -> LLMProvider:
+    """Select the LLM provider by configuration (spec §8, issue #36).
+
+    ``mock`` (default) serves the golden corpus; ``mistral`` calls the real
+    API and fails at startup when the key is missing - never open by default.
+    """
+    if settings.llm_provider == "mistral":
+        if settings.mistral_api_key is None:
+            raise SystemExit("PETRICHOR_LLM_PROVIDER=mistral requires MISTRAL_API_KEY to be set.")
+        return MistralProvider(api_key=settings.mistral_api_key, model=settings.llm_model)
+    return DeterministicMockProvider()
 
 
 def main() -> None:
@@ -90,7 +104,7 @@ def main() -> None:
         arbitration_store=arbitration_store,
         convergence_store=convergence_store,
         witness_store=witness_store,
-        llm_provider=DeterministicMockProvider(),
+        llm_provider=select_llm_provider(settings=settings),
     )
     logger.info("api_server_started", host=DEFAULT_HOST, port=DEFAULT_PORT)
     server.serve_forever()  # pragma: no cover - the serving loop is the entry point
