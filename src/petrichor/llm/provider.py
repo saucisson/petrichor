@@ -22,6 +22,7 @@ from petrichor.llm.schemas import (
     ClusterList,
     FormulaReadings,
     LlmUsage,
+    NarrationCorpus,
     Reading,
     SemanticProfile,
 )
@@ -73,6 +74,14 @@ class LLMProvider(ABC):
     def cluster(self, *, model_hash: ContentHash) -> tuple[Cluster, ...]:
         """Cluster the violations of a model with their causes and remediations."""
 
+    @abstractmethod
+    def narrate_transition(self, *, model_hash: ContentHash, transition: str) -> str:
+        """Narrate one fired transition of a witness step (spec §16, issue #32).
+
+        The narration is a proposition, never a verdict; an unscripted
+        transition degrades explicitly (``LLMDegradationError``).
+        """
+
 
 class DeterministicMockProvider(LLMProvider):
     """Serves the golden files verbatim; never invents an answer (spec §15)."""
@@ -103,6 +112,17 @@ class DeterministicMockProvider(LLMProvider):
         """Serve the scripted clusters of the corpus."""
         document = self._load(usage="cluster", model_hash=model_hash, output_type=ClusterList)
         return document.clusters
+
+    def narrate_transition(self, *, model_hash: ContentHash, transition: str) -> str:
+        """Serve the scripted narration of one transition; unscripted degrades (spec §16)."""
+        document = self._load(usage="narration", model_hash=model_hash, output_type=NarrationCorpus)
+        sentence = document.narrations.get(transition)
+        if sentence is None:
+            logger.warning(
+                "llm_narration_not_scripted", model_hash=model_hash, transition=transition
+            )
+            raise LLMDegradationError(f"No scripted narration for transition {transition!r}.")
+        return sentence
 
     def _load(
         self, *, usage: LlmUsage, model_hash: ContentHash, output_type: type[OutputType]

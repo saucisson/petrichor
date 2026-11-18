@@ -20,16 +20,19 @@ from petrichor.api import create_app
 from petrichor.api.settings import ApiSettings
 from petrichor.arbitration import ArbitrationStore
 from petrichor.convergence import ConvergenceStore
+from petrichor.llm.provider import DeterministicMockProvider
 from petrichor.model_store import ModelStore
 from petrichor.profile import ProfileArbitrator
 from petrichor.run_store import RunStore
 from petrichor.session_store import SessionStore
+from petrichor.witness import WitnessStore
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8080
 DEFAULT_SESSIONS_DIRECTORY = ".petrichor/sessions"
 DEFAULT_ARBITRATIONS_DIRECTORY = ".petrichor/arbitrations"
 DEFAULT_CONVERGENCES_DIRECTORY = ".petrichor/convergences"
+DEFAULT_WITNESSES_DIRECTORY = ".petrichor/witnesses"
 
 
 def configure_logging() -> None:
@@ -40,7 +43,7 @@ def configure_logging() -> None:
     )
 
 
-def build_server(
+def build_server(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
     *,
     settings: ApiSettings,
     store: ModelStore,
@@ -49,6 +52,8 @@ def build_server(
     arbitrator: ProfileArbitrator,
     arbitration_store: ArbitrationStore,
     convergence_store: ConvergenceStore,
+    witness_store: WitnessStore,
+    llm_provider: DeterministicMockProvider,
 ) -> WSGIServer:
     """Assemble the WSGI server around the application."""
     app = create_app(
@@ -60,6 +65,8 @@ def build_server(
         arbitrator=arbitrator,
         arbitration_store=arbitration_store,
         convergence_store=convergence_store,
+        witness_store=witness_store,
+        llm_provider=llm_provider,
     )
     return make_server(DEFAULT_HOST, DEFAULT_PORT, app)
 
@@ -73,6 +80,7 @@ def main() -> None:
     arbitrator = ProfileArbitrator()
     arbitration_store = ArbitrationStore(directory=Path(DEFAULT_ARBITRATIONS_DIRECTORY))
     convergence_store = ConvergenceStore(directory=Path(DEFAULT_CONVERGENCES_DIRECTORY))
+    witness_store = WitnessStore(directory=Path(DEFAULT_WITNESSES_DIRECTORY))
     server = build_server(
         settings=settings,
         store=ModelStore(),
@@ -81,6 +89,8 @@ def main() -> None:
         arbitrator=arbitrator,
         arbitration_store=arbitration_store,
         convergence_store=convergence_store,
+        witness_store=witness_store,
+        llm_provider=DeterministicMockProvider(),
     )
     logger.info("api_server_started", host=DEFAULT_HOST, port=DEFAULT_PORT)
     server.serve_forever()  # pragma: no cover - the serving loop is the entry point

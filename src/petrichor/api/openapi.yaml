@@ -233,6 +233,68 @@ paths:
           $ref: "#/components/responses/NotFound"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+  /runs/{run_id}/witness:
+    get:
+      summary: The §16 witness document of one run, with per-step LLM narrations (issue #32)
+      description: >-
+        Structure = tool (markings, fired transitions, cyclicity, back-edge),
+        normalized from any engine's output into the §16 format. Narrations
+        are LLM propositions labeled `provenance: llm`, never verdicts
+        (spec §16, §19.4). 404 `witness_not_found` when the run carries no
+        witness.
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The §16 witness document of the run.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WitnessDocument"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+  /witnesses/{witness_id}:
+    get:
+      summary: One stored witness with the runs referencing it (stored once, referenced n times)
+      description: >-
+        Witnesses are deduplicated by content hash: a witness shared by
+        several violations is stored once and referenced by each run
+        (spec §16, issue #32).
+      parameters:
+        - name: witness_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The stored witness record and its referencing runs.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [record, referenced_by]
+                properties:
+                  record:
+                    $ref: "#/components/schemas/WitnessRecord"
+                  referenced_by:
+                    type: array
+                    items:
+                      type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
   /qualification:
     get:
       summary: Qualification status per adapter and family
@@ -852,6 +914,72 @@ components:
           description: The surviving question the covered one converges with.
         timestamp:
           type: number
+    WitnessStep:
+      type: object
+      required: [index, marking, fired]
+      properties:
+        index:
+          type: integer
+          minimum: 0
+        marking:
+          type: array
+          items:
+            type: string
+        fired:
+          type: string
+          nullable: true
+    Narration:
+      type: object
+      required: [step_index, text, provenance]
+      properties:
+        step_index:
+          type: integer
+          minimum: 0
+        text:
+          type: string
+        provenance:
+          enum: [llm]
+          description: A narration is always an LLM proposition, never a verdict (spec §16, §19.4).
+    WitnessRecord:
+      type: object
+      required: [witness_id, kind, cyclic, back_edge, steps]
+      properties:
+        witness_id:
+          type: string
+        kind:
+          enum: [counterexample, trace]
+        cyclic:
+          type: boolean
+        back_edge:
+          type: integer
+          nullable: true
+        steps:
+          type: array
+          items:
+            $ref: "#/components/schemas/WitnessStep"
+    WitnessDocument:
+      type: object
+      required: [run_id, witness_id, kind, cyclic, back_edge, steps, narrations]
+      properties:
+        run_id:
+          type: string
+        witness_id:
+          type: string
+        kind:
+          enum: [counterexample, trace]
+        cyclic:
+          type: boolean
+        back_edge:
+          type: integer
+          nullable: true
+        steps:
+          type: array
+          items:
+            $ref: "#/components/schemas/WitnessStep"
+        narrations:
+          type: array
+          items:
+            $ref: "#/components/schemas/Narration"
     ContractDocument:
       type: object
       required: [version, session_id, model_id, profile, questions, journal]

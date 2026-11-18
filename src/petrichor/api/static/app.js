@@ -165,8 +165,59 @@ async function loadRuns() {
     verdictSpan.className = "run-verdict";
     verdictSpan.textContent = verdict;
     item.append(label, verdictSpan);
+    if (run.output && run.output.witness) {
+      item.append(await renderWitness(runId));
+    }
     list.append(item);
   }
+}
+
+/* Witness step reader (spec §16, issue #32): the structure comes from the
+   tool, the narration is an LLM proposition labeled provenance: llm — never
+   a verdict. The fired transition of each step is highlighted. */
+async function renderWitness(runId) {
+  const response = await api("/v1/runs/" + runId + "/witness");
+  const container = document.createElement("div");
+  container.className = "witness-reader";
+  if (response.status !== 200) {
+    container.textContent = "Témoin indisponible (" + response.status + ").";
+    return container;
+  }
+  const witness = await response.json();
+  const title = document.createElement("p");
+  title.className = "witness-title";
+  title.textContent = "Témoin " + witness.witness_id + " — " + witness.kind
+    + (witness.cyclic ? " — cyclique (back-edge " + witness.back_edge + ")" : " — acyclique");
+  const steps = document.createElement("ol");
+  steps.className = "witness-steps";
+  const narrations = new Map((witness.narrations || []).map((n) => [n.step_index, n]));
+  for (const step of witness.steps) {
+    const entry = document.createElement("li");
+    const marking = document.createElement("span");
+    marking.className = "witness-marking";
+    marking.textContent = "marquage : " + step.marking.join(", ");
+    entry.append(marking);
+    if (step.fired) {
+      const fired = document.createElement("mark");
+      fired.className = "fired-transition";
+      fired.textContent = "tire : " + step.fired;
+      entry.append(" ", fired);
+    }
+    const narration = narrations.get(step.index);
+    if (narration) {
+      const line = document.createElement("p");
+      line.className = "witness-narration";
+      line.textContent = narration.text + " ";
+      const provenance = document.createElement("span");
+      provenance.className = "narration-provenance";
+      provenance.textContent = "(provenance : " + narration.provenance + ")";
+      line.append(provenance);
+      entry.append(line);
+    }
+    steps.append(entry);
+  }
+  container.append(title, steps);
+  return container;
 }
 
 async function loadContractMarkdown() {

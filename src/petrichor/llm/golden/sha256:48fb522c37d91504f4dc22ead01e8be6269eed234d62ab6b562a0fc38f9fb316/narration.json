@@ -1,0 +1,13 @@
+{
+  "narrations": {
+    "takeL_1": "Le philosophe 1 prend la fourchette de gauche : il quitte l'état penser pour attendre, la fourchette 1 n'est plus sur la table.",
+    "takeL_2": "Le philosophe 2 prend la fourchette de gauche : il quitte l'état penser pour attendre, la fourchette 2 n'est plus sur la table.",
+    "takeL_3": "Le philosophe 3 prend la fourchette de gauche : il quitte l'état penser pour attendre, la fourchette 3 n'est plus sur la table.",
+    "takeR_1": "Le philosophe 1 prend la fourchette de droite : il détient désormais les deux fourchettes et peut entrer dans l'état manger.",
+    "takeR_2": "Le philosophe 2 prend la fourchette de droite : il détient désormais les deux fourchettes et peut entrer dans l'état manger.",
+    "takeR_3": "Le philosophe 3 prend la fourchette de droite : il détient désormais les deux fourchettes et peut entrer dans l'état manger.",
+    "rel_1": "Le philosophe 1 repose ses fourchettes : il quitte l'état manger pour revenir à l'état penser, les fourchettes redeviennent disponibles.",
+    "rel_2": "Le philosophe 2 repose ses fourchettes : il quitte l'état manger pour revenir à l'état penser, les fourchettes redeviennent disponibles.",
+    "rel_3": "Le philosophe 3 repose ses fourchettes : il quitte l'état manger pour revenir à l'état penser, les fourchettes redeviennent disponibles."
+  }
+}
