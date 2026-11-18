@@ -295,6 +295,48 @@ paths:
           $ref: "#/components/responses/NotFound"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+  /llm/usage:
+    get:
+      summary: The accumulated LLM cost, displayed apart from the tool-time budget (issue #36)
+      description: >-
+        The MC budget counts only tool seconds (spec §12.4); the LLM cost
+        (calls, tokens) is exposed here, separately, never mixed into it.
+      responses:
+        "200":
+          description: The LLM usage totals of the configured provider.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [llm, budget_note]
+                properties:
+                  llm:
+                    type: object
+                    properties:
+                      provider:
+                        type: string
+                      model:
+                        type: string
+                      calls:
+                        type: integer
+                      prompt_tokens:
+                        type: integer
+                      completion_tokens:
+                        type: integer
+                      total_tokens:
+                        type: integer
+                  budget_note:
+                    type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          description: No LLM provider is wired.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
   /qualification:
     get:
       summary: Qualification status per adapter and family
