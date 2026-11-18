@@ -45,7 +45,7 @@ codes fairness, so a run with ``fairness != "none"`` is labeled
 ``semantics: tool-specific`` and never inter-tool comparable.
 """
 
-TOOL_SPECIFIC_SEMANTICS = "tool-specific"
+TOOL_SPECIFIC_SEMANTICS: Literal["tool-specific"] = "tool-specific"
 """The semantics label of a run outside the MCC dialect (spec §17.5, issue #35)."""
 
 RunId = NewType("RunId", str)
