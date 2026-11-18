@@ -541,14 +541,9 @@ def _execute_run(
             family=question.family,
             engine_qualified=engine_qualified,
         )
-        run_store.mark_done(
-            run_id=run_id,
-            output=outcome.output,
-            command=outcome.command,
-            measured_seconds=measured_seconds,
-            engine_qualified=engine_qualified,
-        )
         if witness_store is not None:
+            # Stored and referenced BEFORE the terminal state: a poller that
+            # sees "done" must already see the witness (spec §16, issue #32).
             try:
                 document = normalize_witness_output(run_id=run_id, output=outcome.output)
             except WitnessError as error:
@@ -557,6 +552,13 @@ def _execute_run(
             if document is not None:
                 witness_store.store(record=witness_record_of(document=document))
                 witness_store.add_reference(witness_id=document.witness_id, run_id=run_id)
+        run_store.mark_done(
+            run_id=run_id,
+            output=outcome.output,
+            command=outcome.command,
+            measured_seconds=measured_seconds,
+            engine_qualified=engine_qualified,
+        )
         logger.debug(
             "check_run_finished", run_id=run_id, status="done", measured_seconds=measured_seconds
         )
