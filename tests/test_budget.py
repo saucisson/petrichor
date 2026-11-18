@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 import httpx
+import structlog.testing
 from pydantic import SecretStr
 
 from petrichor.api.app import create_app
@@ -295,3 +296,20 @@ class TestContractBudget:
         assert "/budget" in script
         assert "budget-line" in script
         assert "aucun report" in script
+
+
+class TestBudgetLogNarration:
+    """The budget endpoint's log event is part of the narration contract (ADR-0005)."""
+
+    def test_api_session_budget_read_is_pinned(self, tmp_path: Path) -> None:
+        client, _, _ = build_client(tmp_path)
+        model_id = import_model(client)
+        session_id = create_session(client, model_id, budget_seconds=600.0)
+        with structlog.testing.capture_logs() as logs:
+            response = client.get(f"/v1/sessions/{session_id}/budget", headers=AUTH_HEADERS)
+            assert response.status_code == 200
+        events = [event["event"] for event in logs]
+        assert "api_session_budget_read" in events
+        entry = next(event for event in logs if event["event"] == "api_session_budget_read")
+        assert entry["budget_seconds"] == 600.0
+        assert entry["remaining_seconds"] == 600.0

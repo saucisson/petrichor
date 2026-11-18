@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Literal, NewType
 import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
-from petrichor.checks import CheckFamilyName, KindPattern, RunId, RunStatus, ToolVersion
+from petrichor.checks import CheckFamilyName, KindPattern, RunId, RunStatus, SessionId, ToolVersion
 from petrichor.convergence import CONVERGENCE_HINT_TEXT, ConvergenceRecord
 from petrichor.elicitation import (
     ElicitationCatalog,
@@ -37,7 +37,6 @@ from petrichor.examinations import (
 from petrichor.llm.schemas import SemanticProfile
 from petrichor.petri_canonical import JsonValue, ModelId
 from petrichor.profile import EntryId, ProfileState
-from petrichor.session_store import SessionId
 from petrichor.triage import TriageKind
 
 if TYPE_CHECKING:
@@ -276,6 +275,19 @@ def cross_status_for_proofs(*, proofs: tuple[ContractProof, ...]) -> tuple[Cross
     return "controversial", 0
 
 
+def _tool_seconds_of(*, run: StoredRun) -> float:
+    """The tool-reported cost of one run, 0.0 when the output carries none (spec §12.4)."""
+    if run.output is None:
+        return 0.0
+    cost = run.output.get("cost")
+    if not isinstance(cost, dict):
+        return 0.0
+    tool_seconds = cost.get("tool_seconds")
+    if isinstance(tool_seconds, bool) or not isinstance(tool_seconds, (int, float)):
+        return 0.0
+    return float(tool_seconds)
+
+
 def build_contract(
     *,
     session: StoredSession,
@@ -365,7 +377,10 @@ def build_contract(
         )
         for entry in profile_state.proposed.entries
     )
-    consumed_seconds = sum(run.measured_seconds for run in runs if run.measured_seconds is not None)
+    # The contract is replayable byte-identical (issue #17): the consumed
+    # budget is the TOOL-reported cost (output.cost.tool_seconds, spec §12.4),
+    # never the wall-clock measured_seconds which varies between executions.
+    consumed_seconds = sum(_tool_seconds_of(run=run) for run in runs)
     document = ContractDocument(
         session_id=session.session_id,
         model_id=session.model_id,

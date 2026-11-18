@@ -37,6 +37,19 @@ type QualificationState = Literal["qualified", "unqualified"]
 RunId = NewType("RunId", str)
 """A run identifier, e.g. ``run_7c2a9f``."""
 
+SessionId = NewType("SessionId", str)
+"""A session identifier, e.g. ``ses_7c2a9f`` (defined here, the lowest domain
+module, so the check request boundary can type it without an import cycle)."""
+
+SESSION_ID_PREFIX = "ses_"
+SESSION_ID_HEX_DIGITS = 6
+
+
+def new_session_id(*, random_hex: str) -> SessionId:
+    """Build a session id from random hex, truncated to the fixed width."""
+    return SessionId(f"{SESSION_ID_PREFIX}{random_hex[:SESSION_ID_HEX_DIGITS]}")
+
+
 RunKey = NewType("RunKey", str)
 """The idempotence key of a run: hash of (model, question), formatted ``sha256:<hex>``."""
 
@@ -73,7 +86,7 @@ class CheckRequest(BaseModel):
     kind: KindPattern = Field(min_length=1)
     formula: str = Field(min_length=1)
     parameters: dict[str, JsonValue] = Field(default_factory=dict)
-    session_id: str | None = None
+    session_id: SessionId | None = None
     """The session this run is charged to (spec §12.4, issue #33); when given,
     the run is admitted against that session's own budget cap and attached
     to it. Absent: the run is accounted against the global bucket."""
