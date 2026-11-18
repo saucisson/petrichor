@@ -22,11 +22,11 @@ from petrichor.checks import (
     RunId,
     RunKey,
     RunStatus,
+    SessionId,
     ToolVersion,
     new_run_id,
 )
 from petrichor.petri_canonical import JsonValue, ModelId
-from petrichor.session_store import SessionId
 from petrichor.triage import NonVacuityGuard, QuestionTriage
 
 logger = structlog.get_logger(__name__)

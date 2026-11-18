@@ -19,8 +19,8 @@ from typing import TYPE_CHECKING, Literal
 import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
+from petrichor.checks import SessionId
 from petrichor.elicitation import QuestionId
-from petrichor.session_store import SessionId
 
 if TYPE_CHECKING:
     from pathlib import Path

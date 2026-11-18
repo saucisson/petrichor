@@ -51,6 +51,7 @@ from petrichor.checks import (
     CheckRunner,
     QualificationLookup,
     RunId,
+    SessionId,
     StaticFirstProber,
     ToolVersion,
     run_key,
@@ -80,7 +81,7 @@ from petrichor.petri_canonical import (
 from petrichor.pnml_import import PnmlImportError, import_pnml
 from petrichor.profile import ArbitrationDecision, ProfileArbitrator
 from petrichor.run_store import AdmissionResult, BudgetRefused, RunAdmission, RunStore
-from petrichor.session_store import SessionId, SessionStore, StoredSession
+from petrichor.session_store import SessionStore, StoredSession
 from petrichor.state_graph import StateGraphExplorer, StateGraphUnsupportedError
 from petrichor.triage import (
     STATIC_COST_SECONDS,
@@ -801,7 +802,7 @@ def _resolve_session_budget(
             reason="sessions_not_configured",
             detail="No session store is wired into this server.",
         )
-    session = session_store.get(session_id=SessionId(request.session_id))
+    session = session_store.get(session_id=request.session_id)
     if session is None:
         return _problem(
             status=HTTPStatus.NOT_FOUND,
