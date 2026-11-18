@@ -13,11 +13,14 @@ from pathlib import Path
 
 import httpx
 import pytest
+import structlog.testing
+from hypothesis import assume, given, settings
+from hypothesis import strategies as st
 from pydantic import SecretStr
 
 from petrichor.api.app import create_app
 from petrichor.api.settings import ApiSettings
-from petrichor.checks import CheckCompleted, CheckQuestion, ToolVersion
+from petrichor.checks import CheckCompleted, CheckQuestion, RunId, ToolVersion
 from petrichor.llm.provider import DeterministicMockProvider
 from petrichor.model_store import ModelStore
 from petrichor.pnml_import import import_pnml
@@ -127,7 +130,7 @@ def wait_terminal(client: httpx.Client, run_id: str, timeout: float = 5.0) -> di
 
 class TestNormalizeWitness:
     def test_engine_output_normalizes_to_section16_document(self) -> None:
-        document = normalize_witness_output(run_id="run_abc", output=WITNESS_OUTPUT)  # type: ignore[arg-type]
+        document = normalize_witness_output(run_id=RunId("run_abc"), output=WITNESS_OUTPUT)
         assert document is not None
         assert document.run_id == "run_abc"
         assert document.kind == "counterexample"
@@ -138,12 +141,12 @@ class TestNormalizeWitness:
 
     def test_output_without_witness_normalizes_to_none(self) -> None:
         output = {**WITNESS_OUTPUT, "witness": None}
-        assert normalize_witness_output(run_id="run_abc", output=output) is None  # type: ignore[arg-type]
+        assert normalize_witness_output(run_id=RunId("run_abc"), output=output) is None
 
     def test_malformed_witness_raises_a_typed_error(self) -> None:
         output = {**WITNESS_OUTPUT, "witness": {"kind": "counterexample", "steps": [{"index": 0}]}}
         with pytest.raises(WitnessError):
-            normalize_witness_output(run_id="run_abc", output=output)  # type: ignore[arg-type]
+            normalize_witness_output(run_id=RunId("run_abc"), output=output)
 
     def test_witness_id_is_a_content_hash_of_the_structure(self) -> None:
         steps = (WitnessStep(index=0, marking=["think_1"], fired=None),)
@@ -163,34 +166,34 @@ class TestNormalizeWitness:
 class TestWitnessStore:
     def test_store_deduplicates_and_references_accumulate(self, tmp_path: Path) -> None:
         store = WitnessStore(directory=tmp_path)
-        document = normalize_witness_output(run_id="run_a", output=WITNESS_OUTPUT)  # type: ignore[arg-type]
+        document = normalize_witness_output(run_id=RunId("run_a"), output=WITNESS_OUTPUT)
         assert document is not None
         record = witness_record_of(document=document)
         assert store.store(record=record) == record
         assert store.store(record=record) == record
         assert len(store) == 1
-        store.add_reference(witness_id=record.witness_id, run_id="run_a")  # type: ignore[arg-type]
-        store.add_reference(witness_id=record.witness_id, run_id="run_b")  # type: ignore[arg-type]
-        store.add_reference(witness_id=record.witness_id, run_id="run_a")  # type: ignore[arg-type]
-        assert store.references(witness_id=record.witness_id) == ["run_a", "run_b"]  # type: ignore[arg-type]
+        store.add_reference(witness_id=record.witness_id, run_id=RunId("run_a"))
+        store.add_reference(witness_id=record.witness_id, run_id=RunId("run_b"))
+        store.add_reference(witness_id=record.witness_id, run_id=RunId("run_a"))
+        assert store.references(witness_id=record.witness_id) == [RunId("run_a"), RunId("run_b")]
 
     def test_store_reloads_from_disk(self, tmp_path: Path) -> None:
-        document = normalize_witness_output(run_id="run_a", output=WITNESS_OUTPUT)  # type: ignore[arg-type]
+        document = normalize_witness_output(run_id=RunId("run_a"), output=WITNESS_OUTPUT)
         assert document is not None
         record = witness_record_of(document=document)
         store = WitnessStore(directory=tmp_path)
         store.store(record=record)
-        store.add_reference(witness_id=record.witness_id, run_id="run_a")  # type: ignore[arg-type]
+        store.add_reference(witness_id=record.witness_id, run_id=RunId("run_a"))
         reloaded = WitnessStore(directory=tmp_path)
         assert len(reloaded) == 1
         assert reloaded.get(witness_id=record.witness_id) == record
-        assert reloaded.references(witness_id=record.witness_id) == ["run_a"]  # type: ignore[arg-type]
+        assert reloaded.references(witness_id=record.witness_id) == [RunId("run_a")]
 
 
 class TestNarration:
     def test_steps_are_narrated_by_the_mock_with_llm_provenance(self) -> None:
         model = import_pnml(text=PHILOSOPHES3_PNML)
-        document = normalize_witness_output(run_id="run_a", output=WITNESS_OUTPUT)  # type: ignore[arg-type]
+        document = normalize_witness_output(run_id=RunId("run_a"), output=WITNESS_OUTPUT)
         assert document is not None
         narrations = narrate_steps(
             provider=DeterministicMockProvider(),
@@ -280,3 +283,146 @@ class TestWitnessApi:
         assert "fired-transition" in script
         assert "witness-narration" in script
         assert "provenance" in script
+
+
+_NAME = st.from_regex(r"[A-Za-z_][A-Za-z0-9_]*", fullmatch=True)
+
+STEP_STRATEGY = st.builds(
+    WitnessStep,
+    index=st.integers(min_value=0, max_value=50),
+    marking=st.lists(_NAME, max_size=8),
+    fired=st.one_of(st.none(), _NAME),
+)
+
+
+class TestWitnessIdProperty:
+    @pytest.mark.property
+    @settings(deadline=None)
+    @given(
+        steps=st.lists(STEP_STRATEGY, min_size=1, max_size=10),
+        kind=st.sampled_from(["counterexample", "trace"]),
+        cyclic=st.booleans(),
+        back_edge=st.one_of(st.none(), st.integers(min_value=0, max_value=50)),
+    )
+    def test_property_identical_structure_yields_identical_witness_id(
+        self, steps: list[WitnessStep], kind: str, cyclic: bool, back_edge: int | None
+    ) -> None:
+        """The dedup key is a pure function of the witness structure (spec §16)."""
+        first = witness_id_of(kind=kind, cyclic=cyclic, back_edge=back_edge, steps=tuple(steps))
+        again = witness_id_of(kind=kind, cyclic=cyclic, back_edge=back_edge, steps=tuple(steps))
+        assert first == again
+
+    @pytest.mark.property
+    @settings(deadline=None)
+    @given(
+        marking=st.lists(_NAME, min_size=1, max_size=8),
+        other=st.lists(_NAME, min_size=1, max_size=8),
+    )
+    def test_property_different_markings_yield_different_witness_ids(
+        self, marking: list[str], other: list[str]
+    ) -> None:
+        """Distinct structures never collide on the content hash."""
+        assume(marking != other)
+        first = witness_id_of(
+            kind="trace",
+            cyclic=False,
+            back_edge=None,
+            steps=(WitnessStep(index=0, marking=marking, fired=None),),
+        )
+        second = witness_id_of(
+            kind="trace",
+            cyclic=False,
+            back_edge=None,
+            steps=(WitnessStep(index=0, marking=other, fired=None),),
+        )
+        assert first != second
+
+    @pytest.mark.property
+    @settings(deadline=None)
+    @given(steps=st.lists(STEP_STRATEGY, min_size=1, max_size=10))
+    def test_property_normalize_round_trip_keeps_the_witness_id(
+        self, steps: list[WitnessStep]
+    ) -> None:
+        """Normalizing a witness twice yields the same document and id."""
+        output = {
+            "verdict": "violated",
+            "witness": {
+                "kind": "counterexample",
+                "cyclic": False,
+                "back_edge": None,
+                "steps": [step.model_dump(mode="json") for step in steps],
+            },
+            "cost": {"tool_seconds": 0.1, "states_explored": 1},
+            "technique": "dummy",
+        }
+        first = normalize_witness_output(run_id=RunId("run_a"), output=output)
+        assert first is not None
+        second = normalize_witness_output(run_id=RunId("run_b"), output=output)
+        assert second is not None
+        assert first.witness_id == second.witness_id
+        assert first.steps == second.steps
+
+
+class TestLogNarration:
+    """The module's log events are part of the narration contract: pinned here (ADR-0005)."""
+
+    def test_witness_store_and_normalization_events_are_pinned(self, tmp_path: Path) -> None:
+        with structlog.testing.capture_logs() as logs:
+            store = WitnessStore(directory=tmp_path)
+            document = normalize_witness_output(run_id=RunId("run_a"), output=WITNESS_OUTPUT)
+            assert document is not None
+            record = witness_record_of(document=document)
+            store.store(record=record)
+            store.add_reference(witness_id=record.witness_id, run_id=RunId("run_a"))
+        events = [event["event"] for event in logs]
+        assert "witness_store_reloaded" in events
+        assert "witness_normalized" in events
+        assert "witness_stored" in events
+        assert "witness_referenced" in events
+
+    def test_narration_events_are_pinned(self) -> None:
+        model = import_pnml(text=PHILOSOPHES3_PNML)
+        document = normalize_witness_output(run_id=RunId("run_a"), output=WITNESS_OUTPUT)
+        assert document is not None
+        with structlog.testing.capture_logs() as logs:
+            narrations = narrate_steps(
+                provider=DeterministicMockProvider(),
+                model_hash=model.content_hash,
+                steps=document.steps,
+            )
+            narrate_steps(
+                provider=DeterministicMockProvider(),
+                model_hash=model.content_hash,
+                steps=(WitnessStep(index=1, marking=["x"], fired="unknown_transition"),),
+            )
+        assert len(narrations) == 1
+        events = [event["event"] for event in logs]
+        assert "witness_narrated" in events
+        assert "witness_narration_degraded" in events
+        assert "llm_narration_not_scripted" in events
+
+    def test_api_witness_events_are_pinned(self, tmp_path: Path) -> None:
+        client, _, _, model_id = build_client(tmp_path, WITNESS_OUTPUT)
+        run_id = post_check(client, "deadlock", model_id, "EF DEADLOCK")
+        wait_terminal(client, run_id)
+        with structlog.testing.capture_logs() as logs:
+            response = client.get(f"/v1/runs/{run_id}/witness", headers=AUTH_HEADERS)
+            assert response.status_code == 200
+            witness_id = response.json()["witness_id"]
+            stored = client.get(f"/v1/witnesses/{witness_id}", headers=AUTH_HEADERS)
+            assert stored.status_code == 200
+        events = [event["event"] for event in logs]
+        assert "api_run_witness_read" in events
+        assert "api_witness_read" in events
+
+    def test_invalid_witness_output_is_narrated_as_an_error(self, tmp_path: Path) -> None:
+        bad_output = {
+            **WITNESS_OUTPUT,
+            "witness": {"kind": "counterexample", "steps": [{"index": 0}]},
+        }
+        client, _, _, model_id = build_client(tmp_path, bad_output)
+        with structlog.testing.capture_logs() as logs:
+            run_id = post_check(client, "deadlock", model_id, "EF DEADLOCK")
+            wait_terminal(client, run_id)
+        events = [event["event"] for event in logs]
+        assert "check_run_witness_invalid" in events
