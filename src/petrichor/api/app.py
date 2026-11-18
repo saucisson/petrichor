@@ -123,6 +123,32 @@ SESSION_NET_OVERLAY_SUFFIX = "/net-overlay"
 SESSION_CONTRACT_SUFFIX = "/contract"
 DEFAULT_SESSIONS_PAGE_LIMIT = 100
 MAX_SESSIONS_PAGE_LIMIT = 500
+DEFAULT_CONVERGENCES_PAGE_LIMIT = 100
+MAX_CONVERGENCES_PAGE_LIMIT = 500
+
+
+def _parse_pagination(
+    *, environ: WSGIEnvironment, default_limit: int, max_limit: int
+) -> tuple[int, int] | ProblemPayload:
+    """Parse the limit/offset query parameters, or a problem payload (ADR-0016)."""
+    query = environ.get("QUERY_STRING", "")
+    params: dict[str, str] = {}
+    for pair in query.split("&"):
+        if "=" in pair:
+            key, value = pair.split("=", maxsplit=1)
+            params[key] = value
+    try:
+        limit = min(int(params.get("limit", str(default_limit))), max_limit)
+        offset = max(0, int(params.get("offset", "0")))
+    except ValueError:
+        return _problem(
+            status=HTTPStatus.BAD_REQUEST,
+            reason="invalid_pagination",
+            detail="The limit and offset query parameters must be integers.",
+        )
+    return limit, offset
+
+
 CONTENT_TYPE_PNML = "application/pnml+xml"
 CONTENT_TYPE_JSON = "application/json"
 CONTENT_TYPE_PETRI_JSON = "application/petri+json; version=1.0"
@@ -1140,28 +1166,14 @@ def _get_sessions(
     session_store: SessionStore,
 ) -> Iterable[bytes]:
     """List sessions with limit/offset pagination, in creation order (spec §4, ADR-0016)."""
-    query = environ.get("QUERY_STRING", "")
-    params: dict[str, str] = {}
-    for pair in query.split("&"):
-        if "=" in pair:
-            key, value = pair.split("=", maxsplit=1)
-            params[key] = value
-    try:
-        limit = min(
-            int(params.get("limit", str(DEFAULT_SESSIONS_PAGE_LIMIT))),
-            MAX_SESSIONS_PAGE_LIMIT,
-        )
-        offset = max(0, int(params.get("offset", "0")))
-    except ValueError:
-        return _problem_response(
-            start_response=start_response,
-            environ=environ,
-            payload=_problem(
-                status=HTTPStatus.BAD_REQUEST,
-                reason="invalid_pagination",
-                detail="The limit and offset query parameters must be integers.",
-            ),
-        )
+    pagination = _parse_pagination(
+        environ=environ,
+        default_limit=DEFAULT_SESSIONS_PAGE_LIMIT,
+        max_limit=MAX_SESSIONS_PAGE_LIMIT,
+    )
+    if isinstance(pagination, ProblemPayload):
+        return _problem_response(start_response=start_response, environ=environ, payload=pagination)
+    limit, offset = pagination
     all_sessions = session_store.list_all()
     sessions = all_sessions[offset : offset + limit]
     logger.debug(
@@ -1995,6 +2007,29 @@ def _post_convergence(
     rejection = _fusion_rejection(payload=parsed, by_id=by_id)
     if rejection is not None:
         return _problem_response(start_response=start_response, environ=environ, payload=rejection)
+    existing = convergence_store.find_fusion(
+        session_id=SessionId(session_id),
+        question_id=parsed.question_id,
+        proposition_id=parsed.proposition_id,
+    )
+    if existing is not None:
+        logger.debug(
+            "api_convergence_already_fused",
+            session_id=session_id,
+            question_id=str(parsed.question_id),
+            proposition_id=str(parsed.proposition_id),
+        )
+        body_out = json.dumps(
+            {"record": existing.model_dump(mode="json")},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return _respond(
+            start_response=start_response,
+            status=HTTPStatus.OK,
+            content_type=CONTENT_TYPE_JSON,
+            body=body_out.encode("utf-8"),
+        )
     record = convergence_store.fuse(
         session_id=SessionId(session_id),
         question_id=parsed.question_id,
@@ -2120,7 +2155,7 @@ def _get_convergences(
     convergence_store: ConvergenceStore,
     session_id: str,
 ) -> Iterable[bytes]:
-    """The full append-only fusion history of a session (spec §4.8, §12.2)."""
+    """List the fusions of a session with limit/offset pagination, in append order (ADR-0016)."""
     if session_store.get(session_id=SessionId(session_id)) is None:
         return _problem_response(
             start_response=start_response,
@@ -2131,10 +2166,31 @@ def _get_convergences(
                 detail=f"No session with id {session_id!r}.",
             ),
         )
+    pagination = _parse_pagination(
+        environ=environ,
+        default_limit=DEFAULT_CONVERGENCES_PAGE_LIMIT,
+        max_limit=MAX_CONVERGENCES_PAGE_LIMIT,
+    )
+    if isinstance(pagination, ProblemPayload):
+        return _problem_response(start_response=start_response, environ=environ, payload=pagination)
+    limit, offset = pagination
     history = convergence_store.history(session_id=SessionId(session_id))
-    logger.debug("api_convergences_read", session_id=session_id, fusions=len(history))
+    page = history[offset : offset + limit]
+    logger.debug(
+        "api_convergences_read",
+        session_id=session_id,
+        count=len(page),
+        total=len(history),
+        limit=limit,
+        offset=offset,
+    )
     body_out = json.dumps(
-        {"convergences": [r.model_dump(mode="json") for r in history]},
+        {
+            "convergences": [r.model_dump(mode="json") for r in page],
+            "total": len(history),
+            "limit": limit,
+            "offset": offset,
+        },
         sort_keys=True,
         separators=(",", ":"),
     )

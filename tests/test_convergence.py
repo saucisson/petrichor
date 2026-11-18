@@ -12,6 +12,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import httpx
+import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from pydantic import SecretStr
 
 from petrichor.api.app import create_app
@@ -269,6 +272,75 @@ class TestConvergenceRule:
         assert "eat_2" in with_hint.formula
 
 
+QUESTION_FORMULA = st.builds(
+    lambda base, index: f"AG ({base}_{index} >= 1)",
+    base=st.text(alphabet="abc", min_size=1, max_size=3),
+    index=st.integers(min_value=1, max_value=9),
+)
+
+
+@pytest.mark.property
+@settings(deadline=None)
+@given(first=st.text(min_size=1, max_size=40), second=st.text(min_size=1, max_size=40))
+def test_property_convergence_is_symmetric(first: str, second: str) -> None:
+    """Convergence is a symmetric relation on formulas (spec §14.5)."""
+    assert formulas_converge(first=first, second=second) == formulas_converge(
+        first=second, second=first
+    )
+
+
+@pytest.mark.property
+@settings(deadline=None)
+@given(formula=st.text(alphabet="abefg ()", min_size=1, max_size=40))
+def test_property_whitespace_normalization_never_breaks_convergence(formula: str) -> None:
+    """A formula converges with its own whitespace-normalized form."""
+    assert formulas_converge(first=formula, second=" ".join(formula.split()))
+
+
+@pytest.mark.property
+@settings(deadline=None)
+@given(
+    base=st.text(alphabet="abc", min_size=1, max_size=3),
+    first_index=st.integers(min_value=1, max_value=9),
+    second_index=st.integers(min_value=1, max_value=9),
+)
+def test_property_symmetry_index_substitution_converges(
+    base: str, first_index: int, second_index: int
+) -> None:
+    """``eat_1`` ≡ ``eat_2``: same targets up to the symmetry index converge (spec §14.5)."""
+    first = f"AG ({base}_{first_index} >= 1)"
+    second = f"AG ({base}_{second_index} >= 1)"
+    assert formulas_converge(first=first, second=second)
+    assert formulas_converge(first=second, second=first)
+
+
+@pytest.mark.property
+@settings(deadline=None)
+@given(
+    questions=st.lists(
+        st.builds(
+            make_question,
+            question_id=st.integers(min_value=0, max_value=10**6).map(lambda n: f"q_{n:06x}"),
+            family=st.just("liveness"),
+            kind=st.just("liveness.conditional"),
+            formula=QUESTION_FORMULA,
+        ),
+        min_size=1,
+        max_size=8,
+        unique_by=lambda question: question.question_id,
+    )
+)
+def test_property_hints_point_to_an_earlier_question_and_never_to_self(
+    questions: list[GeneratedQuestion],
+) -> None:
+    """A hint always names an earlier generated question, never the question itself."""
+    hints = convergence_hints(questions=tuple(questions))
+    ids = [question.question_id for question in questions]
+    for question_id, hint in hints.items():
+        assert hint != question_id
+        assert ids.index(hint) < ids.index(question_id)
+
+
 class TestConvergenceStore:
     def test_fuse_history_and_covered_map(self, tmp_path: Path) -> None:
         store = ConvergenceStore(directory=tmp_path)
@@ -476,3 +548,55 @@ class TestConvergenceApi:
             client.get(f"/v1/sessions/{session_id}/convergences", headers=AUTH_HEADERS).status_code
             == 200
         )
+
+    def test_repeated_fusion_is_idempotent_200_and_appends_nothing(self, tmp_path: Path) -> None:
+        client, arbitrator, convergence_store = build_client(tmp_path)
+        session_id = create_session(client)
+        propose_and_arbitrate(client, arbitrator, session_id)
+        document = get_contract_json(client, session_id)
+        surviving, covered_candidate = converging_pair(document)
+
+        first = post_fusion(
+            client, session_id, covered_candidate["question_id"], surviving["question_id"]
+        )
+        assert first.status_code == 201
+        second = post_fusion(
+            client, session_id, covered_candidate["question_id"], surviving["question_id"]
+        )
+        assert second.status_code == 200
+        assert second.json()["record"]["question_id"] == covered_candidate["question_id"]
+        assert len(convergence_store) == 1
+
+        journal_response = client.get(f"/v1/sessions/{session_id}/journal", headers=AUTH_HEADERS)
+        fused = [e for e in journal_response.json() if e["event"] == "convergence_fused"]
+        assert len(fused) == 1
+
+    def test_get_convergences_paginates_with_limit_and_offset(self, tmp_path: Path) -> None:
+        client, arbitrator, _ = build_client(tmp_path)
+        session_id = create_session(client)
+        propose_and_arbitrate(client, arbitrator, session_id)
+        document = get_contract_json(client, session_id)
+        surviving, covered_candidate = converging_pair(document)
+        post_fusion(client, session_id, covered_candidate["question_id"], surviving["question_id"])
+
+        page = client.get(
+            f"/v1/sessions/{session_id}/convergences?limit=1&offset=0", headers=AUTH_HEADERS
+        )
+        assert page.status_code == 200
+        payload = page.json()
+        assert payload["total"] == 1
+        assert payload["limit"] == 1
+        assert payload["offset"] == 0
+        assert len(payload["convergences"]) == 1
+
+        empty = client.get(
+            f"/v1/sessions/{session_id}/convergences?limit=10&offset=5", headers=AUTH_HEADERS
+        )
+        assert empty.json()["convergences"] == []
+        assert empty.json()["total"] == 1
+
+        invalid = client.get(
+            f"/v1/sessions/{session_id}/convergences?limit=abc", headers=AUTH_HEADERS
+        )
+        assert invalid.status_code == 400
+        assert invalid.json()["extensions"]["reason"] == "invalid_pagination"
