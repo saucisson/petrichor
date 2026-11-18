@@ -50,7 +50,13 @@ PNML_HEADERS = {**AUTH_HEADERS, "Content-Type": "application/pnml+xml"}
 CONTRACT_HEADERS = {**AUTH_HEADERS, "Accept": "application/contract+json; version=1.0"}
 MARKDOWN_HEADERS = {**AUTH_HEADERS, "Accept": "text/markdown"}
 
-SESSION_BUDGET_SECONDS = 600.0
+SESSION_BUDGET_SECONDS = 1200.0
+E2E_CHECK_TIMEOUT_SECONDS = 300
+"""One real-engine run on a cold CI runner can exceed the 30s default; the
+e2e posts with a raised check timeout (and ENGINE_TIMEOUT for the compose
+services), so a slow run is a slow verdict, never a watchdog error."""
+E2E_ENGINE_TIMEOUT = "300"
+E2E_WAIT_TERMINAL_TIMEOUT = 360.0
 
 
 def sample_profile() -> SemanticProfile:
@@ -92,7 +98,9 @@ def build_app(
     arbitrator: ProfileArbitrator,
 ) -> httpx.Client:
     """Wire the full app around one real-engine runner, sharing the stores."""
-    settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+    settings = ApiSettings(
+        api_key=SecretStr(TEST_API_KEY), check_timeout_seconds=E2E_CHECK_TIMEOUT_SECONDS
+    )
     app = create_app(
         settings=settings,
         store=store,
@@ -138,7 +146,9 @@ class _DummyRunner:
         return CheckCompleted(output=record.output.model_dump(mode="json"), command=record.command)
 
 
-def wait_terminal(*, client: httpx.Client, run_id: str, timeout: float = 120.0) -> dict:
+def wait_terminal(
+    *, client: httpx.Client, run_id: str, timeout: float = E2E_WAIT_TERMINAL_TIMEOUT
+) -> dict:
     """Poll the run until it leaves the running state (real engines are slow)."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -276,8 +286,14 @@ def _assert_budget_consigne(
 
 
 @pytest.mark.engine
-def test_e2e_p2_full_scenario_on_real_engines(tmp_path: Path) -> None:
+def test_e2e_p2_full_scenario_on_real_engines(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The P2 jalon: the mockup wired on real cross-verified verdicts (issue #39)."""
+    # The compose services read ENGINE_TIMEOUT from the environment (the
+    # driver spawns docker compose with the test process env): raise it so a
+    # cold CI runner gets a slow verdict, not a killed binary.
+    monkeypatch.setenv("ENGINE_TIMEOUT", E2E_ENGINE_TIMEOUT)
     store = ModelStore()
     run_store = RunStore()
     session_store = SessionStore(directory=tmp_path / "sessions")
