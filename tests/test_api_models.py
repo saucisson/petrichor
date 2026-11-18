@@ -23,6 +23,7 @@ from petrichor.api import WSGIApp, create_app
 from petrichor.api.settings import ApiSettings
 from petrichor.arbitration import ArbitrationStore
 from petrichor.convergence import ConvergenceStore
+from petrichor.llm.provider import DeterministicMockProvider
 from petrichor.main import build_server, main
 from petrichor.model_store import ModelStore
 from petrichor.petri_canonical import ModelId
@@ -30,6 +31,7 @@ from petrichor.pnml_import import import_pnml
 from petrichor.profile import ProfileArbitrator
 from petrichor.run_store import RunStore
 from petrichor.session_store import SessionStore
+from petrichor.witness import WitnessStore
 
 if TYPE_CHECKING:
     from wsgiref.types import WSGIEnvironment
@@ -331,6 +333,8 @@ class TestCompositionRoot:
             arbitrator=ProfileArbitrator(),
             arbitration_store=ArbitrationStore(directory=tmp_path / "arbitrations"),
             convergence_store=ConvergenceStore(directory=tmp_path / "convergences"),
+            witness_store=WitnessStore(directory=tmp_path / "witnesses"),
+            llm_provider=DeterministicMockProvider(),
         )
         assert isinstance(server.application, Callable)
         assert server.server_port == 8080
