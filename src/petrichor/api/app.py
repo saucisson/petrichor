@@ -1853,8 +1853,8 @@ def _dispatch_session_questions(  # noqa: PLR0913 - one keyword per routed depen
         return None
     if QUESTIONS_SEGMENT in remainder:
         session_id, _, tail = remainder.partition(QUESTIONS_SEGMENT)
-        question_id, _, suffix = tail.partition("/")
-        if session_id and question_id and suffix == "formula" and method == "POST":
+        question_id, _, _ = tail.partition("/")
+        if session_id and question_id and tail == question_id + FORMULA_SUFFIX and method == "POST":
             return _post_question_formula(
                 environ=environ,
                 start_response=start_response,

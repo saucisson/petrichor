@@ -7,10 +7,15 @@
 - The witness of the old formula is never lost (journal + archive).
 """
 
+import tempfile
 import time
 from pathlib import Path
 
 import httpx
+import pytest
+import structlog.testing
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from pydantic import SecretStr
 
 from petrichor.api.app import create_app
@@ -18,6 +23,7 @@ from petrichor.api.settings import ApiSettings
 from petrichor.arbitration import ArbitrationStore
 from petrichor.checks import CheckCompleted, CheckQuestion, ToolVersion
 from petrichor.convergence import ConvergenceStore
+from petrichor.elicitation import QuestionId
 from petrichor.llm.provider import DeterministicMockProvider
 from petrichor.llm.schemas import ProfileEntry, SemanticProfile
 from petrichor.model_store import ModelStore
@@ -326,3 +332,68 @@ class TestReadingEndpoint:
         response = client.get(f"/v1/sessions/{session_id}/reading", headers=AUTH_HEADERS)
         assert response.status_code == 422
         assert response.json()["extensions"]["reason"] == "missing_formula"
+
+
+class TestFormulaEditLogNarration:
+    """The formula-edit log events are part of the narration contract (ADR-0005)."""
+
+    def test_edit_and_reading_events_are_pinned(self, tmp_path: Path) -> None:
+        client, _, _, arbitrator = build_client(tmp_path)
+        model_id = import_model(client)
+        session_id = create_session(client, model_id)
+        propose_and_arbitrate(client=client, arbitrator=arbitrator, session_id=session_id)
+        question_id, _ = first_question_id(client, session_id)
+        with structlog.testing.capture_logs() as logs:
+            FormulaEditStore(directory=tmp_path / "formula_edits")  # reload event
+            response = client.post(
+                f"/v1/sessions/{session_id}/questions/{question_id}/formula",
+                json={"formula": "EF (eat_1)"},
+                headers=JSON_HEADERS,
+            )
+            assert response.status_code == 201
+            reading = client.get(
+                f"/v1/sessions/{session_id}/reading?formula=EF%20(eat_1)", headers=AUTH_HEADERS
+            )
+            assert reading.status_code == 200
+        events = [event["event"] for event in logs]
+        assert "formula_edit_store_reloaded" in events
+        assert "formula_edited" in events
+        assert "api_question_formula_edited" in events
+        assert "api_reading_read" in events
+
+
+class TestFormulaEditStoreProperty:
+    @pytest.mark.property
+    @settings(deadline=None)
+    @given(
+        edits=st.lists(
+            st.text(alphabet="ABCDEF ()", min_size=1, max_size=12), min_size=1, max_size=8
+        )
+    )
+    def test_property_latest_formula_is_the_last_edit_or_the_original(
+        self, edits: list[str]
+    ) -> None:
+        """Append-only store: latest_formula returns the last edit's formula, else the original."""
+        store = FormulaEditStore(directory=Path(tempfile.mkdtemp()))
+        session_id = SessionId("ses_prop")
+        question_id = QuestionId("q_prop")
+        original = "AG (eat_1)"
+        assert (
+            store.latest_formula(session_id=session_id, question_id=question_id, original=original)
+            == original
+        )
+        for formula in edits:
+            store.edit(
+                session_id=session_id,
+                question_id=question_id,
+                old_formula=store.latest_formula(
+                    session_id=session_id, question_id=question_id, original=original
+                ),
+                new_formula=formula,
+            )
+        assert (
+            store.latest_formula(session_id=session_id, question_id=question_id, original=original)
+            == edits[-1]
+        )
+        # Append-only: the full history is preserved in order.
+        assert [r.new_formula for r in store.history(session_id=session_id)] == edits
