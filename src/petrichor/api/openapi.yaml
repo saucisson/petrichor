@@ -515,6 +515,15 @@ paths:
                 proposition_id:
                   type: string
       responses:
+        "200":
+          description: The identical fusion already existed - idempotent repeat, nothing appended.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  record:
+                    $ref: "#/components/schemas/ConvergenceRecord"
         "201":
           description: The recorded fusion.
           content:
@@ -524,6 +533,8 @@ paths:
                 properties:
                   record:
                     $ref: "#/components/schemas/ConvergenceRecord"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
@@ -531,25 +542,50 @@ paths:
         "422":
           $ref: "#/components/responses/Unprocessable"
     get:
-      summary: The full append-only fusion history of a session (spec §4.8, §12.2)
+      summary: List the fusions of a session with limit/offset pagination, in append order (ADR-0016)
       parameters:
         - name: session_id
           in: path
           required: true
           schema:
             type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+            maximum: 500
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
       responses:
         "200":
-          description: Every fusion of the session, in append order.
+          description: A page of fusions in append order, with the total count.
           content:
             application/json:
               schema:
                 type: object
+                required: [convergences, total, limit, offset]
                 properties:
                   convergences:
                     type: array
                     items:
                       $ref: "#/components/schemas/ConvergenceRecord"
+                  total:
+                    type: integer
+                  limit:
+                    type: integer
+                  offset:
+                    type: integer
+        "400":
+          description: A pagination parameter (limit/offset) is not an integer.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":

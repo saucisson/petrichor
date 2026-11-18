@@ -79,6 +79,22 @@ class ConvergenceStore:
             file.write(line + "\n")
         self._records.append(record)
 
+    def find_fusion(
+        self, *, session_id: SessionId, question_id: QuestionId, proposition_id: QuestionId
+    ) -> ConvergenceRecord | None:
+        """The existing identical fusion, if any - makes a repeated POST idempotent."""
+        with self._lock:
+            return next(
+                (
+                    record
+                    for record in self._records
+                    if record.session_id == session_id
+                    and record.question_id == question_id
+                    and record.proposition_id == proposition_id
+                ),
+                None,
+            )
+
     def fuse(
         self, *, session_id: SessionId, question_id: QuestionId, proposition_id: QuestionId
     ) -> ConvergenceRecord:
