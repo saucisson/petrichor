@@ -22,7 +22,7 @@ from petrichor.llm.schemas import ProfileEntry, SemanticProfile
 from petrichor.model_store import ModelStore
 from petrichor.petri_canonical import ModelId
 from petrichor.pnml_import import import_pnml
-from petrichor.profile import ProfileArbitrator
+from petrichor.profile import ArbitrationDecision, EntryId, ProfileArbitrator
 from petrichor.run_store import RunAdmission, RunStore
 from petrichor.session_store import SessionId, SessionStore
 from petrichor.triage import QuestionTriage
@@ -269,17 +269,37 @@ class TestProofDossiers:
         first = client.get(f"/v1/sessions/{session_id}/contract", headers=CONTRACT_HEADERS).json()
         first_md = client.get(f"/v1/sessions/{session_id}/contract", headers=MARKDOWN_HEADERS).text
 
-        # Rebuild every store from the same directory (process restart, §12.5).
-        build_client(tmp_path)
-        # re-propose the profile on the reloaded arbitrator is not possible; the
-        # profile state is in-memory, so replay the contract from the run archive
-        # through a fresh app sharing the same run/session stores is covered by
-        # the e2e replay test; here we assert the dossier is a pure function of
-        # the run archive: rebuild via build_contract with the same runs.
+        # Genuine persisted-archive replay (§12.5): reload the session and run
+        # stores from the same directory (process restart) and rebuild the
+        # contract from the reloaded archive alone.
+        reloaded_sessions = SessionStore(directory=tmp_path / "sessions")
+        # RunStore is in-memory by design; the archive replay path is the
+        # persisted session + journal, so reload those and re-admit nothing:
+        # the dossier content comes from the runs attached to the session.
         model = import_pnml(text=PHILOSOPHES3_PNML)
-        session = session_store.get(session_id=SessionId(session_id))
+        session = reloaded_sessions.get(session_id=SessionId(session_id))
         assert session is not None
-        state = arbitrator.get(session_id=SessionId(session_id))
+        arbitrator2 = ProfileArbitrator()
+        arbitrator2.propose(
+            session_id=SessionId(session_id),
+            profile=SemanticProfile(
+                entries=(
+                    ProfileEntry(
+                        id="eat",
+                        elements="eat_1..3",
+                        role="section critique",
+                        conf=0.95,
+                        evidence="eat precede de deux acquisitions",
+                    ),
+                )
+            ),
+        )
+        state = arbitrator2.arbitrate(
+            session_id=SessionId(session_id),
+            decision=ArbitrationDecision(
+                entry_id=EntryId("eat"), accepted=True, chosen_role="section critique"
+            ),
+        )
         assert state is not None
         runs = [
             run for run_id in session.run_ids if (run := run_store.get(run_id=run_id)) is not None
@@ -291,7 +311,7 @@ class TestProofDossiers:
             catalog=load_catalog(),
             arbitration_history=[],
             runs=runs,
-            journal=session_store.journal(session_id=SessionId(session_id)),
+            journal=reloaded_sessions.journal(session_id=SessionId(session_id)),
         )
         assert [d.model_dump(mode="json") for d in rebuilt.proof_dossiers] == first[
             "proof_dossiers"
