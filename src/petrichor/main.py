@@ -24,6 +24,7 @@ from petrichor.llm.mistral import MistralProvider
 from petrichor.llm.provider import DeterministicMockProvider, LLMProvider
 from petrichor.model_store import ModelStore
 from petrichor.profile import ProfileArbitrator
+from petrichor.question_edits import FormulaEditStore
 from petrichor.run_store import RunStore
 from petrichor.session_store import SessionStore
 from petrichor.witness import WitnessStore
@@ -34,6 +35,7 @@ DEFAULT_SESSIONS_DIRECTORY = ".petrichor/sessions"
 DEFAULT_ARBITRATIONS_DIRECTORY = ".petrichor/arbitrations"
 DEFAULT_CONVERGENCES_DIRECTORY = ".petrichor/convergences"
 DEFAULT_WITNESSES_DIRECTORY = ".petrichor/witnesses"
+DEFAULT_FORMULA_EDITS_DIRECTORY = ".petrichor/formula_edits"
 
 
 def configure_logging() -> None:
@@ -55,6 +57,7 @@ def build_server(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
     convergence_store: ConvergenceStore,
     witness_store: WitnessStore,
     llm_provider: LLMProvider,
+    edit_store: FormulaEditStore,
 ) -> WSGIServer:
     """Assemble the WSGI server around the application."""
     app = create_app(
@@ -68,6 +71,7 @@ def build_server(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
         convergence_store=convergence_store,
         witness_store=witness_store,
         llm_provider=llm_provider,
+        edit_store=edit_store,
     )
     return make_server(DEFAULT_HOST, DEFAULT_PORT, app)
 
@@ -95,6 +99,7 @@ def main() -> None:
     arbitration_store = ArbitrationStore(directory=Path(DEFAULT_ARBITRATIONS_DIRECTORY))
     convergence_store = ConvergenceStore(directory=Path(DEFAULT_CONVERGENCES_DIRECTORY))
     witness_store = WitnessStore(directory=Path(DEFAULT_WITNESSES_DIRECTORY))
+    edit_store = FormulaEditStore(directory=Path(DEFAULT_FORMULA_EDITS_DIRECTORY))
     server = build_server(
         settings=settings,
         store=ModelStore(),
@@ -105,6 +110,7 @@ def main() -> None:
         convergence_store=convergence_store,
         witness_store=witness_store,
         llm_provider=select_llm_provider(settings=settings),
+        edit_store=edit_store,
     )
     logger.info("api_server_started", host=DEFAULT_HOST, port=DEFAULT_PORT)
     server.serve_forever()  # pragma: no cover - the serving loop is the entry point

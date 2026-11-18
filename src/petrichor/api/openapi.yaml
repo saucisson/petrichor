@@ -739,6 +739,105 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+  /sessions/{session_id}/questions/{question_id}/formula:
+    post:
+      summary: Edit the formula of one question card (spec §9 maquette P7, issue #37)
+      description: >-
+        Records one append-only formula edit: the old and new formulas both
+        stay in the journal (the witness of the old formula is never lost),
+        and the response carries the inverse reading of the new formula
+        (formule → langage, an LLM proposition labeled `provenance: llm`,
+        degraded explicitly when unavailable). The edited formula is
+        re-verified through the standard check chain (POST /checks/{family}).
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: question_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [formula]
+              additionalProperties: false
+              properties:
+                formula:
+                  type: string
+                  minLength: 1
+      responses:
+        "201":
+          description: The recorded edit plus the inverse reading of the new formula.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  record:
+                    type: object
+                    required: [session_id, question_id, old_formula, new_formula, timestamp]
+                    properties:
+                      session_id:
+                        type: string
+                      question_id:
+                        type: string
+                      old_formula:
+                        type: string
+                      new_formula:
+                        type: string
+                      timestamp:
+                        type: number
+                  reading:
+                    type: object
+                    nullable: true
+                    description: The inverse reading (provenance llm), or a degradation note.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+  /sessions/{session_id}/reading:
+    get:
+      summary: The inverse reading of any formula (formule → langage, spec §9, issue #37)
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: formula
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The reading of the formula, an LLM proposition labeled provenance llm.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [formula, reading]
+                properties:
+                  formula:
+                    type: string
+                  reading:
+                    type: object
+                    nullable: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
   /sessions/{session_id}/contract:
     get:
       summary: The contract of a session, negotiated as contract+json or Markdown (spec §4.8)
