@@ -464,6 +464,8 @@ class TestRunStates:
             "triage",
             "non_vacuity",
             "session_id",
+            "fairness",
+            "semantics",
         }
         assert run["family"] == "deadlock"
         assert run["kind"] == "deadlock"
