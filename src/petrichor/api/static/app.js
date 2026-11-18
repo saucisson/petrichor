@@ -154,6 +154,17 @@ async function loadRuns() {
   const session = await (await api("/v1/sessions/" + state.sessionId)).json();
   const list = document.getElementById("run-list");
   list.textContent = "";
+  // Live per-session MC budget (spec §12.4, issue #33): consumed / cap, no carry-over.
+  const budgetResponse = await api("/v1/sessions/" + state.sessionId + "/budget");
+  if (budgetResponse.status === 200) {
+    const budget = await budgetResponse.json();
+    const budgetItem = document.createElement("li");
+    budgetItem.className = "budget-line";
+    budgetItem.textContent = "Budget MC — consommé " + budget.consumed_seconds.toFixed(3)
+      + " s / plafond " + budget.budget_seconds.toFixed(3)
+      + " s — restant " + budget.remaining_seconds.toFixed(3) + " s (aucun report).";
+    list.append(budgetItem);
+  }
   for (const runId of session.run_ids) {
     const run = await (await api("/v1/runs/" + runId)).json();
     const item = document.createElement("li");

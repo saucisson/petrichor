@@ -347,6 +347,9 @@ paths:
               properties:
                 model_id:
                   type: string
+                budget_seconds:
+                  type: number
+                  description: Optional per-session MC budget cap in tool seconds (spec §12.4, issue #33); defaults to the server setting.
       responses:
         "201":
           description: Session created; Location header points at the resource.
@@ -436,6 +439,48 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Session"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+  /sessions/{session_id}/budget:
+    get:
+      summary: The live MC budget of one session (spec §12.4, issue #33)
+      description: >-
+        The budget lives continuously per session: `budget_seconds` is the
+        session's own cap (set at creation), `consumed_seconds` the measured
+        tool time of its terminal runs, `reserved_seconds` its in-flight
+        reservations, `remaining_seconds` what its next run may still claim.
+        No carry-over to another session, ever.
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The live budget of the session.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [session_id, budget_seconds, consumed_seconds, reserved_seconds, remaining_seconds, run_count]
+                properties:
+                  session_id:
+                    type: string
+                  budget_seconds:
+                    type: number
+                  consumed_seconds:
+                    type: number
+                  reserved_seconds:
+                    type: number
+                  remaining_seconds:
+                    type: number
+                  run_count:
+                    type: integer
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":
@@ -861,7 +906,7 @@ components:
   schemas:
     Session:
       type: object
-      required: [session_id, model_id, created_at, updated_at, run_ids]
+      required: [session_id, model_id, created_at, updated_at, run_ids, budget_seconds]
       properties:
         session_id:
           type: string
@@ -875,6 +920,9 @@ components:
           type: array
           items:
             type: string
+        budget_seconds:
+          type: number
+          description: The session's own MC budget cap in tool seconds (spec §12.4, issue #33); never carried over.
     JournalEntry:
       type: object
       required: [timestamp, event, detail]
@@ -982,7 +1030,7 @@ components:
             $ref: "#/components/schemas/Narration"
     ContractDocument:
       type: object
-      required: [version, session_id, model_id, profile, questions, journal]
+      required: [version, session_id, model_id, profile, questions, budget, journal]
       properties:
         version:
           type: string
@@ -1090,6 +1138,16 @@ components:
                       type: string
                     formula:
                       type: string
+        budget:
+          type: object
+          required: [budget_seconds, consumed_seconds, remaining_seconds]
+          properties:
+            budget_seconds:
+              type: number
+            consumed_seconds:
+              type: number
+            remaining_seconds:
+              type: number
         journal:
           type: array
           items:
@@ -1345,6 +1403,10 @@ components:
         parameters:
           type: object
           default: {}
+        session_id:
+          type: string
+          nullable: true
+          description: The session this run is charged to (spec §12.4, issue #33); admitted against that session's own budget cap and attached to it. Absent: global bucket.
     Run:
       type: object
       description: >-

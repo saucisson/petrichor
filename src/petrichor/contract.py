@@ -140,6 +140,21 @@ class ContractProfileEntry(BaseModel):
     """The role the human chose; None while the entry is not arbitrated."""
 
 
+class ContractBudget(BaseModel):
+    """The MC budget of the session at export time (spec §12.4, issue #33)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    budget_seconds: float = Field(gt=0)
+    """The session's own budget cap in tool seconds; never carried over."""
+
+    consumed_seconds: float = Field(ge=0)
+    """The measured tool time of the session's terminal runs."""
+
+    remaining_seconds: float
+    """Cap minus consumed; can be negative only if the cap changed after the fact."""
+
+
 class ContractDocument(BaseModel):
     """The whole contract of one session (spec §4.8): the exportable deliverable."""
 
@@ -153,6 +168,9 @@ class ContractDocument(BaseModel):
 
     questions: tuple[ContractQuestion, ...]
     """The questions of the session, ordered by the solicitation order (§14.3)."""
+
+    budget: ContractBudget
+    """The session's MC budget at export time (spec §12.4, issue #33)."""
 
     journal: tuple[dict[str, JsonValue], ...]
     """The append-only journal entries, serialized as plain JSON objects."""
@@ -347,11 +365,17 @@ def build_contract(
         )
         for entry in profile_state.proposed.entries
     )
+    consumed_seconds = sum(run.measured_seconds for run in runs if run.measured_seconds is not None)
     document = ContractDocument(
         session_id=session.session_id,
         model_id=session.model_id,
         profile=profile,
         questions=questions,
+        budget=ContractBudget(
+            budget_seconds=session.budget_seconds,
+            consumed_seconds=consumed_seconds,
+            remaining_seconds=session.budget_seconds - consumed_seconds,
+        ),
         journal=tuple(entry.model_dump(mode="json") for entry in journal),
     )
     logger.debug(
@@ -455,7 +479,20 @@ def render_markdown(*, document: ContractDocument) -> str:
                 )
                 lines.append(f"  - Controverse remontée à l'ingénieur — camps : {camps}.")
         lines.append("")
-    lines += ["## Journal", "", "| Horodatage | Événement | Détail |", "| --- | --- | --- |"]
+    lines += [
+        "",
+        "## Budget MC (session)",
+        "",
+        f"- Plafond : {document.budget.budget_seconds:.3f} s de temps outil",
+        f"- Consommé : {document.budget.consumed_seconds:.3f} s (mesuré, jamais estimé)",
+        f"- Restant : {document.budget.remaining_seconds:.3f} s"
+        " — aucun report vers une autre session.",
+        "",
+        "## Journal",
+        "",
+        "| Horodatage | Événement | Détail |",
+        "| --- | --- | --- |",
+    ]
     for journal_entry in document.journal:
         timestamp = journal_entry.get("timestamp")
         rendered = _iso_timestamp(timestamp) if isinstance(timestamp, (int, float)) else "—"
