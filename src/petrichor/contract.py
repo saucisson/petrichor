@@ -46,6 +46,7 @@ from petrichor.llm.schemas import SemanticProfile
 from petrichor.petri_canonical import JsonValue, ModelId
 from petrichor.profile import EntryId, ProfileState
 from petrichor.triage import TriageKind
+from petrichor.witness import normalize_witness_output
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -102,6 +103,8 @@ class ContractProof(BaseModel):
 
     cost_tool_seconds: float | None = Field(default=None, ge=0)
     """The measured tool time of the run, when the output carries a cost."""
+    witness_id: str | None = None
+    """The content-hash id of the run's §16 witness, when it carries one (issue #32/#38)."""
 
 
 class ContractQuestion(BaseModel):
@@ -173,6 +176,22 @@ class ContractBudget(BaseModel):
     """Cap minus consumed; can be negative only if the cap changed after the fact."""
 
 
+class ContractProofDossier(BaseModel):
+    """One clickable proof dossier: a clause with its runs and witnesses (spec §9 P3, #38)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    question_id: QuestionId
+    formula: str = Field(min_length=1)
+    status: ContractQuestionStatus
+    cross_status: CrossStatus
+    verified_by: int = Field(ge=0)
+    proofs: tuple[ContractProof, ...]
+    """The runs proving the clause, with verdict per tool, technique, cost and witness id."""
+    camps: tuple[str, ...] = ()
+    """On controversy, the two camps ``tool_version : verdict``, exported as-is (spec §17.4)."""
+
+
 class ContractDocument(BaseModel):
     """The whole contract of one session (spec §4.8): the exportable deliverable."""
 
@@ -189,6 +208,9 @@ class ContractDocument(BaseModel):
 
     budget: ContractBudget
     """The session's MC budget at export time (spec §12.4, issue #33)."""
+
+    proof_dossiers: tuple[ContractProofDossier, ...] = ()
+    """The clickable proof dossiers of the session's clauses (spec §9 P3, issue #38)."""
 
     journal: tuple[dict[str, JsonValue], ...]
     """The append-only journal entries, serialized as plain JSON objects."""
@@ -257,6 +279,10 @@ def _proofs_for_question(
         technique = run.output.get("technique") if run.output is not None else None
         cost = run.output.get("cost") if run.output is not None else None
         cost_tool_seconds = cost.get("tool_seconds") if isinstance(cost, dict) else None
+        witness_id: str | None = None
+        if run.output is not None and run.output.get("witness") is not None:
+            document = normalize_witness_output(run_id=run.run_id, output=run.output)
+            witness_id = str(document.witness_id) if document is not None else None
         proofs.append(
             ContractProof(
                 run_id=run.run_id,
@@ -271,6 +297,7 @@ def _proofs_for_question(
                     if isinstance(cost_tool_seconds, (int, float))
                     else None
                 ),
+                witness_id=witness_id,
             )
         )
     return tuple(proofs)
@@ -405,6 +432,27 @@ def build_contract(
         )
 
     questions = tuple(_with_cross_status(question=question) for question in ordered)
+    dossiers = tuple(
+        ContractProofDossier(
+            question_id=question.question_id,
+            formula=question.formula,
+            status=question.status,
+            cross_status=question.cross_status,
+            verified_by=question.verified_by,
+            proofs=question.proofs,
+            camps=(
+                tuple(
+                    f"{proof.tool_version} → {proof.verdict}"
+                    for proof in question.proofs
+                    if proof.status == "done" and proof.verdict is not None
+                )
+                if question.cross_status == "controversial"
+                else ()
+            ),
+        )
+        for question in questions
+        if question.proofs
+    )
     arbitrated_ids = {
         arbitration.entry_id: arbitration for arbitration in profile_state.arbitrations
     }
@@ -439,6 +487,7 @@ def build_contract(
             consumed_seconds=consumed_seconds,
             remaining_seconds=session.budget_seconds - consumed_seconds,
         ),
+        proof_dossiers=dossiers,
         journal=tuple(entry.model_dump(mode="json") for entry in journal),
     )
     logger.debug(
@@ -459,9 +508,14 @@ def _iso_timestamp(timestamp: float) -> str:
 
 def _render_cross_status(*, question: ContractQuestion) -> str:
     """The human-readable cross-verification status of one question (spec §17.4)."""
-    if question.cross_status == "verified_by_n":
-        return f"vérifiée par {question.verified_by} outils"
-    if question.cross_status == "controversial":
+    return _render_cross_status_of(question.cross_status, question.verified_by)
+
+
+def _render_cross_status_of(cross_status: CrossStatus, verified_by: int) -> str:
+    """The human-readable cross-verification status (spec §17.4)."""
+    if cross_status == "verified_by_n":
+        return f"vérifiée par {verified_by} outils"
+    if cross_status == "controversial":
         return "controversée"
     return "non vérifiée"
 
@@ -487,6 +541,41 @@ def _render_fairness_lines(*, question: ContractQuestion) -> list[str]:
             " (aucun outil câblé ne supporte l'équité nativement, spec §17.5)."
         )
     return lines
+
+
+def _render_proof_dossiers(*, document: ContractDocument) -> list[str]:
+    """The Markdown section of the clickable proof dossiers (spec §9 P3, issue #38)."""
+    if not document.proof_dossiers:
+        return []
+    lines = ["", "## Dossiers de preuve", ""]
+    for dossier in document.proof_dossiers:
+        lines.append(f"### Clause `{dossier.question_id}` — {dossier.formula}")
+        lines.append("")
+        lines.append(
+            f"- Statut : {dossier.status} — vérif. croisée :"
+            f" {_render_cross_status_of(dossier.cross_status, dossier.verified_by)}"
+        )
+        lines.extend(_render_dossier_proof(proof=proof) for proof in dossier.proofs)
+        if dossier.camps:
+            lines.append(
+                f"- Controverse exportée telle quelle — camps : {' ; '.join(dossier.camps)}."
+            )
+        lines.append("")
+    return lines
+
+
+def _render_dossier_proof(*, proof: ContractProof) -> str:
+    """One Markdown line of a proof: run link, tool version, verdict, technique, cost, witness."""
+    witness = (
+        f", témoin [`{proof.witness_id}`](/v1/witnesses/{proof.witness_id})"
+        if proof.witness_id
+        else ""
+    )
+    cost = f", coût {proof.cost_tool_seconds:.3f}s" if proof.cost_tool_seconds is not None else ""
+    return (
+        f"- [{proof.run_id}]({proof.link}) — {proof.tool_version}"
+        f" — verdict {proof.verdict} — technique {proof.technique}{cost}{witness}"
+    )
 
 
 def render_markdown(*, document: ContractDocument) -> str:
@@ -559,6 +648,7 @@ def render_markdown(*, document: ContractDocument) -> str:
                 )
                 lines.append(f"  - Controverse remontée à l'ingénieur — camps : {camps}.")
         lines.append("")
+    lines.extend(_render_proof_dossiers(document=document))
     lines += [
         "",
         "## Budget MC (session)",
