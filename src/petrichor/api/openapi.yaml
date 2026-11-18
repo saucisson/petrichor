@@ -1171,7 +1171,7 @@ components:
             $ref: "#/components/schemas/Narration"
     ContractDocument:
       type: object
-      required: [version, session_id, model_id, profile, questions, budget, journal]
+      required: [version, session_id, model_id, profile, questions, budget, proof_dossiers, journal]
       properties:
         version:
           type: string
@@ -1272,6 +1272,10 @@ components:
                     cost_tool_seconds:
                       type: number
                       nullable: true
+                    witness_id:
+                      type: string
+                      nullable: true
+                      description: The content-hash id of the run's §16 witness, when it carries one (issues #32/#38).
               examination:
                 type: string
               cross_status:
@@ -1299,10 +1303,38 @@ components:
               type: number
             remaining_seconds:
               type: number
+        proof_dossiers:
+          type: array
+          description: The clickable proof dossiers of the session's clauses (spec §9 P3, issue #38).
+          items:
+            $ref: "#/components/schemas/ContractProofDossier"
         journal:
           type: array
           items:
             type: object
+    ContractProofDossier:
+      type: object
+      required: [question_id, formula, status, cross_status, verified_by, proofs, camps]
+      properties:
+        question_id:
+          type: string
+        formula:
+          type: string
+        status:
+          enum: [pending, accept, refuse, verify-first, covered]
+        cross_status:
+          enum: [unverified, verified_by_n, controversial]
+        verified_by:
+          type: integer
+        proofs:
+          type: array
+          items:
+            type: object
+        camps:
+          type: array
+          items:
+            type: string
+          description: On controversy, the camps tool_version → verdict, exported as-is (spec §17.4).
     ArbitrationDecision:
       type: object
       required: [entry_id, accepted, chosen_role]
