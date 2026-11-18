@@ -122,6 +122,7 @@ class MistralProvider(LLMProvider):
     ) -> OutputType:
         """One chat completion with bounded re-request and schema validation."""
         prompt = PROMPT_TEMPLATES[usage]
+        last_error: Exception | None = None
         for attempt in range(1, MAX_LLM_ATTEMPTS + 1):
             try:
                 response = self._client.post(
@@ -156,6 +157,7 @@ class MistralProvider(LLMProvider):
                 json.JSONDecodeError,
                 ValidationError,
             ) as error:
+                last_error = error
                 logger.warning(
                     "llm_mistral_call_failed",
                     usage=usage,
@@ -167,7 +169,7 @@ class MistralProvider(LLMProvider):
         raise LLMDegradationError(
             f"Mistral provider: no valid answer for usage {usage!r}"
             f" after {MAX_LLM_ATTEMPTS} attempts."
-        )
+        ) from last_error
 
     def semantic_profile(self, *, model_hash: ContentHash) -> SemanticProfile:
         """Extract the semantic profile of a model via Mistral."""
