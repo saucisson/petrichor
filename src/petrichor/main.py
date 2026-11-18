@@ -19,6 +19,7 @@ import structlog
 from petrichor.api import create_app
 from petrichor.api.settings import ApiSettings
 from petrichor.arbitration import ArbitrationStore
+from petrichor.convergence import ConvergenceStore
 from petrichor.model_store import ModelStore
 from petrichor.profile import ProfileArbitrator
 from petrichor.run_store import RunStore
@@ -28,6 +29,7 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8080
 DEFAULT_SESSIONS_DIRECTORY = ".petrichor/sessions"
 DEFAULT_ARBITRATIONS_DIRECTORY = ".petrichor/arbitrations"
+DEFAULT_CONVERGENCES_DIRECTORY = ".petrichor/convergences"
 
 
 def configure_logging() -> None:
@@ -46,6 +48,7 @@ def build_server(
     session_store: SessionStore,
     arbitrator: ProfileArbitrator,
     arbitration_store: ArbitrationStore,
+    convergence_store: ConvergenceStore,
 ) -> WSGIServer:
     """Assemble the WSGI server around the application."""
     app = create_app(
@@ -56,6 +59,7 @@ def build_server(
         session_store=session_store,
         arbitrator=arbitrator,
         arbitration_store=arbitration_store,
+        convergence_store=convergence_store,
     )
     return make_server(DEFAULT_HOST, DEFAULT_PORT, app)
 
@@ -68,6 +72,7 @@ def main() -> None:
     session_store = SessionStore(directory=Path(DEFAULT_SESSIONS_DIRECTORY))
     arbitrator = ProfileArbitrator()
     arbitration_store = ArbitrationStore(directory=Path(DEFAULT_ARBITRATIONS_DIRECTORY))
+    convergence_store = ConvergenceStore(directory=Path(DEFAULT_CONVERGENCES_DIRECTORY))
     server = build_server(
         settings=settings,
         store=ModelStore(),
@@ -75,6 +80,7 @@ def main() -> None:
         session_store=session_store,
         arbitrator=arbitrator,
         arbitration_store=arbitration_store,
+        convergence_store=convergence_store,
     )
     logger.info("api_server_started", host=DEFAULT_HOST, port=DEFAULT_PORT)
     server.serve_forever()  # pragma: no cover - the serving loop is the entry point
