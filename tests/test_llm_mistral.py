@@ -7,9 +7,11 @@
 """
 
 import json
+from collections.abc import Callable
 
 import httpx
 import pytest
+import structlog.testing
 from pydantic import BaseModel, SecretStr
 
 from petrichor.api.app import create_app
@@ -35,9 +37,9 @@ def mistral_response(content: str, *, total_tokens: int = 42) -> dict:
     }
 
 
-def fake_client(handler: object) -> httpx.Client:
+def fake_client(handler: Callable[[httpx.Request], httpx.Response]) -> httpx.Client:
     """An httpx client whose POST is served by the handler."""
-    return httpx.Client(transport=httpx.MockTransport(handler))  # type: ignore[arg-type]
+    return httpx.Client(transport=httpx.MockTransport(handler))
 
 
 class TestMistralProvider:
@@ -179,3 +181,34 @@ class TestLlmUsageEndpoint:
         response = client.get("/v1/llm/usage", headers=AUTH_HEADERS)
         assert response.status_code == 503
         assert response.json()["extensions"]["reason"] == "llm_not_configured"
+
+
+class TestLlmLogNarration:
+    """The LLM layer's log events are part of the narration contract (ADR-0005)."""
+
+    def test_mistral_failure_and_degradation_events_are_pinned(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json=mistral_response("not json"))
+
+        provider = MistralProvider(api_key=SecretStr("sk-test"), http_client=fake_client(handler))
+        with structlog.testing.capture_logs() as logs, pytest.raises(LLMDegradationError):
+            provider.narrate_transition(model_hash=MODEL_HASH, transition="takeL_1")
+        events = [event["event"] for event in logs]
+        assert events.count("llm_mistral_call_failed") == 2
+        assert "llm_degraded" in events
+
+    def test_llm_usage_endpoint_event_is_pinned(self) -> None:
+        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+        app = create_app(
+            settings=settings,
+            store=ModelStore(),
+            run_store=RunStore(),
+            runner=None,
+            llm_provider=DeterministicMockProvider(),
+        )
+        client = httpx.Client(transport=httpx.WSGITransport(app=app), base_url="http://testserver")
+        with structlog.testing.capture_logs() as logs:
+            response = client.get("/v1/llm/usage", headers=AUTH_HEADERS)
+            assert response.status_code == 200
+        events = [event["event"] for event in logs]
+        assert "api_llm_usage_read" in events
