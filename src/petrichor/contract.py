@@ -18,7 +18,15 @@ from typing import TYPE_CHECKING, Literal, NewType
 import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
-from petrichor.checks import CheckFamilyName, KindPattern, RunId, RunStatus, SessionId, ToolVersion
+from petrichor.checks import (
+    CheckFamilyName,
+    Fairness,
+    KindPattern,
+    RunId,
+    RunStatus,
+    SessionId,
+    ToolVersion,
+)
 from petrichor.convergence import CONVERGENCE_HINT_TEXT, ConvergenceRecord
 from petrichor.elicitation import (
     ElicitationCatalog,
@@ -61,6 +69,9 @@ RunLink = NewType("RunLink", str)
 type ContractQuestionStatus = Literal["pending", "accept", "refuse", "verify-first", "covered"]
 """The status of a question card: its latest arbitration, ``covered`` when a
 human fusion covers it (spec §12.2), or pending."""
+
+type FairnessStatus = Literal["none", "tool-specific", "unverifiable-under-fairness"]
+"""The fairness status of a clause (spec §17.5, issue #35)."""
 
 type CrossStatus = Literal["unverified", "verified_by_n", "controversial"]
 """The cross-verification status of a clause (spec §17.4, issue #31).
@@ -122,6 +133,14 @@ class ContractQuestion(BaseModel):
     """The surviving question of the human fusion covering this one (spec §12.2)."""
     convergence_hint: QuestionId | None = None
     """The earlier generated question this one converges with (spec §14.5, issue #34)."""
+    fairness: Fairness = "none"
+    """The fairness hypothesis attached to this clause (spec §14.7, issue #35)."""
+    repairs_run_id: RunId | None = None
+    """The run that repairs this liveness clause (``repairs_run_id``, spec §14.7)."""
+    fairness_status: FairnessStatus = "none"
+    """``tool-specific`` when a fairness-capable tool ran it; otherwise, with a
+    fairness run on a non-capable tool, ``unverifiable-under-fairness`` - the
+    explicit degradation of spec §17.5, never masked."""
 
 
 class ContractProfileEntry(BaseModel):
@@ -326,11 +345,34 @@ def build_contract(
             return "covered", fusion.proposition_id
         return latest.get(question.question_id, "pending"), None
 
+    def _fairness_of(
+        *, question: GeneratedQuestion
+    ) -> tuple[Fairness, RunId | None, FairnessStatus]:
+        """The fairness hypothesis of a clause and its repairing run (spec §14.7, issue #35).
+
+        Only liveness clauses carry a fairness hypothesis; the repairing run
+        is the latest session run on the same formula with a non-``none``
+        fairness. When no wired tool supports fairness natively, the status
+        is the explicit ``unverifiable-under-fairness`` degradation.
+        """
+        if question.family != "liveness":
+            return "none", None, "none"
+        fairness_runs = [
+            run for run in runs if run.formula == question.formula and run.fairness != "none"
+        ]
+        if not fairness_runs:
+            return "none", None, "none"
+        latest = fairness_runs[-1]
+        supported = bool(latest.output and latest.output.get("fairness_supported"))
+        status: FairnessStatus = "tool-specific" if supported else "unverifiable-under-fairness"
+        return latest.fairness, latest.run_id, status
+
     def _with_cross_status(*, question: GeneratedQuestion) -> ContractQuestion:
         """Build one contract question with its computed cross-verification status."""
         proofs = _proofs_for_question(question=question, runs=runs)
         cross_status, verified_by = cross_status_for_proofs(proofs=proofs)
         status, covered_by = _status_for(question=question)
+        fairness, repairs_run_id, fairness_status = _fairness_of(question=question)
         return ContractQuestion(
             question_id=question.question_id,
             template_id=question.template_id,
@@ -354,6 +396,9 @@ def build_contract(
             verified_by=verified_by,
             covered_by=covered_by,
             convergence_hint=question.convergence_hint,
+            fairness=fairness,
+            repairs_run_id=repairs_run_id,
+            fairness_status=fairness_status,
         )
 
     questions = tuple(_with_cross_status(question=question) for question in ordered)
@@ -425,6 +470,22 @@ def _render_question_status(*, question: ContractQuestion) -> str:
     return question.status
 
 
+def _render_fairness_lines(*, question: ContractQuestion) -> list[str]:
+    """The Markdown lines of the fairness hypothesis of one clause (spec §14.7, issue #35)."""
+    if question.repairs_run_id is None:
+        return []
+    lines = [
+        f"  - Hypothèse d'équité `{question.fairness}` — clause réparée par"
+        f" `{question.repairs_run_id}` (run `semantics: tool-specific`)."
+    ]
+    if question.fairness_status == "unverifiable-under-fairness":
+        lines.append(
+            "  - Non vérifiable sous équité par l'outillage actuel"
+            " (aucun outil câblé ne supporte l'équité nativement, spec §17.5)."
+        )
+    return lines
+
+
 def render_markdown(*, document: ContractDocument) -> str:
     """Render the contract document as the Markdown deliverable (spec §4.8)."""
     lines = [
@@ -486,6 +547,7 @@ def render_markdown(*, document: ContractDocument) -> str:
                     f"  - Alerte de convergence : {CONVERGENCE_HINT_TEXT}"
                     f" (`{question.convergence_hint}`)."
                 )
+            lines.extend(_render_fairness_lines(question=question))
             if question.cross_status == "controversial":
                 camps = " ; ".join(
                     f"{proof.tool_version} → {proof.verdict}"

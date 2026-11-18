@@ -16,7 +16,9 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
 from petrichor.checks import (
+    TOOL_SPECIFIC_SEMANTICS,
     CheckFamilyName,
+    Fairness,
     KindPattern,
     RunErrorKind,
     RunId,
@@ -83,6 +85,12 @@ class StoredRun(BaseModel):
     session_id: SessionId | None = None
     """The session this run is charged to (spec §12.4, issue #33); None for a
     session-less run, accounted against the global bucket."""
+    fairness: Fairness = "none"
+    """The fairness parameter of the run (spec §14.7, issue #35)."""
+    semantics: str | None = None
+    """``tool-specific`` when the run carries a fairness parameter no wired
+    tool supports natively (spec §17.5); such runs are never inter-tool
+    comparable."""
 
 
 class RunAdmission(BaseModel):
@@ -106,6 +114,8 @@ class RunAdmission(BaseModel):
     (spec §12.4, issue #33); no carry-over between sessions."""
     session_id: SessionId | None = None
     """The session the run is charged to; None accounts against the global bucket."""
+    fairness: Fairness = "none"
+    """The fairness parameter of the run (spec §14.7, issue #35)."""
     triage: QuestionTriage
     """The triage computed at admission (spec §14.2, issue #14)."""
     non_vacuity: NonVacuityGuard | None = None
@@ -213,6 +223,8 @@ class RunStore:
                 triage=admission.triage,
                 non_vacuity=admission.non_vacuity,
                 session_id=admission.session_id,
+                fairness=admission.fairness,
+                semantics=(TOOL_SPECIFIC_SEMANTICS if admission.fairness != "none" else None),
             )
             self._by_id[run.run_id] = run
             self._by_key[admission.key] = run.run_id
