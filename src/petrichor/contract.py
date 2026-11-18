@@ -46,7 +46,7 @@ from petrichor.llm.schemas import SemanticProfile
 from petrichor.petri_canonical import JsonValue, ModelId
 from petrichor.profile import EntryId, ProfileState
 from petrichor.triage import TriageKind
-from petrichor.witness import normalize_witness_output
+from petrichor.witness import WitnessId, normalize_witness_output
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -103,7 +103,7 @@ class ContractProof(BaseModel):
 
     cost_tool_seconds: float | None = Field(default=None, ge=0)
     """The measured tool time of the run, when the output carries a cost."""
-    witness_id: str | None = None
+    witness_id: WitnessId | None = None
     """The content-hash id of the run's §16 witness, when it carries one (issue #32/#38)."""
 
 
@@ -279,10 +279,10 @@ def _proofs_for_question(
         technique = run.output.get("technique") if run.output is not None else None
         cost = run.output.get("cost") if run.output is not None else None
         cost_tool_seconds = cost.get("tool_seconds") if isinstance(cost, dict) else None
-        witness_id: str | None = None
+        witness_id: WitnessId | None = None
         if run.output is not None and run.output.get("witness") is not None:
             document = normalize_witness_output(run_id=run.run_id, output=run.output)
-            witness_id = str(document.witness_id) if document is not None else None
+            witness_id = document.witness_id if document is not None else None
         proofs.append(
             ContractProof(
                 run_id=run.run_id,
@@ -508,10 +508,12 @@ def _iso_timestamp(timestamp: float) -> str:
 
 def _render_cross_status(*, question: ContractQuestion) -> str:
     """The human-readable cross-verification status of one question (spec §17.4)."""
-    return _render_cross_status_of(question.cross_status, question.verified_by)
+    return _render_cross_status_of(
+        cross_status=question.cross_status, verified_by=question.verified_by
+    )
 
 
-def _render_cross_status_of(cross_status: CrossStatus, verified_by: int) -> str:
+def _render_cross_status_of(*, cross_status: CrossStatus, verified_by: int) -> str:
     """The human-readable cross-verification status (spec §17.4)."""
     if cross_status == "verified_by_n":
         return f"vérifiée par {verified_by} outils"
@@ -551,10 +553,10 @@ def _render_proof_dossiers(*, document: ContractDocument) -> list[str]:
     for dossier in document.proof_dossiers:
         lines.append(f"### Clause `{dossier.question_id}` — {dossier.formula}")
         lines.append("")
-        lines.append(
-            f"- Statut : {dossier.status} — vérif. croisée :"
-            f" {_render_cross_status_of(dossier.cross_status, dossier.verified_by)}"
+        cross = _render_cross_status_of(
+            cross_status=dossier.cross_status, verified_by=dossier.verified_by
         )
+        lines.append(f"- Statut : {dossier.status} — vérif. croisée : {cross}")
         lines.extend(_render_dossier_proof(proof=proof) for proof in dossier.proofs)
         if dossier.camps:
             lines.append(

@@ -1312,6 +1312,32 @@ components:
           type: array
           items:
             type: object
+    ContractProof:
+      type: object
+      required: [run_id, link, status, triage, verdict, tool_version, technique, cost_tool_seconds, witness_id]
+      properties:
+        run_id:
+          type: string
+        link:
+          type: string
+        status:
+          enum: [running, done, error]
+        triage:
+          enum: [statique, MC, dégradé]
+        verdict:
+          type: string
+          nullable: true
+        tool_version:
+          type: string
+        technique:
+          type: string
+          nullable: true
+        cost_tool_seconds:
+          type: number
+          nullable: true
+        witness_id:
+          type: string
+          nullable: true
     ContractProofDossier:
       type: object
       required: [question_id, formula, status, cross_status, verified_by, proofs, camps]
@@ -1329,7 +1355,7 @@ components:
         proofs:
           type: array
           items:
-            type: object
+            $ref: "#/components/schemas/ContractProof"
         camps:
           type: array
           items:
