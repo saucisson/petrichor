@@ -9,6 +9,8 @@ tag is a p2 dump, not a source checkout - follow-up, see
 docs/spikes/2026-11-18-p39-mock-vs-real-e2e.md).
 """
 
+import shutil
+import subprocess
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -27,7 +29,13 @@ from petrichor.convergence import ConvergenceStore
 from petrichor.engines.api_runner import VerifypnCheckRunner
 from petrichor.engines.archive import RunArchive
 from petrichor.engines.contract import DUMMY_ENGINE_NAME, DUMMY_ENGINE_VERSION, EngineQuestion
-from petrichor.engines.driver import DEFAULT_DUMMY_HOST_PORT, ComposeEngineDriver
+from petrichor.engines.driver import (
+    COMPOSE_START_TIMEOUT_SECONDS,
+    DEFAULT_COMPOSE_FILE,
+    DEFAULT_DUMMY_HOST_PORT,
+    DOCKER_BINARY,
+    ComposeEngineDriver,
+)
 from petrichor.llm.provider import DeterministicMockProvider
 from petrichor.llm.schemas import ProfileEntry, SemanticProfile
 from petrichor.model_store import ModelStore
@@ -285,6 +293,23 @@ def _assert_budget_consigne(
     assert entry["run_count"] == budget["run_count"]
 
 
+def _prebuild_engine_images() -> None:
+    """Build the engine images once, outside any run's watchdog.
+
+    A cold verifypn build compiles C++ for ~10 min, and the API watchdog
+    covers the whole ``runner.run`` (the ``compose up --build`` included):
+    the images must be warm before the first check is posted, or the first
+    run dies on the watchdog while the image is still compiling (seen in CI).
+    """
+    docker = shutil.which(DOCKER_BINARY)
+    assert docker is not None, "the docker binary must be on PATH for an @engine test"
+    subprocess.run(  # noqa: S603 - fixed argv, no shell, binary resolved via which
+        [docker, "compose", "-f", str(DEFAULT_COMPOSE_FILE), "build", "verifypn", "dummy"],
+        check=True,
+        timeout=COMPOSE_START_TIMEOUT_SECONDS,
+    )
+
+
 @pytest.mark.engine
 def test_e2e_p2_full_scenario_on_real_engines(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -294,6 +319,7 @@ def test_e2e_p2_full_scenario_on_real_engines(
     # driver spawns docker compose with the test process env): raise it so a
     # cold CI runner gets a slow verdict, not a killed binary.
     monkeypatch.setenv("ENGINE_TIMEOUT", E2E_ENGINE_TIMEOUT)
+    _prebuild_engine_images()
     store = ModelStore()
     run_store = RunStore()
     session_store = SessionStore(directory=tmp_path / "sessions")
