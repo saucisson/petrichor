@@ -73,6 +73,10 @@ class CheckRequest(BaseModel):
     kind: KindPattern = Field(min_length=1)
     formula: str = Field(min_length=1)
     parameters: dict[str, JsonValue] = Field(default_factory=dict)
+    session_id: str | None = None
+    """The session this run is charged to (spec §12.4, issue #33); when given,
+    the run is admitted against that session's own budget cap and attached
+    to it. Absent: the run is accounted against the global bucket."""
 
 
 class CheckQuestion(BaseModel):

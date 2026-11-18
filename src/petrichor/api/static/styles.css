@@ -99,3 +99,9 @@ pre {
   font-size: 0.8em;
   color: #6b7280;
 }
+
+/* Live per-session MC budget line (spec §12.4, issue #33). */
+.budget-line {
+  font-weight: bold;
+  margin-bottom: 0.5rem;
+}

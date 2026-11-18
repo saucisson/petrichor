@@ -8,10 +8,10 @@ default, so a misconfigured server fails at startup instead of running open.
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from petrichor.session_store import DEFAULT_SESSION_BUDGET_SECONDS
+
 ENV_PREFIX = "PETRICHOR_"
 DEFAULT_CHECK_TIMEOUT_SECONDS = 30
-DEFAULT_SESSION_BUDGET_SECONDS = 3600.0
-"""Default session budget cap in tool seconds (spec §20.2: 3600 s of cumulative tool time)."""
 
 
 class ApiSettings(BaseSettings):

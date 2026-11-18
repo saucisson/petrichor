@@ -79,7 +79,7 @@ from petrichor.petri_canonical import (
 )
 from petrichor.pnml_import import PnmlImportError, import_pnml
 from petrichor.profile import ArbitrationDecision, ProfileArbitrator
-from petrichor.run_store import BudgetRefused, RunAdmission, RunStore
+from petrichor.run_store import AdmissionResult, BudgetRefused, RunAdmission, RunStore
 from petrichor.session_store import SessionId, SessionStore, StoredSession
 from petrichor.state_graph import StateGraphExplorer, StateGraphUnsupportedError
 from petrichor.triage import (
@@ -133,6 +133,7 @@ SESSION_STATE_GRAPH_SUFFIX = "/state-graph"
 SESSION_ANNOTATIONS_SUFFIX = "/annotations"
 SESSION_NET_OVERLAY_SUFFIX = "/net-overlay"
 SESSION_CONTRACT_SUFFIX = "/contract"
+SESSION_BUDGET_SUFFIX = "/budget"
 DEFAULT_SESSIONS_PAGE_LIMIT = 100
 MAX_SESSIONS_PAGE_LIMIT = 500
 DEFAULT_CONVERGENCES_PAGE_LIMIT = 100
@@ -702,6 +703,114 @@ def _static_first_probe(
     return triage, None, question, STATIC_TOOL_VERSION
 
 
+def _resolve_tool_version(
+    *,
+    runner: CheckRunner | None,
+    static_output: dict[str, JsonValue] | None,
+    static_tool_version: ToolVersion,
+) -> ToolVersion | ProblemPayload:
+    """The tool version of the run: the static engine when it proved, else the runner's."""
+    if static_output is not None:
+        return static_tool_version
+    if runner is None:
+        return _problem(
+            status=HTTPStatus.SERVICE_UNAVAILABLE,
+            reason="runner_not_configured",
+            detail="No check runner is wired into this server yet (real engines: P09+).",
+        )
+    return runner.tool_version
+
+
+def _admit_check_run(  # noqa: PLR0913 - one keyword per routed dependency (ADR-0003)
+    *,
+    request: CheckRequest,
+    run_store: RunStore,
+    session_store: SessionStore | None,
+    settings: ApiSettings,
+    family: CheckFamilyName,
+    question: CheckQuestion,
+    timeout_seconds: int,
+    tool_version: ToolVersion,
+    triage: QuestionTriage,
+    guard: NonVacuityGuard | None,
+    static_output: dict[str, JsonValue] | None,
+) -> tuple[SessionId | None, AdmissionResult] | ProblemPayload:
+    """Resolve the session budget and admit the run atomically (spec §12.4, issue #33).
+
+    Returns the session id with the admission result, or a problem payload
+    (unknown session, or the explicit 429 budget refusal).
+    """
+    session_budget = _resolve_session_budget(
+        request=request, session_store=session_store, settings=settings
+    )
+    if isinstance(session_budget, ProblemPayload):
+        return session_budget
+    session_id, session_budget_seconds = session_budget
+    admission = RunAdmission(
+        key=run_key(model_id=request.model_id, question=question),
+        family=family,
+        kind=request.kind,
+        formula=request.formula,
+        model_id=request.model_id,
+        timeout_seconds=timeout_seconds,
+        tool_version=tool_version,
+        session_budget_seconds=session_budget_seconds,
+        session_id=session_id,
+        triage=triage,
+        non_vacuity=guard,
+    )
+    result = run_store.admit(
+        admission=admission,
+        reservation_seconds=(
+            STATIC_COST_SECONDS
+            if static_output is not None
+            else timeout_seconds + WATCHDOG_GRACE_SECONDS
+        ),
+    )
+    return session_id, result
+
+
+def _attach_run_to_session(
+    *,
+    session_store: SessionStore | None,
+    session_id: SessionId | None,
+    run_id: RunId,
+    created: bool,
+) -> None:
+    """Attach a newly created run to its session (spec §12.4, issue #33)."""
+    if created and session_id is not None and session_store is not None:
+        session_store.append_run(session_id=session_id, run_id=run_id)
+
+
+def _resolve_session_budget(
+    *,
+    request: CheckRequest,
+    session_store: SessionStore | None,
+    settings: ApiSettings,
+) -> tuple[SessionId | None, float] | ProblemPayload:
+    """The (session id, budget cap) a check is charged to (spec §12.4, issue #33).
+
+    Without ``session_id`` the run goes to the global bucket with the server
+    cap; with one, the session must exist and its own cap applies.
+    """
+    if request.session_id is None:
+        return None, settings.session_budget_seconds
+    if session_store is None:
+        return _problem(
+            status=HTTPStatus.SERVICE_UNAVAILABLE,
+            reason="sessions_not_configured",
+            detail="No session store is wired into this server.",
+        )
+    session = session_store.get(session_id=SessionId(request.session_id))
+    if session is None:
+        return _problem(
+            status=HTTPStatus.NOT_FOUND,
+            reason="session_not_found",
+            detail=f"No session with id {request.session_id!r}.",
+        )
+    return session.session_id, session.budget_seconds
+
+
 def _post_check(  # noqa: PLR0913 - one keyword per routed dependency (ADR-0003)
     *,
     environ: WSGIEnvironment,
@@ -715,6 +824,7 @@ def _post_check(  # noqa: PLR0913 - one keyword per routed dependency (ADR-0003)
     static_resolver: StaticResolver | None,
     static_first_prober: StaticFirstProber | None,
     witness_store: WitnessStore | None = None,
+    session_store: SessionStore | None = None,
 ) -> Iterable[bytes]:
     """Accept a check question: 202 + Location, idempotent by (model, question) hash.
 
@@ -797,39 +907,31 @@ def _post_check(  # noqa: PLR0913 - one keyword per routed dependency (ADR-0003)
             triage=triage,
             timeout_seconds=timeout_seconds,
         )
-    tool_version = static_tool_version
-    if static_output is None:
-        if runner is None:
-            return _problem_response(
-                start_response=start_response,
-                environ=environ,
-                payload=_problem(
-                    status=HTTPStatus.SERVICE_UNAVAILABLE,
-                    reason="runner_not_configured",
-                    detail="No check runner is wired into this server yet (real engines: P09+).",
-                ),
-            )
-        tool_version = runner.tool_version
-    admission = RunAdmission(
-        key=run_key(model_id=request.model_id, question=question),
+    tool_version = _resolve_tool_version(
+        runner=runner, static_output=static_output, static_tool_version=static_tool_version
+    )
+    if isinstance(tool_version, ProblemPayload):
+        return _problem_response(
+            start_response=start_response, environ=environ, payload=tool_version
+        )
+    admission_result = _admit_check_run(
+        request=request,
+        run_store=run_store,
+        session_store=session_store,
+        settings=settings,
         family=family,
-        kind=request.kind,
-        formula=request.formula,
-        model_id=request.model_id,
+        question=question,
         timeout_seconds=timeout_seconds,
         tool_version=tool_version,
-        session_budget_seconds=settings.session_budget_seconds,
         triage=triage,
-        non_vacuity=guard,
+        guard=guard,
+        static_output=static_output,
     )
-    result = run_store.admit(
-        admission=admission,
-        reservation_seconds=(
-            STATIC_COST_SECONDS
-            if static_output is not None
-            else timeout_seconds + WATCHDOG_GRACE_SECONDS
-        ),
-    )
+    if isinstance(admission_result, ProblemPayload):
+        return _problem_response(
+            start_response=start_response, environ=environ, payload=admission_result
+        )
+    session_id, result = admission_result
     if isinstance(result, BudgetRefused):
         logger.warning(
             "api_check_budget_refused",
@@ -862,6 +964,9 @@ def _post_check(  # noqa: PLR0913 - one keyword per routed dependency (ADR-0003)
             ),
         )
     run, created = result.run, result.created
+    _attach_run_to_session(
+        session_store=session_store, session_id=session_id, run_id=run.run_id, created=created
+    )
     if created:
         if static_output is not None:
             run_store.mark_done(
@@ -1189,6 +1294,7 @@ def _dispatch_checks_and_runs(  # noqa: PLR0913, PLR0911 - one keyword per route
     static_first_prober: StaticFirstProber | None,
     witness_store: WitnessStore | None = None,
     llm_provider: LLMProvider | None = None,
+    session_store: SessionStore | None = None,
 ) -> Iterable[bytes] | None:
     """Route /v1/checks/{family}, /v1/runs/{run_id} and the witnesses, or return None."""
     if path.startswith(CHECKS_PATH_PREFIX):
@@ -1202,6 +1308,7 @@ def _dispatch_checks_and_runs(  # noqa: PLR0913, PLR0911 - one keyword per route
                 runner=runner,
                 family=family,
                 settings=settings,
+                session_store=session_store,
                 witness_store=witness_store,
                 qualification=qualification,
                 static_resolver=static_resolver,
@@ -1265,61 +1372,71 @@ def _dispatch_checks_and_runs(  # noqa: PLR0913, PLR0911 - one keyword per route
     return None
 
 
+def _parse_session_request(
+    *, environ: WSGIEnvironment, settings: ApiSettings
+) -> tuple[ModelId, float] | ProblemPayload:
+    """Parse the POST /v1/sessions body: model id plus optional budget cap (issue #33)."""
+    content_type = _media_type(header_value=environ.get("CONTENT_TYPE"))
+    if content_type != CONTENT_TYPE_JSON:
+        return _problem(
+            status=HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+            reason="unsupported_media_type",
+            detail=f"POST {SESSIONS_PATH} expects Content-Type {CONTENT_TYPE_JSON}.",
+        )
+    try:
+        length = int(environ.get("CONTENT_LENGTH", "") or 0)
+    except ValueError:
+        return _problem(
+            status=HTTPStatus.BAD_REQUEST,
+            reason="invalid_content_length",
+            detail="The Content-Length header is not an integer.",
+        )
+    body = environ["wsgi.input"].read(length)
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        return _problem(
+            status=HTTPStatus.UNPROCESSABLE_ENTITY,
+            reason="invalid_json",
+            detail=f"The body is not valid JSON: {error}",
+        )
+    if not isinstance(payload, dict) or not isinstance(payload.get("model_id"), str):
+        return _problem(
+            status=HTTPStatus.UNPROCESSABLE_ENTITY,
+            reason="invalid_session_request",
+            detail='The body must be a JSON object with a "model_id" string field.',
+        )
+    budget_seconds = payload.get("budget_seconds", settings.session_budget_seconds)
+    if (
+        not isinstance(budget_seconds, (int, float))
+        or isinstance(budget_seconds, bool)
+        or budget_seconds <= 0
+    ):
+        return _problem(
+            status=HTTPStatus.UNPROCESSABLE_ENTITY,
+            reason="invalid_session_request",
+            detail='The optional "budget_seconds" field must be a positive number.',
+        )
+    return ModelId(payload["model_id"]), float(budget_seconds)
+
+
 def _post_session(
     *,
     environ: WSGIEnvironment,
     start_response: StartResponse,
     store: ModelStore,
     session_store: SessionStore,
+    settings: ApiSettings,
 ) -> Iterable[bytes]:
-    """Create a new session for a model: 201 + Location (spec §4)."""
-    content_type = _media_type(header_value=environ.get("CONTENT_TYPE"))
-    if content_type != CONTENT_TYPE_JSON:
-        return _problem_response(
-            start_response=start_response,
-            environ=environ,
-            payload=_problem(
-                status=HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
-                reason="unsupported_media_type",
-                detail=f"POST {SESSIONS_PATH} expects Content-Type {CONTENT_TYPE_JSON}.",
-            ),
-        )
-    try:
-        length = int(environ.get("CONTENT_LENGTH", "") or 0)
-    except ValueError:
-        return _problem_response(
-            start_response=start_response,
-            environ=environ,
-            payload=_problem(
-                status=HTTPStatus.BAD_REQUEST,
-                reason="invalid_content_length",
-                detail="The Content-Length header is not an integer.",
-            ),
-        )
-    body = environ["wsgi.input"].read(length)
-    try:
-        payload = json.loads(body.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        return _problem_response(
-            start_response=start_response,
-            environ=environ,
-            payload=_problem(
-                status=HTTPStatus.UNPROCESSABLE_ENTITY,
-                reason="invalid_json",
-                detail=f"The body is not valid JSON: {error}",
-            ),
-        )
-    if not isinstance(payload, dict) or not isinstance(payload.get("model_id"), str):
-        return _problem_response(
-            start_response=start_response,
-            environ=environ,
-            payload=_problem(
-                status=HTTPStatus.UNPROCESSABLE_ENTITY,
-                reason="invalid_session_request",
-                detail='The body must be a JSON object with a "model_id" string field.',
-            ),
-        )
-    model_id = ModelId(payload["model_id"])
+    """Create a new session for a model: 201 + Location (spec §4, §12.4 issue #33).
+
+    The optional ``budget_seconds`` body field sets the session's own MC
+    budget cap; it defaults to the server setting.
+    """
+    parsed = _parse_session_request(environ=environ, settings=settings)
+    if isinstance(parsed, ProblemPayload):
+        return _problem_response(start_response=start_response, environ=environ, payload=parsed)
+    model_id, budget_seconds = parsed
     if store.get(model_id=model_id) is None:
         return _problem_response(
             start_response=start_response,
@@ -1330,7 +1447,7 @@ def _post_session(
                 detail=f"No model with id {model_id!r}.",
             ),
         )
-    session = session_store.create(model_id=model_id)
+    session = session_store.create(model_id=model_id, budget_seconds=float(budget_seconds))
     logger.debug("api_session_created", session_id=session.session_id, model_id=str(model_id))
     body_out = json.dumps(session.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
     return _respond(
@@ -1436,6 +1553,64 @@ def _get_session_journal(
     logger.debug("api_session_journal_exported", session_id=session_id, entries=len(entries))
     body = json.dumps(
         [e.model_dump(mode="json") for e in entries], sort_keys=True, separators=(",", ":")
+    )
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.OK,
+        content_type=CONTENT_TYPE_JSON,
+        body=body.encode("utf-8"),
+    )
+
+
+def _get_session_budget(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    session_store: SessionStore,
+    run_store: RunStore,
+    session_id: str,
+) -> Iterable[bytes]:
+    """The live MC budget of one session: cap, consumed, reserved, remaining (§12.4, #33).
+
+    The budget lives continuously per session: consumed is the measured tool
+    time of the session's terminal runs, reserved the in-flight reservations,
+    and the remaining is what the next run of THIS session may still claim -
+    never another session's leftover.
+    """
+    session = session_store.get(session_id=SessionId(session_id))
+    if session is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="session_not_found",
+                detail=f"No session with id {session_id!r}.",
+            ),
+        )
+    consumed = run_store.consumed_seconds(session_id=session.session_id)
+    reserved = run_store.reserved_seconds(session_id=session.session_id)
+    remaining = session.budget_seconds - consumed - reserved
+    logger.debug(
+        "api_session_budget_read",
+        session_id=session.session_id,
+        budget_seconds=session.budget_seconds,
+        consumed_seconds=consumed,
+        reserved_seconds=reserved,
+        remaining_seconds=remaining,
+        runs=len(session.run_ids),
+    )
+    body = json.dumps(
+        {
+            "session_id": str(session.session_id),
+            "budget_seconds": session.budget_seconds,
+            "consumed_seconds": consumed,
+            "reserved_seconds": reserved,
+            "remaining_seconds": remaining,
+            "run_count": len(session.run_ids),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
     )
     return _respond(
         start_response=start_response,
@@ -2488,18 +2663,19 @@ def _get_session_contract(  # noqa: PLR0913 - one keyword per routed dependency 
     )
 
 
-def _dispatch_session_read(
+def _dispatch_session_read(  # noqa: PLR0913 - one keyword per routed dependency (ADR-0003)
     *,
     environ: WSGIEnvironment,
     start_response: StartResponse,
     method: str,
     remainder: str,
     store: ModelStore,
+    run_store: RunStore,
     session_store: SessionStore,
     arbitrator: ProfileArbitrator | None,
     state_graph_explorer: StateGraphExplorer | None,
 ) -> Iterable[bytes] | None:
-    """Route the journal, plain-read, in-situ and profile sub-resources, or None."""
+    """Route the journal, budget, plain-read, in-situ and profile sub-resources, or None."""
     if remainder.endswith(SESSION_JOURNAL_SUFFIX):
         session_id = remainder[: -len(SESSION_JOURNAL_SUFFIX)]
         if method == "GET" and session_id and "/" not in session_id:
@@ -2507,6 +2683,16 @@ def _dispatch_session_read(
                 environ=environ,
                 start_response=start_response,
                 session_store=session_store,
+                session_id=session_id,
+            )
+    elif remainder.endswith(SESSION_BUDGET_SUFFIX):
+        session_id = remainder[: -len(SESSION_BUDGET_SUFFIX)]
+        if method == "GET" and session_id and "/" not in session_id:
+            return _get_session_budget(
+                environ=environ,
+                start_response=start_response,
+                session_store=session_store,
+                run_store=run_store,
                 session_id=session_id,
             )
     elif method == "GET" and remainder and "/" not in remainder:
@@ -2575,6 +2761,7 @@ def _dispatch_sessions_root(
     method: str,
     store: ModelStore,
     session_store: SessionStore,
+    settings: ApiSettings,
 ) -> Iterable[bytes] | None:
     """Route the /v1/sessions collection, or None when the path is not it."""
     if method == "POST":
@@ -2583,6 +2770,7 @@ def _dispatch_sessions_root(
             start_response=start_response,
             store=store,
             session_store=session_store,
+            settings=settings,
         )
     if method == "GET":
         return _get_sessions(
@@ -2608,6 +2796,7 @@ def _dispatch_sessions(  # noqa: PLR0913 - one keyword per routed dependency (AD
     store: ModelStore,
     run_store: RunStore,
     session_store: SessionStore,
+    settings: ApiSettings,
     arbitrator: ProfileArbitrator | None = None,
     state_graph_explorer: StateGraphExplorer | None = None,
     arbitration_store: ArbitrationStore | None = None,
@@ -2622,6 +2811,7 @@ def _dispatch_sessions(  # noqa: PLR0913 - one keyword per routed dependency (AD
             method=method,
             store=store,
             session_store=session_store,
+            settings=settings,
         )
     elif path.startswith(SESSION_PATH_PREFIX):
         remainder = path.removeprefix(SESSION_PATH_PREFIX)
@@ -2666,6 +2856,7 @@ def _dispatch_sessions(  # noqa: PLR0913 - one keyword per routed dependency (AD
                 method=method,
                 remainder=remainder,
                 store=store,
+                run_store=run_store,
                 session_store=session_store,
                 arbitrator=arbitrator,
                 state_graph_explorer=state_graph_explorer,
@@ -2801,6 +2992,7 @@ def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
                 static_first_prober=static_first_prober,
                 witness_store=witness_store,
                 llm_provider=llm_provider,
+                session_store=session_store,
             )
         if routed is None and session_store is not None:
             routed = _dispatch_sessions(
@@ -2811,6 +3003,7 @@ def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
                 store=store,
                 run_store=run_store,
                 session_store=session_store,
+                settings=settings,
                 arbitrator=arbitrator,
                 state_graph_explorer=state_graph_explorer,
                 arbitration_store=arbitration_store,
