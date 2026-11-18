@@ -27,4 +27,4 @@ L'image `petrichor-engine-its-tools:10052022` **ne peut pas builder** : le tag `
 
 ## Budget mesuré (consigné)
 
-Le scénario e2e P2 consigne le budget via l'endpoint `/v1/sessions/{sid}/budget` et l'événement de log `e2e_p2_budget_consigne` : consommé > 0, restant ≥ 0, plafond 600 s, runs comptés. La valeur exacte est dans le log CI du test `@engine`.
+Le scénario e2e P2 consigne le budget via l'endpoint `/v1/sessions/{sid}/budget` et l'événement de log `e2e_p2_budget_consigne` : consommé > 0, restant ≥ 0, plafond 1200 s, runs comptés. Le plafond et le timeout de run (300 s) sont relevés dans le test : sur un runner CI froid, le premier run verifypn dépasse les 30 s par défaut — un run lent doit être un verdict lent, jamais une erreur de watchdog. La valeur exacte est dans le log CI du test `@engine`.
