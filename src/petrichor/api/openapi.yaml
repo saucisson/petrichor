@@ -1096,6 +1096,16 @@ components:
                 type: string
                 nullable: true
                 description: The earlier generated question this one converges with (spec §14.5); null when original.
+              fairness:
+                enum: [none, weak, strong]
+                description: The fairness hypothesis attached to this clause (spec §14.7, issue #35).
+              repairs_run_id:
+                type: string
+                nullable: true
+                description: The run that repairs this liveness clause (spec §14.7, issue #35).
+              fairness_status:
+                enum: [none, tool-specific, unverifiable-under-fairness]
+                description: The explicit degradation when no wired tool supports fairness natively (spec §17.5).
               proofs:
                 type: array
                 items:
@@ -1407,6 +1417,10 @@ components:
           type: string
           nullable: true
           description: The session this run is charged to (spec §12.4, issue #33); admitted against that session's own budget cap and attached to it. Absent: global bucket.
+        fairness:
+          enum: [none, weak, strong]
+          default: none
+          description: The fairness parameter of the run (spec §12.3, §14.7, issue #35); each parameter set is a distinct run, billed as such. Runs with a non-none fairness are labeled semantics tool-specific when no wired tool supports it natively.
     Run:
       type: object
       description: >-
@@ -1414,7 +1428,7 @@ components:
         command, tool version, timeout, input hash and measured cost.
         Runs are never deleted - no API or code path removes one.
         output is the normalized engine output served verbatim.
-      required: [run_id, status, family, kind, formula, model_id, input_hash, timeout_seconds, tool_version, command, measured_seconds, output, error, engine_qualified, triage, non_vacuity]
+      required: [run_id, status, family, kind, formula, model_id, input_hash, timeout_seconds, tool_version, command, measured_seconds, output, error, engine_qualified, triage, non_vacuity, session_id, fairness, semantics]
       properties:
         run_id:
           type: string
@@ -1472,6 +1486,17 @@ components:
         non_vacuity:
           nullable: true
           $ref: "#/components/schemas/NonVacuityGuard"
+        session_id:
+          type: string
+          nullable: true
+          description: The session this run is charged to (spec §12.4, issue #33).
+        fairness:
+          enum: [none, weak, strong]
+          description: The fairness parameter of the run (spec §14.7, issue #35).
+        semantics:
+          type: string
+          nullable: true
+          description: tool-specific when the run carries a fairness parameter no wired tool supports natively (spec §17.5); such runs are never inter-tool comparable.
     QuestionTriage:
       type: object
       description: >-

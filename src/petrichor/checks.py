@@ -34,6 +34,20 @@ type RunErrorKind = Literal["engine_error", "timeout"]
 type QualificationState = Literal["qualified", "unqualified"]
 """The qualification state of an adapter for one family (spec §17.5, issue #22)."""
 
+type Fairness = Literal["none", "weak", "strong"]
+"""The closed set of fairness parameters of a liveness run (spec §12.3, §14.7, issue #35)."""
+
+FAIRNESS_CAPABLE_TOOLS: frozenset[ToolVersion] = frozenset()
+"""Tools natively supporting a fairness parameter (spec §17.5).
+
+Empty until the LoLA 2 adapter lands (P29 follow-up): no MCC-dialect tool
+codes fairness, so a run with ``fairness != "none"`` is labeled
+``semantics: tool-specific`` and never inter-tool comparable.
+"""
+
+TOOL_SPECIFIC_SEMANTICS = "tool-specific"
+"""The semantics label of a run outside the MCC dialect (spec §17.5, issue #35)."""
+
 RunId = NewType("RunId", str)
 """A run identifier, e.g. ``run_7c2a9f``."""
 
@@ -90,6 +104,11 @@ class CheckRequest(BaseModel):
     """The session this run is charged to (spec §12.4, issue #33); when given,
     the run is admitted against that session's own budget cap and attached
     to it. Absent: the run is accounted against the global bucket."""
+    fairness: Fairness = "none"
+    """The fairness parameter of the run (spec §12.3, §14.7, issue #35): each
+    parameter set is a distinct run, billed as such. Runs with a non-``none``
+    fairness are labeled ``semantics: tool-specific`` when no wired tool
+    supports it natively."""
 
 
 class CheckQuestion(BaseModel):

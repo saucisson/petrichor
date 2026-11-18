@@ -42,7 +42,9 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from petrichor.arbitration import ArbitrationDecisionKind, ArbitrationStore
 from petrichor.checks import (
+    FAIRNESS_CAPABLE_TOOLS,
     FAMILY_PATTERNS,
+    TOOL_SPECIFIC_SEMANTICS,
     CheckCompleted,
     CheckFamilyName,
     CheckOutcome,
@@ -532,6 +534,24 @@ def _execute_run(
         return
     measured_seconds = time.monotonic() - started_monotonic
     if isinstance(outcome, CheckCompleted):
+        output = outcome.output
+        fairness = question.parameters.get("fairness", "none")
+        if fairness != "none":
+            # No wired tool supports fairness natively (spec §17.5, P29
+            # follow-up): the run is labeled tool-specific and the verdict
+            # is explicitly NOT verifiable under fairness - never masked.
+            output = {
+                **output,
+                "semantics": TOOL_SPECIFIC_SEMANTICS,
+                "fairness": fairness,
+                "fairness_supported": runner.tool_version in FAIRNESS_CAPABLE_TOOLS,
+            }
+            logger.warning(
+                "check_run_fairness_tool_specific",
+                run_id=run_id,
+                fairness=fairness,
+                tool_version=runner.tool_version,
+            )
         engine_qualified = (
             qualification.is_qualified(family=question.family)
             if qualification is not None
@@ -547,7 +567,7 @@ def _execute_run(
             # Stored and referenced BEFORE the terminal state: a poller that
             # sees "done" must already see the witness (spec §16, issue #32).
             try:
-                document = normalize_witness_output(run_id=run_id, output=outcome.output)
+                document = normalize_witness_output(run_id=run_id, output=output)
             except WitnessError as error:
                 logger.error("check_run_witness_invalid", run_id=run_id, error=str(error))
                 document = None
@@ -556,7 +576,7 @@ def _execute_run(
                 witness_store.add_reference(witness_id=document.witness_id, run_id=run_id)
         run_store.mark_done(
             run_id=run_id,
-            output=outcome.output,
+            output=output,
             command=outcome.command,
             measured_seconds=measured_seconds,
             engine_qualified=engine_qualified,
@@ -757,6 +777,7 @@ def _admit_check_run(  # noqa: PLR0913 - one keyword per routed dependency (ADR-
         tool_version=tool_version,
         session_budget_seconds=session_budget_seconds,
         session_id=session_id,
+        fairness=request.fairness,
         triage=triage,
         non_vacuity=guard,
     )
@@ -878,6 +899,9 @@ def _post_check(  # noqa: PLR0913 - one keyword per routed dependency (ADR-0003)
         parameters={
             **request.parameters,
             "model": json.loads(canonical_json(payload=semantic_projection(model=model))),
+            # The fairness parameter is part of the question: each parameter
+            # set is a distinct run, billed as such (spec §14.7, issue #35).
+            "fairness": request.fairness,
         },
     )
     triage, guard, static_output = _triage_and_resolve_static(
