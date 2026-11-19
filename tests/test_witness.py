@@ -8,6 +8,7 @@
 """
 
 import json
+import re
 import time
 from pathlib import Path
 
@@ -70,6 +71,14 @@ WITNESS_OUTPUT = {
     "cost": {"tool_seconds": 0.1, "states_explored": 4},
     "technique": "dummy",
 }
+
+
+def fetch_ui_bundle(client: httpx.Client) -> str:
+    """Fetch the built JS bundle referenced by the served /ui/ shell (ADR-0101)."""
+    html = client.get("/ui/").text
+    match = re.search(r'src="(/ui/assets/[^"]+\.js)"', html)
+    assert match is not None
+    return client.get(match.group(1)).text
 
 
 class FakeRunner:
@@ -276,9 +285,9 @@ class TestWitnessApi:
         assert response.json()["extensions"]["reason"] == "witness_not_found"
         assert client.get("/v1/witnesses/wit_nope", headers=AUTH_HEADERS).status_code == 404
 
-    def test_ui_app_js_renders_the_step_reader(self, tmp_path: Path) -> None:
+    def test_ui_bundle_renders_the_step_reader(self, tmp_path: Path) -> None:
         client, _, _, _ = build_client(tmp_path, WITNESS_OUTPUT)
-        script = client.get("/ui/app.js").text
+        script = fetch_ui_bundle(client)
         assert "/witness" in script
         assert "fired-transition" in script
         assert "witness-narration" in script
