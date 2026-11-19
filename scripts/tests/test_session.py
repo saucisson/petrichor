@@ -316,6 +316,11 @@ def test_classify_session_failure_maps_each_cause() -> None:
         session.classify_session_failure(returncode=2, stderr="segmentation fault")
         == session.FailureCause.PROTOCOL
     )
+    # "returns" must NOT substring-match the turn-limit keywords.
+    assert (
+        session.classify_session_failure(returncode=2, stderr="process returned 1")
+        == session.FailureCause.PROTOCOL
+    )
 
 
 def test_run_reviewer_session_failure_carries_a_typed_cause(
