@@ -1,0 +1,37 @@
+[
+  {
+    "group_id": "grp_reflexion",
+    "label": "réflexion",
+    "role": "état d'automate"
+  },
+  {
+    "group_id": "grp_detention",
+    "label": "détention",
+    "role": "détention intermédiaire"
+  },
+  {
+    "group_id": "grp_repas",
+    "label": "repas",
+    "role": "section critique"
+  },
+  {
+    "group_id": "grp_ressource",
+    "label": "ressource",
+    "role": "ressource partagée"
+  },
+  {
+    "group_id": "grp_acq_gauche",
+    "label": "acquisition gauche",
+    "role": "acquisition"
+  },
+  {
+    "group_id": "grp_acq_droite",
+    "label": "acquisition droite",
+    "role": "acquisition"
+  },
+  {
+    "group_id": "grp_liberation",
+    "label": "libération",
+    "role": "libération"
+  }
+]
