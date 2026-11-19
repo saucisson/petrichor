@@ -205,6 +205,8 @@ def test_path_is_excluded_matches_every_machine_pattern() -> None:
     assert review.path_is_excluded(path="audit.json")
     assert review.path_is_excluded(path="src/petrichor/llm/golden/sha256:abc/reading.json")
     assert review.path_is_excluded(path="src/petrichor/study/pilote_v1/model.pnml")
+    assert review.path_is_excluded(path="src/petrichor/api/ui/node_modules/react/package.json")
+    assert review.path_is_excluded(path="node_modules/left-pad/index.js")
     assert not review.path_is_excluded(path="scripts/review.py")
     assert not review.path_is_excluded(path="tests/fixtures/philosophes3.pnml")
     assert not review.path_is_excluded(path="docs/studies/pilote/v1/audit/frictions.md")
@@ -256,6 +258,12 @@ def test_controller_for_path_names_the_controlling_test() -> None:
     assert "test_llm_guard" in review.controller_for_path(path="src/petrichor/llm/golden/x.json")
     model_path = "src/petrichor/study/pilote_v1/model.pnml"
     assert "test_study_pilote" in review.controller_for_path(path=model_path)
+    assert "ui-gates" in review.controller_for_path(
+        path="src/petrichor/api/ui/node_modules/react/package.json"
+    )
+    assert review.pattern_for_path(path="src/petrichor/api/ui/node_modules/x/y.js") == (
+        "**/node_modules/**"
+    )
 
 
 def test_sanitize_diff_removes_machine_chunks_and_adds_digests(
@@ -273,6 +281,55 @@ def test_sanitize_diff_removes_machine_chunks_and_adds_digests(
     assert "test_verify_materials_returns_the_pinned_hashes" in digest_section
     lines = [line for line in digest_section.splitlines() if line.startswith("- `")]
     assert lines == sorted(lines)
+
+
+def test_sanitize_diff_aggregates_deleted_machine_files_per_pathspec(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deleted machine artifacts yield one aggregated line per pathspec (PR #145).
+
+    A mass deletion (untracked node_modules) must not flood the bundle with
+    thousands of per-path lines: the count and the controller suffice, there
+    is no content left to audit in a deletion.
+    """
+
+    def digest_or_none(*, path: str) -> tuple[int, str] | None:
+        if "node_modules" in path:
+            return None  # supprimé dans ce diff
+        return fake_digest(path=path)
+
+    monkeypatch.setattr(review, "digest_for_path", digest_or_none)
+    diff_text = (
+        "diff --git a/scripts/review.py b/scripts/review.py\n"
+        "index 1111111..2222222 100644\n"
+        "--- a/scripts/review.py\n"
+        "+++ b/scripts/review.py\n"
+        "@@ -1 +1 @@\n"
+        "-old\n"
+        "+new\n"
+        "diff --git a/src/petrichor/api/ui/node_modules/a/index.js b/src/petrichor/api/ui/node_modules/a/index.js\n"
+        "deleted file mode 100644\n"
+        "--- a/src/petrichor/api/ui/node_modules/a/index.js\n"
+        "+++ /dev/null\n"
+        "@@ -1 +0,0 @@\n"
+        "-a\n"
+        "diff --git a/src/petrichor/api/ui/node_modules/b/index.js b/src/petrichor/api/ui/node_modules/b/index.js\n"
+        "deleted file mode 100644\n"
+        "--- a/src/petrichor/api/ui/node_modules/b/index.js\n"
+        "+++ /dev/null\n"
+        "@@ -1 +0,0 @@\n"
+        "-b\n"
+    )
+    sanitized = review.sanitize_diff(diff_text=diff_text)
+    assert "+new" in sanitized  # the real code chunk stays
+    assert "node_modules/a/index.js`" not in sanitized  # no per-path line
+    digest_section = sanitized.split(review.EXCLUDED_DIGEST_SECTION_HEADER)[1]
+    assert (
+        "- `**/node_modules/**` — 2 fichiers supprimés dans ce diff"
+        " — audités par `make ui-gates`" in digest_section
+    )
+    # Deterministic: same input, byte-identical output.
+    assert review.sanitize_diff(diff_text=diff_text) == sanitized
 
 
 def test_sanitize_diff_is_deterministic_and_idempotent(

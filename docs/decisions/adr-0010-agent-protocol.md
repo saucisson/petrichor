@@ -111,6 +111,15 @@ HEAD blob, and the test or command that controls the file when applicable
 - `**/audit.json` — audité par `make study-p-audit`
 - `src/petrichor/llm/golden/**` — audité par `tests/test_llm_guard.py::test_no_golden_file_contains_a_verdict`
 - `src/petrichor/study/**/*.pnml` — audité par `tests/test_study_pilote.py::test_verify_materials_returns_the_pinned_hashes`
+- `**/node_modules/**` — audité par `make ui-gates` (added 2026-11-19, constat PR #145:
+  6855 vendored npm files merged by accident put 64 MB of diff in the bundle and the
+  P59 guard refused the review; vendored dependencies are machine artifacts like the
+  others)
+
+Files **deleted** by the diff carry no content to audit: instead of one line per
+path, they are aggregated into a single line per exclusion pathspec (count of
+deleted files + controller), so a mass deletion cannot flood the bundle
+(rule added 2026-11-19, same constat PR #145).
 
 Rationale (constat `docs/spikes/2026-11-19-reviewer-reliability.md`): these artifacts
 grow the bundle without carrying reviewable judgment - the CI audit already controls

@@ -92,6 +92,10 @@ MACHINE_ARTIFACT_EXCLUSIONS: tuple[tuple[str, str], ...] = (
         "src/petrichor/study/**/*.pnml",
         "tests/test_study_pilote.py::test_verify_materials_returns_the_pinned_hashes",
     ),
+    # Vendored npm dependencies (constat PR #145: 6855 node_modules files
+    # merged by accident reached 64 MB of diff and made the review refuse
+    # the bundle, P59) - controlled by the frontend gates.
+    ("**/node_modules/**", "make ui-gates"),
 )
 EXCLUDED_DIGEST_SECTION_HEADER = "### Machine artifacts excluded from the diff (digests)"
 DIFF_FILE_HEADER_PATTERN = re.compile(r"^diff --git a/(?P<old>.+?) b/(?P<new>.+)$", re.MULTILINE)
@@ -209,6 +213,15 @@ def controller_for_path(*, path: str) -> str:
     for pattern, controller in MACHINE_ARTIFACT_EXCLUSIONS:
         if glob_match(pattern=pattern, path=normalized):
             return controller
+    return "aucun"
+
+
+def pattern_for_path(*, path: str) -> str:
+    """Return the exclusion pathspec matching a machine artifact ("aucun" otherwise)."""
+    normalized = path.strip("/")
+    for pattern, _controller in MACHINE_ARTIFACT_EXCLUSIONS:
+        if glob_match(pattern=pattern, path=normalized):
+            return pattern
     return "aucun"
 
 
@@ -497,11 +510,14 @@ def sanitize_diff(*, diff_text: str) -> str:
     Deterministic: excluded paths are sorted, digests are computed from the
     HEAD blob. The doctrine is unchanged - the bundle is still the entire
     context - it is simply rid of the noise the CI audit already controls
-    better than the reviewer (ADR-0010 appendix, 2026-11-19).
+    better than the reviewer (ADR-0010 appendix, 2026-11-19). Files deleted
+    by the diff carry no content to audit: they are aggregated into one line
+    per exclusion pathspec (count + controller), never listed one by one.
     """
     preamble, chunks = split_diff_chunks(diff_text=diff_text)
     kept_chunks: list[str] = []
     digest_lines: list[str] = []
+    deleted_by_pattern: dict[str, list[str]] = {}
     for path, chunk in chunks:
         if not path_is_excluded(path=path):
             kept_chunks.append(chunk)
@@ -509,12 +525,23 @@ def sanitize_diff(*, diff_text: str) -> str:
         controller = controller_for_path(path=path)
         digest = digest_for_path(path=path)
         if digest is None:
-            digest_lines.append(f"- `{path}` — supprimé dans ce diff — audité par `{controller}`")
-        else:
-            size, sha256 = digest
-            digest_lines.append(
-                f"- `{path}` — {size} octets — sha256:{sha256} — audité par `{controller}`"
-            )
+            # Deleted in this diff: no content left to audit. Aggregate one
+            # line per exclusion pathspec so a mass deletion (e.g. untracking
+            # node_modules, PR #145) cannot flood the bundle with thousands
+            # of per-path lines.
+            deleted_by_pattern.setdefault(pattern_for_path(path=path), []).append(path)
+            continue
+        size, sha256 = digest
+        digest_lines.append(
+            f"- `{path}` — {size} octets — sha256:{sha256} — audité par `{controller}`"
+        )
+    for pattern, deleted_paths in sorted(deleted_by_pattern.items()):
+        controller = controller_for_path(path=deleted_paths[0])
+        count = len(deleted_paths)
+        noun = "fichier supprimé" if count == 1 else "fichiers supprimés"
+        digest_lines.append(
+            f"- `{pattern}` — {count} {noun} dans ce diff — audités par `{controller}`"
+        )
     sanitized = preamble + "".join(kept_chunks)
     if digest_lines:
         sanitized += (
