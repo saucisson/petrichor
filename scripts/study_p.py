@@ -35,6 +35,7 @@ if str(SRC_ROOT) not in sys.path:
 
 DEFAULT_OUTPUT_DIR = REPO_ROOT / ".petrichor" / "study-p"
 DEFAULT_CHECK_TIMEOUT_SECONDS = 300
+DEFAULT_RECORD_DIR = REPO_ROOT / "docs" / "studies" / "pilote" / "v1" / "execution"
 
 
 def _run_pilote_session(*, output_dir: Path, check_timeout: int) -> int:
@@ -77,7 +78,29 @@ def run_study_p(*, arguments: argparse.Namespace) -> int:
     )
 
 
-def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+def _audit_pilote_record(*, record_dir: Path, output: Path) -> int:
+    """Audit one execution record; write audit.json; return the exit code."""
+    audit = importlib.import_module("petrichor.study.audit")
+
+    report = audit.audit_execution(record_dir=record_dir)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(report.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    print(f"audit written to {output} (ok={report.ok})")
+    for check in report.checks:
+        print(f"  {'PASS' if check.ok else 'FAIL'} {check.name}: {check.detail}")
+    return EXIT_CODE_SUCCESS if report.ok else EXIT_CODE_CRITERIA_UNMET
+
+
+def run_study_p_audit(*, arguments: argparse.Namespace) -> int:
+    """Entry point: record dir in, audit.json written, exit code out."""
+    record_dir = Path(arguments.record_dir)
+    output = (
+        Path(arguments.output) if arguments.output else record_dir.parent / "audit" / "audit.json"
+    )
+    return _audit_pilote_record(record_dir=record_dir, output=output)
+
+
+def register_study_p(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     """Register the study-p subcommand."""
     subparser = subparsers.add_parser(
         "study-p",
@@ -98,3 +121,31 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
         help="Per-run check timeout in seconds (default: 300).",
     )
     subparser.set_defaults(runner=run_study_p)
+
+
+def register_study_p_audit(
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
+) -> None:
+    """Register the study-p-audit subcommand."""
+    subparser = subparsers.add_parser(
+        "study-p-audit",
+        help="Audit a pilote execution record (spec §20.10, issue #42).",
+        description="Audit a pilote execution record: no verdict without an archived run.",
+    )
+    subparser.add_argument(
+        "--record-dir",
+        default=str(DEFAULT_RECORD_DIR),
+        help="Execution record to audit (default: docs/studies/pilote/v1/execution).",
+    )
+    subparser.add_argument(
+        "--output",
+        default=None,
+        help="Where to write audit.json (default: <record-dir>/../audit/audit.json).",
+    )
+    subparser.set_defaults(runner=run_study_p_audit)
+
+
+def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    """Register both study-p subcommands."""
+    register_study_p(subparsers)
+    register_study_p_audit(subparsers)

@@ -1,4 +1,4 @@
-# Contrat d'élicitation — session `ses_20fd1c`
+# Contrat d'élicitation — session `ses_043aa4`
 
 - Modèle : `mdl_10c2c092`
 - Version du contrat : 1.0
@@ -28,22 +28,22 @@
 
 | ID | Formule | Triage | Risque | Coût | Statut | Vérif. croisée | Preuves |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `q_f420ef4e4a4f` | AG (ready_1 == 1 -> AF ready_1 == 0) | MC | 5 | 2 | accept | vérifiée par 1 outils | [run_17baf4](/v1/runs/run_17baf4) |
+| `q_f420ef4e4a4f` | AG (ready_1 == 1 -> AF ready_1 == 0) | MC | 5 | 2 | accept | vérifiée par 1 outils | [run_a97c29](/v1/runs/run_a97c29) |
 
 ### recovery
 
 | ID | Formule | Triage | Risque | Coût | Statut | Vérif. croisée | Preuves |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `q_e853037347cf` | AG EF (productSlots_1 >= 1) | MC | 4 | 1 | accept | vérifiée par 1 outils | [run_1db2fa](/v1/runs/run_1db2fa) |
-| `q_f5a4bec74e93` | AG EF (optionSlots_1 >= 1) | MC | 4 | 1 | accept | vérifiée par 1 outils | [run_fff206](/v1/runs/run_fff206) |
+| `q_e853037347cf` | AG EF (productSlots_1 >= 1) | MC | 4 | 1 | accept | vérifiée par 1 outils | [run_5bdada](/v1/runs/run_5bdada) |
+| `q_f5a4bec74e93` | AG EF (optionSlots_1 >= 1) | MC | 4 | 1 | accept | vérifiée par 1 outils | [run_292bb2](/v1/runs/run_292bb2) |
 
 ### safety
 
 | ID | Formule | Triage | Risque | Coût | Statut | Vérif. croisée | Preuves |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `q_a0839f755b80` | AG (productSlots_1 <= 1) | statique | 5 | 0 | accept | vérifiée par 1 outils | [run_377c6f](/v1/runs/run_377c6f) |
-| `q_c570f90fa00f` | AG (optionSlots_1 <= 1) | statique | 5 | 0 | accept | vérifiée par 1 outils | [run_f2293c](/v1/runs/run_f2293c) |
-| `q_e9b70c39dd85` | AG (wait_1 <= 1) | statique | 3 | 0 | accept | vérifiée par 1 outils | [run_fe7160](/v1/runs/run_fe7160) |
+| `q_a0839f755b80` | AG (productSlots_1 <= 1) | statique | 5 | 0 | accept | vérifiée par 1 outils | [run_8cfcce](/v1/runs/run_8cfcce) |
+| `q_c570f90fa00f` | AG (optionSlots_1 <= 1) | statique | 5 | 0 | accept | vérifiée par 1 outils | [run_91344e](/v1/runs/run_91344e) |
+| `q_e9b70c39dd85` | AG (wait_1 <= 1) | statique | 3 | 0 | accept | vérifiée par 1 outils | [run_41ec01](/v1/runs/run_41ec01) |
 
 
 ## Dossiers de preuve
@@ -51,54 +51,54 @@
 ### Clause `q_a0839f755b80` — AG (productSlots_1 <= 1)
 
 - Statut : accept — vérif. croisée : vérifiée par 1 outils
-- [run_377c6f](/v1/runs/run_377c6f) — 4.4.2 — verdict satisfied — technique verifypn-4.4.2, coût 0.002s
+- [run_8cfcce](/v1/runs/run_8cfcce) — 4.4.2 — verdict satisfied — technique verifypn-4.4.2, coût 0.002s
 
 ### Clause `q_c570f90fa00f` — AG (optionSlots_1 <= 1)
 
 - Statut : accept — vérif. croisée : vérifiée par 1 outils
-- [run_f2293c](/v1/runs/run_f2293c) — 4.4.2 — verdict satisfied — technique verifypn-4.4.2, coût 0.002s
+- [run_91344e](/v1/runs/run_91344e) — 4.4.2 — verdict satisfied — technique verifypn-4.4.2, coût 0.002s
 
 ### Clause `q_f420ef4e4a4f` — AG (ready_1 == 1 -> AF ready_1 == 0)
 
 - Statut : accept — vérif. croisée : vérifiée par 1 outils
-- [run_17baf4](/v1/runs/run_17baf4) — 4.4.2 — verdict violated — technique verifypn-4.4.2, coût 0.043s
+- [run_a97c29](/v1/runs/run_a97c29) — 4.4.2 — verdict violated — technique verifypn-4.4.2, coût 0.040s
 
 ### Clause `q_e853037347cf` — AG EF (productSlots_1 >= 1)
 
 - Statut : accept — vérif. croisée : vérifiée par 1 outils
-- [run_1db2fa](/v1/runs/run_1db2fa) — 4.4.2 — verdict satisfied — technique verifypn-4.4.2, coût 0.037s
+- [run_5bdada](/v1/runs/run_5bdada) — 4.4.2 — verdict satisfied — technique verifypn-4.4.2, coût 0.037s
 
 ### Clause `q_f5a4bec74e93` — AG EF (optionSlots_1 >= 1)
 
 - Statut : accept — vérif. croisée : vérifiée par 1 outils
-- [run_fff206](/v1/runs/run_fff206) — 4.4.2 — verdict satisfied — technique verifypn-4.4.2, coût 0.038s
+- [run_292bb2](/v1/runs/run_292bb2) — 4.4.2 — verdict satisfied — technique verifypn-4.4.2, coût 0.039s
 
 ### Clause `q_e9b70c39dd85` — AG (wait_1 <= 1)
 
 - Statut : accept — vérif. croisée : vérifiée par 1 outils
-- [run_fe7160](/v1/runs/run_fe7160) — 4.4.2 — verdict satisfied — technique verifypn-4.4.2, coût 0.001s
+- [run_41ec01](/v1/runs/run_41ec01) — 4.4.2 — verdict satisfied — technique verifypn-4.4.2, coût 0.001s
 
 
 ## Budget MC (session)
 
 - Plafond : 3600.000 s de temps outil
-- Consommé : 0.123 s (mesuré, jamais estimé)
-- Restant : 3599.877 s — aucun report vers une autre session.
+- Consommé : 0.121 s (mesuré, jamais estimé)
+- Restant : 3599.879 s — aucun report vers une autre session.
 
 ## Journal
 
 | Horodatage | Événement | Détail |
 | --- | --- | --- |
-| 2026-11-19T08:48:52.798690+00:00 | session_created | model_id=mdl_10c2c092 |
-| 2026-11-19T08:48:52.802624+00:00 | arbitration_decided | decision=accept, previous_decision=None, question_id=q_a0839f755b80 |
-| 2026-11-19T08:48:52.803205+00:00 | arbitration_decided | decision=accept, previous_decision=None, question_id=q_c570f90fa00f |
-| 2026-11-19T08:48:52.803655+00:00 | arbitration_decided | decision=accept, previous_decision=None, question_id=q_f420ef4e4a4f |
-| 2026-11-19T08:48:52.804086+00:00 | arbitration_decided | decision=accept, previous_decision=None, question_id=q_e853037347cf |
-| 2026-11-19T08:48:52.804501+00:00 | arbitration_decided | decision=accept, previous_decision=None, question_id=q_f5a4bec74e93 |
-| 2026-11-19T08:48:52.804877+00:00 | arbitration_decided | decision=accept, previous_decision=None, question_id=q_e9b70c39dd85 |
-| 2026-11-19T08:48:52.838768+00:00 | run_added | run_id=run_377c6f |
-| 2026-11-19T08:49:08.505769+00:00 | run_added | run_id=run_f2293c |
-| 2026-11-19T08:49:23.060925+00:00 | run_added | run_id=run_17baf4 |
-| 2026-11-19T08:49:38.733907+00:00 | run_added | run_id=run_1db2fa |
-| 2026-11-19T08:49:53.299162+00:00 | run_added | run_id=run_fff206 |
-| 2026-11-19T08:50:08.976521+00:00 | run_added | run_id=run_fe7160 |
+| 2026-11-19T13:13:25.061157+00:00 | session_created | model_id=mdl_10c2c092 |
+| 2026-11-19T13:13:25.064871+00:00 | arbitration_decided | decision=accept, previous_decision=None, question_id=q_a0839f755b80 |
+| 2026-11-19T13:13:25.065512+00:00 | arbitration_decided | decision=accept, previous_decision=None, question_id=q_c570f90fa00f |
+| 2026-11-19T13:13:25.065918+00:00 | arbitration_decided | decision=accept, previous_decision=None, question_id=q_f420ef4e4a4f |
+| 2026-11-19T13:13:25.066331+00:00 | arbitration_decided | decision=accept, previous_decision=None, question_id=q_e853037347cf |
+| 2026-11-19T13:13:25.066719+00:00 | arbitration_decided | decision=accept, previous_decision=None, question_id=q_f5a4bec74e93 |
+| 2026-11-19T13:13:25.067101+00:00 | arbitration_decided | decision=accept, previous_decision=None, question_id=q_e9b70c39dd85 |
+| 2026-11-19T13:13:25.098430+00:00 | run_added | run_id=run_8cfcce |
+| 2026-11-19T13:13:40.652501+00:00 | run_added | run_id=run_91344e |
+| 2026-11-19T13:13:55.204607+00:00 | run_added | run_id=run_a97c29 |
+| 2026-11-19T13:14:11.380543+00:00 | run_added | run_id=run_5bdada |
+| 2026-11-19T13:14:25.943640+00:00 | run_added | run_id=run_292bb2 |
+| 2026-11-19T13:14:42.138958+00:00 | run_added | run_id=run_41ec01 |

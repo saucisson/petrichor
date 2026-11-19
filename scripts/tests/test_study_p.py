@@ -67,3 +67,53 @@ class TestStudyPRun:
         monkeypatch.setattr(study_p, "_run_pilote_session", lambda *, output_dir, check_timeout: 1)
         arguments = parse_study_p_arguments(["--output-dir", str(tmp_path / "out")])
         assert arguments.runner(arguments=arguments) == 1
+
+
+def parse_study_p_audit_arguments(command_line_arguments: list[str]) -> argparse.Namespace:
+    """Parse arguments through the registered study-p-audit subcommand."""
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    study_p.register(subparsers)
+    return parser.parse_args(["study-p-audit", *command_line_arguments])
+
+
+class TestStudyPAudit:
+    def test_audit_subcommand_defaults(self) -> None:
+        arguments = parse_study_p_audit_arguments([])
+        assert arguments.record_dir == str(study_p.DEFAULT_RECORD_DIR)
+        assert arguments.output is None
+        assert callable(arguments.runner)
+
+    def test_audit_forwards_record_dir_and_output(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_audit(*, record_dir: Path, output: Path) -> int:
+            captured["record_dir"] = record_dir
+            captured["output"] = output
+            return 0
+
+        monkeypatch.setattr(study_p, "_audit_pilote_record", fake_audit)
+        arguments = parse_study_p_audit_arguments(
+            ["--record-dir", str(tmp_path / "rec"), "--output", str(tmp_path / "a.json")]
+        )
+        assert arguments.runner(arguments=arguments) == 0
+        assert captured["record_dir"] == tmp_path / "rec"
+        assert captured["output"] == tmp_path / "a.json"
+
+    def test_audit_default_output_is_next_to_the_record(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_audit(*, record_dir: Path, output: Path) -> int:
+            captured["output"] = output
+            return 1
+
+        monkeypatch.setattr(study_p, "_audit_pilote_record", fake_audit)
+        arguments = parse_study_p_audit_arguments(
+            ["--record-dir", str(tmp_path / "v1" / "execution")]
+        )
+        assert arguments.runner(arguments=arguments) == 1
+        assert captured["output"] == tmp_path / "v1" / "audit" / "audit.json"
