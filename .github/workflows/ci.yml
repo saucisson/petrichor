@@ -41,6 +41,16 @@ jobs:
       - name: pytest with coverage floor
         run: uv run pytest
 
+      - name: Setup Node (pinned by .node-version, ADR-0101)
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: src/petrichor/api/ui/package-lock.json
+
+      - name: Frontend gates of the UI v2 (ESLint, tsc --noEmit, vitest)
+        run: make ui-gates
+
   security:
     name: security gates
     runs-on: ubuntu-latest

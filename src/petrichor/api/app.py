@@ -184,10 +184,14 @@ CONTENT_TYPE_HTML = "text/html; charset=utf-8"
 CONTENT_TYPE_JAVASCRIPT = "text/javascript; charset=utf-8"
 CONTENT_TYPE_CSS = "text/css; charset=utf-8"
 UI_STATIC_DIRECTORY = Path(__file__).parent / "static"
-UI_CONTENT_TYPES = {
-    "index.html": CONTENT_TYPE_HTML,
-    "app.js": CONTENT_TYPE_JAVASCRIPT,
-    "styles.css": CONTENT_TYPE_CSS,
+# ADR-0101: the UI v2 is a built SPA (Vite) - assets are hashed files served
+# by suffix, not a filename whitelist; extension-less paths are client-side
+# routes and get the index.html shell.
+UI_CONTENT_TYPES_BY_SUFFIX = {
+    ".html": CONTENT_TYPE_HTML,
+    ".js": CONTENT_TYPE_JAVASCRIPT,
+    ".css": CONTENT_TYPE_CSS,
+    ".svg": "image/svg+xml",
 }
 HEADER_API_KEY = "X-API-Key"
 PROBLEM_TYPE_BASE_URL = "https://petrichor.dev/problems/"
@@ -3231,20 +3235,42 @@ def _dispatch_ui(
         path = UI_PATH + UI_INDEX
     if path.startswith(UI_PATH):
         name = path.removeprefix(UI_PATH)
-        content_type = UI_CONTENT_TYPES.get(name)
-        if content_type is None:
-            return None
-        asset = UI_STATIC_DIRECTORY / name
-        if not asset.is_file():
-            return None
-        logger.debug("api_ui_asset_served", path=path, bytes=asset.stat().st_size)
-        return _respond(
-            start_response=start_response,
-            status=HTTPStatus.OK,
-            content_type=content_type,
-            body=asset.read_bytes(),
-        )
+        return _serve_ui_asset(start_response=start_response, path=path, name=name)
     return None
+
+
+def _serve_ui_asset(
+    *,
+    start_response: StartResponse,
+    path: str,
+    name: str,
+) -> Iterable[bytes] | None:
+    """Serve one built UI asset (ADR-0101), or None when it does not exist.
+
+    Known suffixes are served from the static directory; an extension-less
+    name is a client-side route of the SPA and gets the index.html shell;
+    anything else (unknown suffix, missing file, ``..`` traversal) is a 404.
+    """
+    if ".." in name.split("/"):
+        return None
+    suffix = Path(name).suffix
+    content_type = UI_CONTENT_TYPES_BY_SUFFIX.get(suffix)
+    if content_type is not None:
+        asset = UI_STATIC_DIRECTORY / name
+    elif suffix == "":
+        asset = UI_STATIC_DIRECTORY / UI_INDEX
+        content_type = CONTENT_TYPE_HTML
+    else:
+        return None
+    if not asset.is_file():
+        return None
+    logger.debug("api_ui_asset_served", path=path, bytes=asset.stat().st_size)
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.OK,
+        content_type=content_type,
+        body=asset.read_bytes(),
+    )
 
 
 def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)

@@ -1,12 +1,14 @@
-"""Tests for the static elicitation UI served by the API (spec §9, issue #18).
+"""Tests for the static elicitation UI served by the API (spec §9, ADR-0101).
 
-The 4 steps of the mockup (Amorçage, Questions statiques, Vérifications MC,
-Synthèse) are wired to the real /v1 endpoints by ``app.js``; the assets
-themselves carry no data and are served without authentication - every data
-call goes through the authenticated API.
+The UI v2 is a built React SPA (issue #123): ``/ui/`` serves the Vite shell
+and the hashed assets under ``/ui/assets/``. The 4 steps of the mockup
+(Amorçage, Questions statiques, Vérifications MC, Synthèse) are wired to the
+real /v1 endpoints by the bundle; the assets themselves carry no data and are
+served without authentication - every data call goes through the API.
 """
 
 import io
+import re
 from typing import TYPE_CHECKING
 
 import httpx
@@ -37,6 +39,28 @@ def build_client() -> httpx.Client:
     return httpx.Client(transport=httpx.WSGITransport(app=app), base_url="http://testserver")
 
 
+def fetch_ui_bundle(client: httpx.Client) -> str:
+    """Fetch the built JS bundle referenced by the served index.html shell."""
+    html = client.get("/ui/").text
+    match = re.search(r'src="(/ui/assets/[^"]+\.js)"', html)
+    assert match is not None, "the index.html shell must reference the built bundle"
+    response = client.get(match.group(1))
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/javascript")
+    return response.text
+
+
+def fetch_ui_stylesheet(client: httpx.Client) -> str:
+    """Fetch the built CSS asset referenced by the served index.html shell."""
+    html = client.get("/ui/").text
+    match = re.search(r'href="(/ui/assets/[^"]+\.css)"', html)
+    assert match is not None, "the index.html shell must reference the built stylesheet"
+    response = client.get(match.group(1))
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/css")
+    return response.text
+
+
 class TestStaticUi:
     def test_root_redirects_to_the_ui(self) -> None:
         client = build_client()
@@ -44,26 +68,37 @@ class TestStaticUi:
         assert response.status_code == 302
         assert response.headers["location"] == "/ui/"
 
-    def test_ui_index_serves_the_four_steps_without_auth(self) -> None:
+    def test_ui_index_serves_the_built_spa_shell_without_auth(self) -> None:
         client = build_client()
         response = client.get("/ui/")
         assert response.status_code == 200
         assert response.headers["content-type"].startswith("text/html")
         html = response.text
+        # The Vite shell (ADR-0101): the React app mounts on #root and loads
+        # the hashed bundle.
+        assert '<div id="root">' in html
+        assert 'lang="fr"' in html
+        assert re.search(r'src="/ui/assets/[^"]+\.js"', html) is not None
+        # The 4 steps and the a11y markers (labelled inputs, live regions,
+        # current-step marker - spec §9, P12) are rendered by the bundle.
+        bundle = fetch_ui_bundle(client)
         for step in ("Amorçage", "Questions statiques", "Vérifications MC", "Synthèse"):
-            assert step in html
-        # a11y: labelled inputs, live regions, current-step marker (spec §9, P12)
-        assert 'aria-label="Clé API"' in html
-        assert 'aria-label="Identifiant de session (reprise)"' in html
-        assert 'aria-live="polite"' in html
-        assert 'aria-current="step"' in html
+            assert step in bundle
+        assert "Clé API" in bundle
+        assert "Identifiant de session (reprise)" in bundle
+        assert "aria-live" in bundle
+        assert "aria-current" in bundle
 
-    def test_app_js_consumes_the_real_api_endpoints(self) -> None:
+    def test_ui_spa_fallback_serves_the_shell_on_client_side_routes(self) -> None:
         client = build_client()
-        response = client.get("/ui/app.js")
+        response = client.get("/ui/une/route/client")
         assert response.status_code == 200
-        assert response.headers["content-type"].startswith("text/javascript")
-        script = response.text
+        assert response.headers["content-type"].startswith("text/html")
+        assert '<div id="root">' in response.text
+
+    def test_ui_bundle_consumes_the_real_api_endpoints(self) -> None:
+        client = build_client()
+        script = fetch_ui_bundle(client)
         for endpoint in (
             "/v1/models",
             "/v1/sessions",
@@ -76,7 +111,7 @@ class TestStaticUi:
             assert endpoint in script
         # The Vérifications step reads runs without inventing a verdict, and
         # the Synthèse step negotiates the Markdown export (spec §4.8).
-        assert "run.output.verdict" in script
+        assert ".verdict" in script
         assert "text/markdown" in script
         # Question cards show the cross-verification status and, on controversy,
         # both camps; the Synthèse step lists the arbitration journal (issue #31).
@@ -88,10 +123,7 @@ class TestStaticUi:
 
     def test_styles_served_with_visible_focus(self) -> None:
         client = build_client()
-        response = client.get("/ui/styles.css")
-        assert response.status_code == 200
-        assert response.headers["content-type"].startswith("text/css")
-        assert ":focus-visible" in response.text
+        assert ":focus-visible" in fetch_ui_stylesheet(client)
 
     def test_unknown_ui_asset_is_404(self) -> None:
         client = build_client()
@@ -127,9 +159,12 @@ class TestStaticUi:
 
     def test_ui_asset_narration_is_pinned(self) -> None:
         client = build_client()
+        html = client.get("/ui/").text
+        asset_path = re.search(r'src="(/ui/assets/[^"]+\.js)"', html)
+        assert asset_path is not None
         with structlog.testing.capture_logs() as logs:
-            response = client.get("/ui/app.js")
+            response = client.get(asset_path.group(1))
         assert response.status_code == 200
         served = next(e for e in logs if e["event"] == "api_ui_asset_served")
-        assert served["path"] == "/ui/app.js"
+        assert served["path"] == asset_path.group(1)
         assert served["bytes"] == len(response.content)

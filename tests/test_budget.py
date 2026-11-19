@@ -6,6 +6,7 @@ measured tool time of the session's terminal runs, refusal with an explicit
 session.
 """
 
+import re
 import time
 from pathlib import Path
 
@@ -39,6 +40,14 @@ DONE_OUTPUT = {
     "cost": {"tool_seconds": 0.1, "states_explored": 4},
     "technique": "dummy",
 }
+
+
+def fetch_ui_bundle(client: httpx.Client) -> str:
+    """Fetch the built JS bundle referenced by the served /ui/ shell (ADR-0101)."""
+    html = client.get("/ui/").text
+    match = re.search(r'src="(/ui/assets/[^"]+\.js)"', html)
+    assert match is not None
+    return client.get(match.group(1)).text
 
 
 class FakeRunner:
@@ -290,9 +299,9 @@ class TestContractBudget:
         assert "## Budget MC (session)" in markdown
         assert "aucun report" in markdown
 
-    def test_ui_app_js_displays_the_live_budget(self, tmp_path: Path) -> None:
+    def test_ui_bundle_displays_the_live_budget(self, tmp_path: Path) -> None:
         client, _, _ = build_client(tmp_path)
-        script = client.get("/ui/app.js").text
+        script = fetch_ui_bundle(client)
         assert "/budget" in script
         assert "budget-line" in script
         assert "aucun report" in script
