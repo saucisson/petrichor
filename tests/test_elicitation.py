@@ -153,6 +153,34 @@ class TestInstantiationOnPhilosophes3:
         assert by_template["tpl_res_shared_aswell"].formula == "AG (fork_1 + fork_2 + fork_3 == 3)"
         assert by_template["tpl_global_no"].formula == "EF DEADLOCK"
 
+    def test_entry_with_too_few_elements_skips_the_template_instead_of_padding(self) -> None:
+        """A non-productive couple is skipped and narrated, never padded with an
+        unrelated place id (spec §14.1; found by the P41 pilote on a 2-slot model)."""
+        catalog = load_catalog()
+        model = build_philosophes3()
+        two_slot_profile = SemanticProfile(
+            entries=(
+                ProfileEntry(
+                    id="pair",
+                    elements="fork_1..2",
+                    role="ressource partagée",
+                    conf=0.9,
+                    evidence="deux jetons seulement",
+                ),
+            )
+        )
+        with structlog.testing.capture_logs() as logs:
+            questions = instantiate_questions(
+                catalog=catalog, profile=two_slot_profile, model=model
+            )
+        formulas = [question.formula for question in questions]
+        assert all("pl_" not in formula for formula in formulas)
+        assert "AG (fork_1 + fork_2 + fork_3 == 3)" not in formulas
+        skipped = [e for e in logs if e["event"] == "question_generation_skipped"]
+        assert skipped, "the non-productive couple is documented in the narration"
+        assert skipped[0]["template_id"] == "tpl_res_shared_aswell"
+        assert skipped[0]["entry_id"] == "pair"
+
     def test_question_id_is_a_content_hash(self) -> None:
         identifier = question_id(
             template_id="tpl_global_no", group_id="motif", formula="EF DEADLOCK"
