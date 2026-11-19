@@ -192,6 +192,20 @@ def _as_object_list(*, value: object) -> list[dict[str, object]]:
     return value
 
 
+def _as_str(*, value: object, field: str) -> str:
+    """A string payload field, narrowed explicitly."""
+    if not isinstance(value, str):
+        raise PiloteExecutionError(f"expected a string for {field!r}, got {value!r}")
+    return value
+
+
+def _field(*, payload: dict[str, object], name: str) -> object:
+    """One required payload field; a missing key is a typed error, not a KeyError."""
+    if name not in payload:
+        raise PiloteExecutionError(f"missing field {name!r} in the payload")
+    return payload[name]
+
+
 def _get_json(*, client: httpx.Client, path: str) -> dict[str, object]:
     """GET one JSON resource; a non-200 is a typed PiloteExecutionError."""
     response = client.get(path, headers=AUTH_HEADERS)
@@ -205,7 +219,7 @@ def _wait_terminal(*, client: httpx.Client, run_id: str) -> dict[str, object]:
     deadline = time.monotonic() + RUN_POLL_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
         run = _get_json(client=client, path=f"/v1/runs/{run_id}")
-        if run["status"] != "running":
+        if _as_str(value=_field(payload=run, name="status"), field="status") != "running":
             return run
         time.sleep(RUN_POLL_INTERVAL_SECONDS)
     raise PiloteExecutionError(f"run {run_id} did not reach a terminal state")
@@ -270,20 +284,30 @@ def _checks(
             headers=JSON_HEADERS,
         )
         _expect(response=posted, status=HTTPStatus.ACCEPTED)
-        run = _wait_terminal(client=client, run_id=str(posted.json()["run_id"]))
-        if run["status"] != "done":
-            raise PiloteExecutionError(f"run {run['run_id']} failed: {run.get('error')}")
-        output = run["output"]
+        posted_payload: dict[str, object] = posted.json()
+        run = _wait_terminal(
+            client=client,
+            run_id=_as_str(value=_field(payload=posted_payload, name="run_id"), field="run_id"),
+        )
+        run_id = _as_str(value=_field(payload=run, name="run_id"), field="run_id")
+        status = _as_str(value=_field(payload=run, name="status"), field="status")
+        if status != "done":
+            raise PiloteExecutionError(f"run {run_id} failed: {run.get('error')}")
+        output = _field(payload=run, name="output")
         cost = output.get("cost") if isinstance(output, dict) else None
         runs.append(
             PiloteRunSummary(
-                run_id=RunId(str(run["run_id"])),
-                family=str(question["family"]),
-                kind=str(question["kind"]),
-                formula=str(question["formula"]),
-                status=str(run["status"]),
+                run_id=RunId(run_id),
+                family=_as_str(value=question["family"], field="family"),
+                kind=_as_str(value=question["kind"], field="kind"),
+                formula=_as_str(value=question["formula"], field="formula"),
+                status=status,
                 verdict=output.get("verdict") if isinstance(output, dict) else None,
-                tool_seconds=float(cost["tool_seconds"]) if isinstance(cost, dict) else None,
+                tool_seconds=(
+                    _as_float(value=_field(payload=cost, name="tool_seconds"))
+                    if isinstance(cost, dict)
+                    else None
+                ),
             )
         )
     return runs

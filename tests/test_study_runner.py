@@ -23,6 +23,7 @@ from petrichor.study.runner import (
     CONTRACT_MD_FILE_NAME,
     JOURNAL_FILE_NAME,
     RAPPORT_FILE_NAME,
+    PiloteReport,
     run_pilote,
 )
 
@@ -48,7 +49,7 @@ class FakeRunner:
         return CheckCompleted(output=DONE_OUTPUT, command=["fake-tool"])
 
 
-def _run(tmp_path: Path) -> object:
+def _run(tmp_path: Path) -> PiloteReport:
     return run_pilote(
         output_dir=tmp_path / "execution",
         runner=FakeRunner(),
