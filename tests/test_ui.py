@@ -41,8 +41,6 @@ def build_client() -> httpx.Client:
     return httpx.Client(transport=httpx.WSGITransport(app=app), base_url="http://testserver")
 
 
-
-
 class TestStaticUi:
     def test_root_redirects_to_the_ui(self) -> None:
         client = build_client()
@@ -97,8 +95,7 @@ class TestStaticUi:
         # minifies it away).
         assert ".verdict" in script
         component = (
-            Path(__file__).parent.parent
-            / "src/petrichor/api/ui/src/components/Verifications.tsx"
+            Path(__file__).parent.parent / "src/petrichor/api/ui/src/components/Verifications.tsx"
         )
         assert "run.output?.verdict" in component.read_text(encoding="utf-8")
         assert "text/markdown" in script
