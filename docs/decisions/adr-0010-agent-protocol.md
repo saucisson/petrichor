@@ -92,3 +92,25 @@ review, run as a headless local session, costs no API tokens at all.
   correct, that is a finding in itself. The working machine needs the
   Vibe CLI installed and signed in; a session that cannot start fails
   closed (protocol failure), never fail-open.
+
+## Appendix — 2026-11-19 : deterministic exclusions in the `DIFF UNDER REVIEW` (P58, issue #130)
+
+The `DIFF UNDER REVIEW` section of the bundle no longer carries machine-generated
+artifacts verbatim. The following pathspecs are excluded deterministically by
+`scripts/review.py` (`MACHINE_ARTIFACT_EXCLUSIONS`), and each excluded changed path
+is replaced in the bundle by one digest line: path, size in bytes, sha256 of the
+HEAD blob, and the test or command that controls the file when applicable
+("audité par …"):
+
+- `docs/studies/**/execution/**` — audité par `make study-p-audit`
+- `**/audit.json` — audité par `make study-p-audit`
+- `src/petrichor/llm/golden/**` — audité par `tests/test_llm_guard.py::test_no_golden_file_contains_a_verdict`
+- `src/petrichor/study/**/*.pnml` — audité par `tests/test_study_pilote.py::test_verify_materials_returns_the_pinned_hashes`
+
+Rationale (constat `docs/spikes/2026-11-19-reviewer-reliability.md`): these artifacts
+grow the bundle without carrying reviewable judgment - the CI audit already controls
+them better than the reviewer can (e.g. `test_the_committed_execution_record_passes_the_audit`).
+
+The isolation doctrine is **preserved**: the bundle remains the reviewer's entire
+context; the exclusions + digests are part of the definition of the
+`DIFF UNDER REVIEW` section, not an addition to the prompt. Nothing else enters.

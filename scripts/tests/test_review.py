@@ -1,6 +1,7 @@
 """Tests for the review drivers scripts/review.py (ADR-0010, template 2aa4d27)."""
 
 import argparse
+import hashlib
 import json
 from typing import TYPE_CHECKING
 
@@ -157,3 +158,121 @@ def test_run_review_refuses_with_exit_3_on_stale_head(
     assert review.run_review(arguments=arguments) == review.EXIT_CODE_PRECONDITIONS_UNMET
     assert review.EXIT_CODE_PRECONDITIONS_UNMET == 3
     assert _shared.EXIT_CODE_PROTOCOL_FAILURE == 2
+
+
+FIXTURE_DIFF_WITH_MACHINE = """diff --git a/scripts/review.py b/scripts/review.py
+index 1111111..2222222 100644
+--- a/scripts/review.py
++++ b/scripts/review.py
+@@ -1 +1 @@
+-old
++new
+diff --git a/docs/studies/p/v1/execution/r.json b/docs/studies/p/v1/execution/r.json
+index 3333333..4444444 100644
+--- a/docs/studies/p/v1/execution/r.json
++++ b/docs/studies/p/v1/execution/r.json
+@@ -1 +1 @@
+-{"old": true}
++{"new": true}
+diff --git a/src/petrichor/study/pilote_v1/model.pnml b/src/petrichor/study/pilote_v1/model.pnml
+index 5555555..6666666 100644
+--- a/src/petrichor/study/pilote_v1/model.pnml
++++ b/src/petrichor/study/pilote_v1/model.pnml
+@@ -1 +1 @@
+-<pnml-old/>
++<pnml-new/>
+"""
+
+FIXTURE_DIFF_WITHOUT_MACHINE = """diff --git a/scripts/review.py b/scripts/review.py
+index 1111111..2222222 100644
+--- a/scripts/review.py
++++ b/scripts/review.py
+@@ -1 +1 @@
+-old
++new
+"""
+
+
+def fake_digest(*, path: str) -> tuple[int, str] | None:
+    """Deterministic digest stand-in for tests: sha256 of the path itself."""
+    return len(path), hashlib.sha256(path.encode()).hexdigest()
+
+
+def test_path_is_excluded_matches_every_machine_pattern() -> None:
+    """Each documented exclusion pattern matches its machine artifacts."""
+    assert review.path_is_excluded(path="docs/studies/pilote/v1/execution/rapport.json")
+    assert review.path_is_excluded(path="docs/studies/pilote/v1/audit/audit.json")
+    assert review.path_is_excluded(path="audit.json")
+    assert review.path_is_excluded(path="src/petrichor/llm/golden/sha256:abc/reading.json")
+    assert review.path_is_excluded(path="src/petrichor/study/pilote_v1/model.pnml")
+    assert not review.path_is_excluded(path="scripts/review.py")
+    assert not review.path_is_excluded(path="tests/fixtures/philosophes3.pnml")
+    assert not review.path_is_excluded(path="docs/studies/pilote/v1/audit/frictions.md")
+
+
+def test_controller_for_path_names_the_controlling_test() -> None:
+    """The digest line names the test or command controlling the artifact."""
+    execution_path = "docs/studies/p/v1/execution/journal.json"
+    assert "study-p-audit" in review.controller_for_path(path=execution_path)
+    assert "test_llm_guard" in review.controller_for_path(path="src/petrichor/llm/golden/x.json")
+    model_path = "src/petrichor/study/pilote_v1/model.pnml"
+    assert "test_study_pilote" in review.controller_for_path(path=model_path)
+
+
+def test_sanitize_diff_removes_machine_chunks_and_adds_digests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Machine chunks leave the diff; one sorted digest line per excluded path."""
+    monkeypatch.setattr(review, "digest_for_head_path", fake_digest)
+    sanitized = review.sanitize_diff(diff_text=FIXTURE_DIFF_WITH_MACHINE)
+    assert "r.json" not in sanitized.split(review.EXCLUDED_DIGEST_SECTION_HEADER)[0]
+    assert "<pnml-new/>" not in sanitized
+    assert "+new" in sanitized  # the real code chunk stays
+    digest_section = sanitized.split(review.EXCLUDED_DIGEST_SECTION_HEADER)[1]
+    assert "sha256:" in digest_section
+    assert "audité par `make study-p-audit`" in digest_section
+    assert "test_verify_materials_returns_the_pinned_hashes" in digest_section
+    lines = [line for line in digest_section.splitlines() if line.startswith("- `")]
+    assert lines == sorted(lines)
+
+
+def test_sanitize_diff_is_deterministic_and_idempotent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two runs on the same diff produce byte-identical output; re-sanitizing is a no-op."""
+    monkeypatch.setattr(review, "digest_for_head_path", fake_digest)
+    first = review.sanitize_diff(diff_text=FIXTURE_DIFF_WITH_MACHINE)
+    second = review.sanitize_diff(diff_text=FIXTURE_DIFF_WITH_MACHINE)
+    assert first == second
+    assert review.sanitize_diff(diff_text=first) == first
+
+
+def test_bundle_diff_part_is_equal_with_and_without_machine_files(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Golden: the diff part of the bundle is identical whether or not the
+    fixture diff carries machine files - only the digest lines are added."""
+    monkeypatch.setattr(review, "digest_for_head_path", fake_digest)
+    with_machine = review.sanitize_diff(diff_text=FIXTURE_DIFF_WITH_MACHINE)
+    without_machine = review.sanitize_diff(diff_text=FIXTURE_DIFF_WITHOUT_MACHINE)
+    diff_part = with_machine.split(review.EXCLUDED_DIGEST_SECTION_HEADER)[0]
+    assert diff_part.rstrip("\n") == without_machine.rstrip("\n")
+
+
+def test_run_review_bundle_sanitizes_a_diff_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """review-bundle --diff-file applies the exclusions before assembling."""
+    monkeypatch.setattr(review, "digest_for_head_path", fake_digest)
+    diff_file = tmp_path / "pr.diff"
+    diff_file.write_text(FIXTURE_DIFF_WITH_MACHINE, encoding="utf-8")
+    output_file = tmp_path / "bundle.md"
+    arguments = parse_review_arguments(
+        ["review-bundle", "--diff-file", str(diff_file), "--output", str(output_file)]
+    )
+    assert review.run_review_bundle(arguments=arguments) == _shared.EXIT_CODE_SUCCESS
+    bundle = output_file.read_text(encoding="utf-8")
+    diff_section = bundle.split("## DIFF UNDER REVIEW")[1]
+    assert "<pnml-new/>" not in diff_section
+    assert review.EXCLUDED_DIGEST_SECTION_HEADER in diff_section
+    assert "+new" in diff_section
