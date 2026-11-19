@@ -10,6 +10,7 @@ from scripts import _shared, day
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
+    from pathlib import Path
 
 
 class TryGit(Protocol):
@@ -393,3 +394,96 @@ def test_worklog_entries_since_filters_docs_worklog(monkeypatch: pytest.MonkeyPa
         "docs/worklog/2026-11-12-pr-94.md",
         "docs/worklog/2026-11-12-direct-fix.md",
     ]
+
+
+def test_load_review_attempts_reads_the_journal(tmp_path: Path) -> None:
+    """P62: the journal round-trips; a missing or corrupt journal means no attempts."""
+    journal = tmp_path / "review-attempts.jsonl"
+    journal.write_text(
+        '{"pr_number": 64, "phase": "session", "exit_code": 2, "cause": "deadline",'
+        ' "attempt": true, "escalated": false, "bundle_bytes": 90000, "diff_bytes": 5000}\n'
+        "not json\n"
+        '{"pr_number": 65, "phase": "cap", "exit_code": 3, "cause": "preconditions",'
+        ' "attempt": false, "escalated": false}\n',
+        encoding="utf-8",
+    )
+    attempts = day.load_review_attempts(journal_path=journal)
+    assert len(attempts) == 2
+    assert attempts[0]["pr_number"] == 64
+    assert day.load_review_attempts(journal_path=tmp_path / "missing.jsonl") == []
+
+
+def test_render_review_reliability_groups_by_pr_with_causes_and_sizes() -> None:
+    """P62: per PR - session attempts, failures by typed cause, escalations, bundle sizes."""
+    attempts = [
+        {
+            "pr_number": 64,
+            "phase": "session",
+            "exit_code": 2,
+            "cause": "deadline",
+            "attempt": True,
+            "escalated": False,
+            "bundle_bytes": 164000,
+            "diff_bytes": 80000,
+        },
+        {
+            "pr_number": 64,
+            "phase": "session",
+            "exit_code": 2,
+            "cause": "turn-limit",
+            "attempt": True,
+            "escalated": True,
+            "bundle_bytes": 164000,
+            "diff_bytes": 80000,
+        },
+        {
+            "pr_number": 64,
+            "phase": "cap",
+            "exit_code": 3,
+            "cause": "preconditions",
+            "attempt": False,
+            "escalated": False,
+        },
+        {
+            "pr_number": 65,
+            "phase": "session",
+            "exit_code": 0,
+            "cause": "clean",
+            "attempt": True,
+            "escalated": False,
+            "bundle_bytes": 90000,
+            "diff_bytes": 5000,
+        },
+    ]
+    lines = day.render_review_reliability(attempts=attempts)
+    assert len(lines) == 2
+    pr64 = next(line for line in lines if "PR #64" in line)
+    assert "2 session attempt(s)" in pr64
+    assert "deadline: 1" in pr64 and "turn-limit: 1" in pr64
+    assert "escalations: 1" in pr64
+    assert "164000 bytes total (diff part 80000 bytes)" in pr64
+    pr65 = next(line for line in lines if "PR #65" in line)
+    assert "failures by cause - none" in pr65
+    assert day.render_review_reliability(attempts=[]) == ["- No review attempts journaled yet."]
+
+
+def test_render_report_includes_the_review_reliability_section() -> None:
+    """P62: the day report carries the review reliability section."""
+    report = day.render_report(
+        tag_name="t",
+        merge_commits=[],
+        commit_count=0,
+        changed_file_count=0,
+        worklog_entries=[],
+        review_reliability_lines=["- PR #64: 1 session attempt(s)."],
+    )
+    assert "## Review reliability (P61/P62)" in report
+    assert "- PR #64: 1 session attempt(s)." in report
+    report_default = day.render_report(
+        tag_name="t",
+        merge_commits=[],
+        commit_count=0,
+        changed_file_count=0,
+        worklog_entries=[],
+    )
+    assert "- No review attempts journaled yet." in report_default
