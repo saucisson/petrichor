@@ -86,6 +86,15 @@ class TestPiloteRunner:
         assert len(events) == 1
         assert events[0]["within_cap"] is True
         assert events[0]["cap_seconds"] == 3600.0
+        # Every orchestration section narrates a DEBUG event (ADR-0005).
+        for section_event in (
+            "pilote_amorcage_done",
+            "pilote_questions_generated",
+            "pilote_questions_arbitrated",
+            "pilote_checks_done",
+            "pilote_synthese_done",
+        ):
+            assert any(event["event"] == section_event for event in logs), section_event
 
     def test_everything_is_archived_with_hashes(self, tmp_path: Path) -> None:
         report = _run(tmp_path)
