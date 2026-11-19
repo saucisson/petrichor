@@ -136,6 +136,34 @@ class TestFrozenMaterials:
         with pytest.raises(pilote.StudyMaterialError, match="Invalid study material"):
             pilote.load_config()
 
+    def test_malformed_json_material_is_a_typed_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Malformed JSON raises StudyMaterialError, never a raw JSONDecodeError."""
+        invalid = tmp_path / "v1"
+        invalid.mkdir()
+        (invalid / pilote.CONFIG_FILE_NAME).write_text("{not json", encoding="utf-8")
+        monkeypatch.setattr(pilote, "MATERIALS_DIR", invalid)
+        with pytest.raises(pilote.StudyMaterialError, match="Unreadable study material"):
+            pilote.load_config()
+
+    def test_missing_config_is_a_typed_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A missing config.json raises StudyMaterialError, not FileNotFoundError."""
+        monkeypatch.setattr(pilote, "MATERIALS_DIR", tmp_path / "empty")
+        with pytest.raises(pilote.StudyMaterialError, match="Unreadable study material"):
+            pilote.load_config()
+
+    def test_preregistration_document_is_hash_pinned(self) -> None:
+        """The pre-registration document itself is a pinned frozen material."""
+        config = pilote.load_config()
+        assert pilote.PREREGISTRATION_FILE_NAME in config.materials
+        text = pilote.load_preregistration_text()
+        assert "Pré-enregistrement" in text
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        assert config.materials[pilote.PREREGISTRATION_FILE_NAME] == f"sha256:{digest}"
+
     def test_materials_loaded_event_is_pinned(self) -> None:
         with structlog.testing.capture_logs() as logs:
             pilote.load_config()
