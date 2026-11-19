@@ -58,6 +58,8 @@ MARKDOWN_HEADERS = {**AUTH_HEADERS, "Accept": "text/markdown"}
 
 RUN_POLL_INTERVAL_SECONDS = 0.5
 RUN_POLL_TIMEOUT_SECONDS = 600.0
+DEFAULT_CHECK_TIMEOUT_SECONDS = 300
+"""Per-run check timeout of the study session (the CLI default, spec §20.2 headroom)."""
 
 RAPPORT_FILE_NAME = "rapport.json"
 CONTRACT_JSON_FILE_NAME = "contrat.json"
@@ -229,14 +231,19 @@ def _amorcage(*, client: httpx.Client, config: pilote.StudyConfig) -> tuple[str,
     """Import the frozen model, create the session with the study budget cap."""
     imported = client.post("/v1/models", content=pilote.load_model_text(), headers=PNML_HEADERS)
     _expect(response=imported, status=HTTPStatus.CREATED)
-    model_id = str(imported.json()["id"])
+    imported_payload: dict[str, object] = imported.json()
+    model_id = _as_str(value=_field(payload=imported_payload, name="id"), field="id")
     created = client.post(
         "/v1/sessions",
         json={"model_id": model_id, "budget_seconds": config.session_budget_seconds},
         headers=JSON_HEADERS,
     )
     _expect(response=created, status=HTTPStatus.CREATED)
-    return model_id, str(created.json()["session_id"])
+    session_id = _as_str(
+        value=_field(payload=created.json(), name="session_id"), field="session_id"
+    )
+    logger.debug("pilote_amorcage_done", model_id=model_id, session_id=session_id)
+    return model_id, session_id
 
 
 def _elicitation(
@@ -254,9 +261,10 @@ def _elicitation(
     response = client.get(f"/v1/sessions/{session_id}/contract", headers=CONTRACT_HEADERS)
     _expect(response=response, status=HTTPStatus.OK)
     contract: dict[str, object] = response.json()
-    questions = _as_object_list(value=contract["questions"])
+    questions = _as_object_list(value=_field(payload=contract, name="questions"))
     if not questions:
         raise PiloteExecutionError("the arbitrated profile generated no question")
+    logger.debug("pilote_questions_generated", session_id=session_id, questions=len(questions))
     for question in questions:
         response = client.post(
             f"/v1/sessions/{session_id}/arbitration-requests",
@@ -264,6 +272,7 @@ def _elicitation(
             headers=JSON_HEADERS,
         )
         _expect(response=response, status=HTTPStatus.CREATED)
+    logger.debug("pilote_questions_arbitrated", session_id=session_id, questions=len(questions))
     return questions
 
 
@@ -310,6 +319,7 @@ def _checks(
                 ),
             )
         )
+    logger.debug("pilote_checks_done", session_id=session_id, runs=len(runs))
     return runs
 
 
@@ -327,6 +337,9 @@ def _convergences(
             headers=JSON_HEADERS,
         )
         _expect(response=fused, status=HTTPStatus.CREATED)
+        logger.debug(
+            "pilote_convergence_fused", session_id=session_id, question_id=question["question_id"]
+        )
 
 
 def _synthese(
@@ -350,6 +363,13 @@ def _synthese(
     (output_dir / CONTRACT_JSON_FILE_NAME).write_bytes(contract_bytes)
     (output_dir / CONTRACT_MD_FILE_NAME).write_bytes(markdown_bytes)
     (output_dir / JOURNAL_FILE_NAME).write_bytes(journal_bytes)
+    logger.debug(
+        "pilote_synthese_done",
+        session_id=session_id,
+        budget_seconds=_as_float(value=_field(payload=budget, name="budget_seconds")),
+        consumed_seconds=_as_float(value=_field(payload=budget, name="consumed_seconds")),
+        run_count=_as_int(value=_field(payload=budget, name="run_count")),
+    )
     return contract_bytes, markdown_bytes, journal_bytes, budget, journal
 
 
@@ -360,7 +380,7 @@ def run_pilote(
     static_resolver: StaticResolver,
     engine_name: str,
     engine_version: str,
-    check_timeout_seconds: int = 300,
+    check_timeout_seconds: int = DEFAULT_CHECK_TIMEOUT_SECONDS,
 ) -> PiloteReport:
     """Run the full pilote session on the frozen v1 materials; archive everything.
 
@@ -411,12 +431,12 @@ def run_pilote(
         engine=engine_name,
         engine_version=engine_version,
         budget=PiloteBudgetReport(
-            cap_seconds=_as_float(value=budget["budget_seconds"]),
-            consumed_seconds=_as_float(value=budget["consumed_seconds"]),
-            reserved_seconds=_as_float(value=budget["reserved_seconds"]),
-            remaining_seconds=_as_float(value=budget["remaining_seconds"]),
-            run_count=_as_int(value=budget["run_count"]),
-            within_cap=_as_float(value=budget["remaining_seconds"]) >= 0.0,
+            cap_seconds=_as_float(value=_field(payload=budget, name="budget_seconds")),
+            consumed_seconds=_as_float(value=_field(payload=budget, name="consumed_seconds")),
+            reserved_seconds=_as_float(value=_field(payload=budget, name="reserved_seconds")),
+            remaining_seconds=_as_float(value=_field(payload=budget, name="remaining_seconds")),
+            run_count=_as_int(value=_field(payload=budget, name="run_count")),
+            within_cap=_as_float(value=_field(payload=budget, name="remaining_seconds")) >= 0.0,
         ),
         questions_total=len(questions),
         questions_arbitrated=len(questions),
