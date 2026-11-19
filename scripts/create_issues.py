@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 BACKLOG_PATH = Path("docs/backlog.md")
-EXPECTED_ISSUE_COUNT = 56
+EXPECTED_ISSUE_COUNT = 62
 MODE_DRY_RUN = "dry-run"
 MODE_APPLY = "apply"
 EN_DASH = "\u2013"
@@ -43,6 +43,7 @@ LABEL_STYLE: dict[str, tuple[str, str]] = {
     "area:docs": ("0075ca", "Area: docs"),
     "area:study": ("0075ca", "Area: studies"),
     "area:i18n": ("0075ca", "Area: i18n"),
+    "area:outillage": ("0075ca", "Area: outillage"),
     "kind:feat": ("0e8a16", "Kind: feature"),
     "kind:test": ("1d76db", "Kind: test"),
     "kind:chore": ("ededed", "Kind: chore"),
