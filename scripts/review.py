@@ -13,7 +13,10 @@ pushed or CI not concluded on it - not a verdict, not an attempt).
 reviewer's ENTIRE context - role contract, architecture rules, review
 checklist, the relevant ADRs, the pull request specification and the
 diff under review. Nothing else enters the prompt - context isolation
-is enforced by construction, not by prompt discipline. Stdlib only,
+is enforced by construction, not by prompt discipline. Machine
+artifacts (execution records, ``audit.json``, golden corpus, vendored
+PNML) are excluded from the diff and replaced by digest lines (P58,
+ADR-0010 appendix 2026-11-19). Stdlib only,
 so it runs in the bareest CI image: this module defers its
 ``httpx``-dependent imports into the ``review`` runner, on purpose.
 
@@ -23,7 +26,10 @@ review a stale head or a red one - the review is the last gate, never
 a substitute for a failing local gate (ADR-0010).
 """
 
+import fnmatch
+import hashlib
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -56,6 +62,25 @@ NO_DESCRIPTION_TEXT = "No pull request description was provided."
 EXIT_CODE_FAILURE = EXIT_CODE_CRITERIA_UNMET  # local alias: a bundle component is missing
 EXIT_CODE_PRECONDITIONS_UNMET = 3  # the review never started: not a verdict, not an attempt
 
+# P58 (issue #130, docs/spikes/2026-11-19-reviewer-reliability.md): machine
+# artifacts never enter the DIFF UNDER REVIEW - they are replaced by a digest
+# line (path, size, sha256, controlling test). The exclusion list is
+# deterministic and documented in the ADR-0010 appendix dated 2026-11-19.
+MACHINE_ARTIFACT_EXCLUSIONS: tuple[tuple[str, str], ...] = (
+    ("docs/studies/**/execution/**", "make study-p-audit"),
+    ("**/audit.json", "make study-p-audit"),
+    (
+        "src/petrichor/llm/golden/**",
+        "tests/test_llm_guard.py::test_no_golden_file_contains_a_verdict",
+    ),
+    (
+        "src/petrichor/study/**/*.pnml",
+        "tests/test_study_pilote.py::test_verify_materials_returns_the_pinned_hashes",
+    ),
+)
+EXCLUDED_DIGEST_SECTION_HEADER = "### Machine artifacts excluded from the diff (digests)"
+DIFF_FILE_HEADER_PATTERN = re.compile(r"^diff --git a/(?P<old>.+?) b/(?P<new>.+)$", re.MULTILINE)
+
 
 def read_text_file(*, path: Path) -> str:
     """Read one text file, failing loudly on a missing bundle component."""
@@ -73,6 +98,90 @@ def collect_decisions() -> list[tuple[str, str]]:
         decision_title = decision_path.stem.replace("-", " ").capitalize()
         decisions.append((decision_title, decision_path.read_text(encoding="utf-8")))
     return decisions
+
+
+def glob_match(*, pattern: str, path: str) -> bool:
+    """Match a git-style glob (``**`` crosses directories) against a repo path."""
+    if fnmatch.fnmatchcase(path, pattern):
+        return True
+    if pattern.startswith("**/"):
+        return fnmatch.fnmatchcase(path, pattern[3:])
+    return False
+
+
+def path_is_excluded(*, path: str) -> bool:
+    """Tell whether a changed path is a machine artifact excluded from the diff (P58)."""
+    normalized = path.strip("/")
+    return any(
+        glob_match(pattern=pattern, path=normalized)
+        for pattern, _controller in MACHINE_ARTIFACT_EXCLUSIONS
+    )
+
+
+def controller_for_path(*, path: str) -> str:
+    """Return the test or command that controls an excluded machine artifact."""
+    normalized = path.strip("/")
+    for pattern, controller in MACHINE_ARTIFACT_EXCLUSIONS:
+        if glob_match(pattern=pattern, path=normalized):
+            return controller
+    return "aucun"
+
+
+def digest_for_head_path(*, path: str) -> tuple[int, str] | None:
+    """Return (size in bytes, sha256) of the file at HEAD; None when absent at HEAD."""
+    completed = subprocess.run(
+        ["git", "cat-file", "blob", f"HEAD:{path}"],
+        cwd=REPOSITORY_ROOT,
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return None
+    payload = completed.stdout
+    return len(payload), hashlib.sha256(payload).hexdigest()
+
+
+def split_diff_chunks(*, diff_text: str) -> tuple[str, list[tuple[str, str]]]:
+    """Split a unified diff into (preamble, [(path, chunk)]) per ``diff --git`` header."""
+    matches = list(DIFF_FILE_HEADER_PATTERN.finditer(diff_text))
+    preamble = diff_text[: matches[0].start()] if matches else diff_text
+    chunks: list[tuple[str, str]] = []
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(diff_text)
+        chunks.append((match.group("new"), diff_text[match.start() : end]))
+    return preamble, chunks
+
+
+def sanitize_diff(*, diff_text: str) -> str:
+    """Remove machine-artifact chunks from a diff, replacing them with digest lines (P58).
+
+    Deterministic: excluded paths are sorted, digests are computed from the
+    HEAD blob. The doctrine is unchanged - the bundle is still the entire
+    context - it is simply rid of the noise the CI audit already controls
+    better than the reviewer (ADR-0010 appendix, 2026-11-19).
+    """
+    preamble, chunks = split_diff_chunks(diff_text=diff_text)
+    kept_chunks: list[str] = []
+    digest_lines: list[str] = []
+    for path, chunk in chunks:
+        if not path_is_excluded(path=path):
+            kept_chunks.append(chunk)
+            continue
+        controller = controller_for_path(path=path)
+        digest = digest_for_head_path(path=path)
+        if digest is None:
+            digest_lines.append(f"- `{path}` — supprimé dans ce diff — audité par `{controller}`")
+        else:
+            size, sha256 = digest
+            digest_lines.append(
+                f"- `{path}` — {size} octets — sha256:{sha256} — audité par `{controller}`"
+            )
+    sanitized = preamble + "".join(kept_chunks)
+    if digest_lines:
+        sanitized += (
+            f"\n{EXCLUDED_DIGEST_SECTION_HEADER}\n" + "\n".join(sorted(digest_lines)) + "\n"
+        )
+    return sanitized
 
 
 def render_bundle(
@@ -128,6 +237,7 @@ def run_review_bundle(*, arguments: argparse.Namespace) -> int:
         diff_text = read_text_file(path=Path(arguments.diff_file))
     else:
         diff_text = run_git(arguments=["diff", "--no-color", f"{arguments.base_ref}...HEAD"])
+    diff_text = sanitize_diff(diff_text=diff_text)
     if arguments.description_file is not None:
         description_text = read_text_file(path=Path(arguments.description_file))
     else:
