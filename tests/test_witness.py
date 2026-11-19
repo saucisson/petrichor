@@ -73,7 +73,6 @@ WITNESS_OUTPUT = {
 }
 
 
-
 class FakeRunner:
     """A runner serving a fixed normalized output, recording its calls."""
 
