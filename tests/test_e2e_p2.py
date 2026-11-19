@@ -28,7 +28,12 @@ from petrichor.checks import CheckCompleted, CheckOutcome, CheckQuestion
 from petrichor.convergence import ConvergenceStore
 from petrichor.engines.api_runner import VerifypnCheckRunner
 from petrichor.engines.archive import RunArchive
-from petrichor.engines.contract import DUMMY_ENGINE_NAME, DUMMY_ENGINE_VERSION, EngineQuestion
+from petrichor.engines.contract import (
+    DEFAULT_TIMEOUT_SECONDS,
+    DUMMY_ENGINE_NAME,
+    DUMMY_ENGINE_VERSION,
+    EngineQuestion,
+)
 from petrichor.engines.driver import (
     COMPOSE_START_TIMEOUT_SECONDS,
     DEFAULT_COMPOSE_FILE,
@@ -97,9 +102,9 @@ def sample_profile() -> SemanticProfile:
 
 
 def build_app(
+    *,
     tmp_path: Path,
     runner: CheckRunner,
-    *,
     store: ModelStore,
     run_store: RunStore,
     session_store: SessionStore,
@@ -149,7 +154,7 @@ class _DummyRunner:
                 pattern=question.kind,
                 parameters=question.parameters,
             ),
-            timeout_seconds=timeout_seconds or 30,
+            timeout_seconds=timeout_seconds or DEFAULT_TIMEOUT_SECONDS,
         )
         return CheckCompleted(output=record.output.model_dump(mode="json"), command=record.command)
 
@@ -287,6 +292,12 @@ def _assert_budget_consigne(
             run_count=budget["run_count"],
             families=sorted(families),
         )
+    # The service-side narration of the budget read is pinned here (the
+    # consignation event above is emitted by the scenario itself).
+    read = next(event for event in logs if event["event"] == "api_session_budget_read")
+    assert read["budget_seconds"] == SESSION_BUDGET_SECONDS
+    assert read["consumed_seconds"] == budget["consumed_seconds"]
+    assert read["runs"] == budget["run_count"]
     entry = next(event for event in logs if event["event"] == "e2e_p2_budget_consigne")
     assert entry["consumed_seconds"] == budget["consumed_seconds"]
     assert entry["budget_seconds"] == SESSION_BUDGET_SECONDS
@@ -325,8 +336,8 @@ def test_e2e_p2_full_scenario_on_real_engines(
     session_store = SessionStore(directory=tmp_path / "sessions")
     arbitrator = ProfileArbitrator()
     verifypn_client = build_app(
-        tmp_path,
-        VerifypnCheckRunner(archive=RunArchive(directory=tmp_path / "runs-verifypn")),
+        tmp_path=tmp_path,
+        runner=VerifypnCheckRunner(archive=RunArchive(directory=tmp_path / "runs-verifypn")),
         store=store,
         run_store=run_store,
         session_store=session_store,
@@ -337,8 +348,8 @@ def test_e2e_p2_full_scenario_on_real_engines(
     # ITS-Tools image is blocked: its Dockerfile tag v10052022 is a p2 dump,
     # not a source checkout (follow-up, see docs/spikes/2026-11-18-p39-mock-vs-real-e2e.md).
     dummy_client = build_app(
-        tmp_path,
-        _DummyRunner(archive=RunArchive(directory=tmp_path / "runs-dummy")),
+        tmp_path=tmp_path,
+        runner=_DummyRunner(archive=RunArchive(directory=tmp_path / "runs-dummy")),
         store=store,
         run_store=run_store,
         session_store=session_store,
