@@ -3249,9 +3249,13 @@ def _serve_ui_asset(
 
     Known suffixes are served from the static directory; an extension-less
     name is a client-side route of the SPA and gets the index.html shell;
-    anything else (unknown suffix, missing file, ``..`` traversal) is a 404.
+    anything else (unknown suffix, missing file, escape from the static
+    directory) is a 404.
     """
-    if ".." in name.split("/"):
+    # An absolute name (`/ui//etc/foo.js` -> `/etc/foo.js`) would make
+    # Path(static) / name discard the base: reject it, and `..` segments,
+    # then verify containment on the resolved path.
+    if name.startswith("/") or ".." in name.split("/"):
         return None
     suffix = Path(name).suffix
     content_type = UI_CONTENT_TYPES_BY_SUFFIX.get(suffix)
@@ -3261,6 +3265,10 @@ def _serve_ui_asset(
         asset = UI_STATIC_DIRECTORY / UI_INDEX
         content_type = CONTENT_TYPE_HTML
     else:
+        return None
+    try:
+        asset.resolve().relative_to(UI_STATIC_DIRECTORY.resolve())
+    except ValueError:
         return None
     if not asset.is_file():
         return None

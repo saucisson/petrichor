@@ -6,7 +6,6 @@ measured tool time of the session's terminal runs, refusal with an explicit
 session.
 """
 
-import re
 import time
 from pathlib import Path
 
@@ -14,6 +13,7 @@ import httpx
 import structlog.testing
 from pydantic import SecretStr
 
+from conftest import fetch_ui_bundle
 from petrichor.api.app import create_app
 from petrichor.api.settings import ApiSettings
 from petrichor.arbitration import ArbitrationStore
@@ -41,13 +41,6 @@ DONE_OUTPUT = {
     "technique": "dummy",
 }
 
-
-def fetch_ui_bundle(client: httpx.Client) -> str:
-    """Fetch the built JS bundle referenced by the served /ui/ shell (ADR-0101)."""
-    html = client.get("/ui/").text
-    match = re.search(r'src="(/ui/assets/[^"]+\.js)"', html)
-    assert match is not None
-    return client.get(match.group(1)).text
 
 
 class FakeRunner:
