@@ -9,6 +9,6 @@
     "grille-couverture.v1.json": "sha256:08700934e7f35060f0be53ebe0bb9f1b210f479271df27b37d1534e588dd2db8",
     "preregistre.md": "sha256:0bb8453609d8addbb092d52d5ef67f54b04e41f3ddd1cf2c5af3649decbbd340"
   },
-  "materials_dir": "src/petrichor/study/pilote/v1",
+  "materials_dir": "src/petrichor/study/pilote_v1",
   "note": "Dated pre-registration trace carried by the golden corpus (spec §20 intro, §15): the frozen study materials are pinned by content hash before the first session; any change is a new study version, never retro-applied (spec §20.2)."
 }

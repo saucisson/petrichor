@@ -154,6 +154,10 @@ class TestFrozenMaterials:
         monkeypatch.setattr(pilote, "MATERIALS_DIR", tmp_path / "empty")
         with pytest.raises(pilote.StudyMaterialError, match="Unreadable study material"):
             pilote.load_config()
+        with pytest.raises(pilote.StudyMaterialError, match="Unreadable study material"):
+            pilote.load_model_text()
+        with pytest.raises(pilote.StudyMaterialError, match="Unreadable study material"):
+            pilote.load_preregistration_text()
 
     def test_preregistration_document_is_hash_pinned(self) -> None:
         """The pre-registration document itself is a pinned frozen material."""

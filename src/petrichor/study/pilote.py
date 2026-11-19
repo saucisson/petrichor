@@ -31,7 +31,9 @@ PREREGISTRATION_DATE = date(2026, 11, 18)
 SESSION_BUDGET_SECONDS = 3600.0
 """Session cap of the study in tool seconds (spec §20.2): measured, never exceeded."""
 
-MATERIALS_DIR = Path(__file__).parent / STUDY_ID / STUDY_VERSION
+MATERIALS_DIR = Path(__file__).parent / f"{STUDY_ID}_{STUDY_VERSION}"
+"""The frozen materials directory (``pilote_v1``): named so it can never
+shadow this module as a namespace package."""
 CONFIG_FILE_NAME = "config.json"
 MODEL_FILE_NAME = "model.pnml"
 CATALOG_FILE_NAME = "catalogue-formules.v1.json"
@@ -152,7 +154,10 @@ def load_config() -> StudyConfig:
 
 def load_model_text() -> str:
     """The PNML text of the frozen study model."""
-    return (MATERIALS_DIR / MODEL_FILE_NAME).read_text(encoding="utf-8")
+    try:
+        return (MATERIALS_DIR / MODEL_FILE_NAME).read_text(encoding="utf-8")
+    except OSError as error:
+        raise StudyMaterialError(f"Unreadable study material {MODEL_FILE_NAME}: {error}") from error
 
 
 def load_frozen_catalog() -> ElicitationCatalog:
@@ -176,7 +181,12 @@ def load_frozen_grid() -> tuple[CoverageGridEntry, ...]:
 
 def load_preregistration_text() -> str:
     """The pre-registration document (thresholds + analysis plan), hash-pinned."""
-    return (MATERIALS_DIR / PREREGISTRATION_FILE_NAME).read_text(encoding="utf-8")
+    try:
+        return (MATERIALS_DIR / PREREGISTRATION_FILE_NAME).read_text(encoding="utf-8")
+    except OSError as error:
+        raise StudyMaterialError(
+            f"Unreadable study material {PREREGISTRATION_FILE_NAME}: {error}"
+        ) from error
 
 
 def load_golden_preregistration() -> GoldenPreregistration:
