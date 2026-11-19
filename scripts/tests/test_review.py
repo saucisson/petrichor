@@ -430,6 +430,10 @@ def test_load_max_attempts_default_override_and_invalid(
     with pytest.raises(SystemExit) as exit_info:
         review.load_max_attempts()
     assert exit_info.value.code == _shared.EXIT_CODE_PROTOCOL_FAILURE
+    monkeypatch.setenv(review.MAX_ATTEMPTS_VARIABLE, "0")
+    with pytest.raises(SystemExit) as exit_info:
+        review.load_max_attempts()
+    assert exit_info.value.code == _shared.EXIT_CODE_PROTOCOL_FAILURE
 
 
 def test_record_and_load_attempts_roundtrip_and_cap_counting(tmp_path: Path) -> None:
@@ -439,27 +443,27 @@ def test_record_and_load_attempts_roundtrip_and_cap_counting(tmp_path: Path) -> 
         journal_path=journal,
         pull_request_number=64,
         head_sha=HEAD_SHA,
-        phase="preconditions",
+        phase=review.AttemptPhase.PRECONDITIONS,
         exit_code=3,
-        cause="preconditions",
+        cause=review.AttemptCause.PRECONDITIONS,
         escalated=False,
     )
     review.record_attempt(
         journal_path=journal,
         pull_request_number=64,
         head_sha=HEAD_SHA,
-        phase=review.SESSION_PHASE,
+        phase=review.AttemptPhase.SESSION,
         exit_code=2,
-        cause="deadline",
+        cause=review.AttemptCause.DEADLINE,
         escalated=False,
     )
     review.record_attempt(
         journal_path=journal,
         pull_request_number=64,
         head_sha="other-head",
-        phase=review.SESSION_PHASE,
+        phase=review.AttemptPhase.SESSION,
         exit_code=2,
-        cause="turn-limit",
+        cause=review.AttemptCause.TURN_LIMIT,
         escalated=False,
     )
     attempts = review.load_attempts(journal_path=journal, pull_request_number=64, head_sha=HEAD_SHA)
@@ -557,7 +561,9 @@ def test_run_review_two_failures_escalate_then_third_refused(
         for line in journal.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    session_entries = [entry for entry in entries if entry["phase"] == review.SESSION_PHASE]
+    session_entries = [
+        entry for entry in entries if entry["phase"] == review.AttemptPhase.SESSION.value
+    ]
     assert len(session_entries) == 2
     assert session_entries[0]["cause"] == "deadline"
     assert session_entries[0]["escalated"] is False

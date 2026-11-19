@@ -122,7 +122,7 @@ def classify_session_failure(*, returncode: int, stderr: str) -> FailureCause:
         "max turns" in lowered_stderr
         or "max-turns" in lowered_stderr
         or "turn limit" in lowered_stderr
-        or "turns" in lowered_stderr
+        or "turn budget" in lowered_stderr
     ):
         return FailureCause.TURN_LIMIT
     return FailureCause.PROTOCOL

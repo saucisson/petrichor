@@ -44,6 +44,7 @@ import re
 import subprocess
 import sys
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -115,9 +116,28 @@ DIFF_SECTION_HEADER = "## DIFF UNDER REVIEW"
 MAX_ATTEMPTS_VARIABLE = "REVIEWER_MAX_ATTEMPTS"
 DEFAULT_MAX_ATTEMPTS = 2
 ATTEMPTS_JOURNAL_FILE_NAME = "review-attempts.jsonl"
-SESSION_PHASE = "session"
 NOTIFY_SEVERITY_URGENT = "urgent"
 NOTIFY_COMMAND: tuple[str, ...] = ("uv", "run", "notify", "send")
+
+
+class AttemptPhase(StrEnum):
+    """The closed set of review invocation phases journaled per attempt (P61)."""
+
+    PRECONDITIONS = "preconditions"
+    BUNDLE = "bundle"
+    SESSION = "session"
+    CAP = "cap"
+
+
+class AttemptCause(StrEnum):
+    """The closed set of journaled outcome causes (P61): never a bare exit code."""
+
+    CLEAN = "clean"
+    BLOCKING = "blocking"
+    PRECONDITIONS = "preconditions"
+    PROTOCOL = "protocol"
+    DEADLINE = "deadline"
+    TURN_LIMIT = "turn-limit"
 
 
 def read_text_file(*, path: Path) -> str:
@@ -267,18 +287,29 @@ def bundle_size_refusal(*, bundle_text: str, diff_text: str) -> str | None:
 
 
 def load_max_attempts() -> int:
-    """The per-head cap on failed review session attempts (``REVIEWER_MAX_ATTEMPTS``, P61)."""
+    """The per-head cap on failed review session attempts (``REVIEWER_MAX_ATTEMPTS``, P61).
+
+    Must be a positive integer: 0 or negative would refuse every review
+    before any session starts, which is never the intent.
+    """
     raw_value = os.environ.get(MAX_ATTEMPTS_VARIABLE, "").strip()
     if not raw_value:
         return DEFAULT_MAX_ATTEMPTS
     try:
-        return int(raw_value)
+        max_attempts = int(raw_value)
     except ValueError:
         print(
             f"Error: {MAX_ATTEMPTS_VARIABLE} is not an integer: {raw_value}.",
             file=sys.stderr,
         )
         raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE) from None
+    if max_attempts < 1:
+        print(
+            f"Error: {MAX_ATTEMPTS_VARIABLE} must be >= 1: {raw_value}.",
+            file=sys.stderr,
+        )
+        raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE) from None
+    return max_attempts
 
 
 def load_attempts(
@@ -317,7 +348,8 @@ def count_failed_session_attempts(*, attempts: list[dict[str, object]]) -> int:
     return sum(
         1
         for entry in attempts
-        if entry.get("phase") == SESSION_PHASE and entry.get("exit_code") != EXIT_CODE_SUCCESS
+        if entry.get("phase") == AttemptPhase.SESSION.value
+        and entry.get("exit_code") != EXIT_CODE_SUCCESS
     )
 
 
@@ -326,9 +358,9 @@ def record_attempt(
     journal_path: Path,
     pull_request_number: int,
     head_sha: str,
-    phase: str,
+    phase: AttemptPhase,
     exit_code: int,
-    cause: str,
+    cause: AttemptCause,
     escalated: bool,
 ) -> None:
     """Append one attempt line to the journal (P61); best-effort, never masks the verdict."""
@@ -336,10 +368,10 @@ def record_attempt(
         "timestamp": datetime.now(UTC).isoformat(),
         "pr_number": pull_request_number,
         "head_sha": head_sha,
-        "phase": phase,
+        "phase": phase.value,
         "exit_code": exit_code,
-        "cause": cause,
-        "attempt": phase == SESSION_PHASE,
+        "cause": cause.value,
+        "attempt": phase == AttemptPhase.SESSION,
         "escalated": escalated,
     }
     try:
@@ -354,7 +386,7 @@ def record_attempt(
         )
 
 
-def cause_for_exit_code(*, exit_code: int, review_directory: Path) -> str:
+def cause_for_exit_code(*, exit_code: int, review_directory: Path) -> AttemptCause:
     """The typed cause of a review outcome (P61): never a bare exit code.
 
     Exit 0/1 are verdicts (clean / blocking findings). Exit 2 reads the
@@ -362,11 +394,11 @@ def cause_for_exit_code(*, exit_code: int, review_directory: Path) -> str:
     protocol); exit 3 is preconditions.
     """
     if exit_code == EXIT_CODE_SUCCESS:
-        return "clean"
+        return AttemptCause.CLEAN
     if exit_code == EXIT_CODE_CRITERIA_UNMET:
-        return "blocking"
+        return AttemptCause.BLOCKING
     if exit_code == EXIT_CODE_PRECONDITIONS_UNMET:
-        return "preconditions"
+        return AttemptCause.PRECONDITIONS
     report_path = review_directory / "review-report.json"
     if report_path.is_file():
         try:
@@ -376,8 +408,11 @@ def cause_for_exit_code(*, exit_code: int, review_directory: Path) -> str:
         if isinstance(report, dict):
             failure_cause = report.get("failure_cause")
             if isinstance(failure_cause, str) and failure_cause:
-                return failure_cause
-    return "protocol"
+                try:
+                    return AttemptCause(failure_cause)
+                except ValueError:
+                    pass
+    return AttemptCause.PROTOCOL
 
 
 def escalate_to_human(
@@ -386,7 +421,7 @@ def escalate_to_human(
     head_sha: str,
     failed_attempts: int,
     max_attempts: int,
-    last_cause: str,
+    last_cause: AttemptCause,
 ) -> None:
     """Escalate to the human via the existing notify pipeline (P61, ``make notify``).
 
@@ -396,7 +431,7 @@ def escalate_to_human(
     message = (
         f"Revue de la PR #{pull_request_number} (head {head_sha[:8]}) :"
         f" {failed_attempts}/{max_attempts} tentatives de session épuisées sans revue propre"
-        f" (dernier échec : {last_cause}). Aucune fusion ne sera faite sans revue propre ;"
+        f" (dernier échec : {last_cause.value}). Aucune fusion ne sera faite sans revue propre ;"
         " intervention humaine requise."
     )
     try:
@@ -700,9 +735,9 @@ def run_review(*, arguments: argparse.Namespace) -> int:
                 journal_path=journal_path,
                 pull_request_number=arguments.pr_number,
                 head_sha=head_sha,
-                phase="preconditions",
+                phase=AttemptPhase.PRECONDITIONS,
                 exit_code=EXIT_CODE_PRECONDITIONS_UNMET,
-                cause="preconditions",
+                cause=AttemptCause.PRECONDITIONS,
                 escalated=False,
             )
             print(f"Review refused: {refusal_reason}.", file=sys.stderr)
@@ -723,9 +758,9 @@ def run_review(*, arguments: argparse.Namespace) -> int:
                 journal_path=journal_path,
                 pull_request_number=arguments.pr_number,
                 head_sha=head_sha,
-                phase="cap",
+                phase=AttemptPhase.CAP,
                 exit_code=EXIT_CODE_PRECONDITIONS_UNMET,
-                cause="preconditions",
+                cause=AttemptCause.PRECONDITIONS,
                 escalated=False,
             )
             print(
@@ -771,9 +806,9 @@ def run_review(*, arguments: argparse.Namespace) -> int:
                 journal_path=journal_path,
                 pull_request_number=arguments.pr_number,
                 head_sha=head_sha,
-                phase="bundle",
+                phase=AttemptPhase.BUNDLE,
                 exit_code=EXIT_CODE_PRECONDITIONS_UNMET,
-                cause="preconditions",
+                cause=AttemptCause.PRECONDITIONS,
                 escalated=False,
             )
             return EXIT_CODE_PRECONDITIONS_UNMET
@@ -782,9 +817,9 @@ def run_review(*, arguments: argparse.Namespace) -> int:
                 journal_path=journal_path,
                 pull_request_number=arguments.pr_number,
                 head_sha=head_sha,
-                phase="bundle",
+                phase=AttemptPhase.BUNDLE,
                 exit_code=EXIT_CODE_PROTOCOL_FAILURE,
-                cause="protocol",
+                cause=AttemptCause.PROTOCOL,
                 escalated=False,
             )
             return EXIT_CODE_PROTOCOL_FAILURE
@@ -814,7 +849,7 @@ def run_review(*, arguments: argparse.Namespace) -> int:
             journal_path=journal_path,
             pull_request_number=arguments.pr_number,
             head_sha=head_sha,
-            phase=SESSION_PHASE,
+            phase=AttemptPhase.SESSION,
             exit_code=review_exit_code,
             cause=attempt_cause,
             escalated=escalated,
