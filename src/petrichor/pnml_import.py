@@ -37,6 +37,8 @@ type Clock = Callable[[], datetime]
 
 PNML_ROOT_ELEMENT = "pnml"
 PNML_PT_NET_TYPE = "http://www.pnml.org/version-2009/grammar/pnml"
+PNML_PT_NET_TYPE_STANDARD = "http://www.pnml.org/version-2009/grammar/ptnet"
+"""The standard PNML 2009 P/T net type URI, used by the MCC benchmark files."""
 SYMMETRIC_NET_TYPE_MARKER = "symmetric"
 EXPECTED_NET_COUNT = 1
 MODEL_ID_HEX_DIGITS = 8
@@ -69,6 +71,11 @@ def _local_name(tag: str) -> str:
 def _children(*, element: ET.Element, name: str) -> list[ET.Element]:
     """Direct children of an element whose local tag name matches."""
     return [child for child in element if _local_name(child.tag) == name]
+
+
+def _children_of(*, elements: list[ET.Element], name: str) -> list[ET.Element]:
+    """The matching direct children across several parent elements."""
+    return [child for element in elements for child in _children(element=element, name=name)]
 
 
 def _child(*, element: ET.Element, name: str) -> ET.Element | None:
@@ -230,7 +237,7 @@ def _parse_arc(
 
 def _net_formalism(*, net_type: str | None) -> Formalism:
     """Map the PNML net type to a supported formalism; anything else is rejected."""
-    if net_type is None or net_type == PNML_PT_NET_TYPE:
+    if net_type is None or net_type in (PNML_PT_NET_TYPE, PNML_PT_NET_TYPE_STANDARD):
         return "pt"
     if SYMMETRIC_NET_TYPE_MARKER in net_type.lower():
         return "symmetric"
@@ -275,18 +282,23 @@ def _color_domain(*, formalism: Formalism, color_classes: set[str]) -> dict[str,
 def _net_payload(
     *, net: ET.Element, formalism: Formalism, clock: Clock | None
 ) -> dict[str, object]:
-    """Assemble the raw canonical payload of one PNML net."""
+    """Assemble the raw canonical payload of one PNML net.
+
+    Elements are read from the direct children of ``<net>`` and from each
+    ``<page>`` child: benchmark files (MCC) wrap the whole net in a page.
+    """
+    payload_parents: list[ET.Element] = [net, *_children(element=net, name="page")]
     canonical_id_by_raw: dict[str, ElementId] = {}
     places: list[Place] = []
     color_classes: set[str] = set()
-    for element in _children(element=net, name="place"):
+    for element in _children_of(elements=payload_parents, name="place"):
         place, color_class = _parse_place(element=element, canonical_id_by_raw=canonical_id_by_raw)
         places.append(place)
         if color_class is not None:
             color_classes.add(color_class)
     transitions = [
         _parse_transition(element=element, canonical_id_by_raw=canonical_id_by_raw)
-        for element in _children(element=net, name="transition")
+        for element in _children_of(elements=payload_parents, name="transition")
     ]
     arc_raw_ids: set[str] = set()
     arcs = [
@@ -295,7 +307,7 @@ def _net_payload(
             canonical_id_by_raw=canonical_id_by_raw,
             arc_raw_ids=arc_raw_ids,
         )
-        for element in _children(element=net, name="arc")
+        for element in _children_of(elements=payload_parents, name="arc")
     ]
     color_domain = _color_domain(formalism=formalism, color_classes=color_classes)
     now = clock() if clock is not None else datetime.now(UTC)
