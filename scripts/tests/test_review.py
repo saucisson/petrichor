@@ -315,3 +315,104 @@ def test_run_review_bundle_sanitizes_a_diff_file(
     assert "<pnml-new/>" not in diff_section
     assert review.EXCLUDED_DIGEST_SECTION_HEADER in diff_section
     assert "+new" in diff_section
+
+
+def test_load_bundle_max_bytes_default_and_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The size limit defaults to 256 KiB and is configurable by env (P59)."""
+    monkeypatch.delenv(review.BUNDLE_SIZE_LIMIT_VARIABLE, raising=False)
+    assert review.load_bundle_max_bytes() == 256 * 1024
+    monkeypatch.setenv(review.BUNDLE_SIZE_LIMIT_VARIABLE, "1024")
+    assert review.load_bundle_max_bytes() == 1024
+    monkeypatch.setenv(review.BUNDLE_SIZE_LIMIT_VARIABLE, "not-an-int")
+    with pytest.raises(SystemExit) as exit_info:
+        review.load_bundle_max_bytes()
+    assert exit_info.value.code == _shared.EXIT_CODE_PROTOCOL_FAILURE
+
+
+def test_bundle_size_refusal_reports_both_sizes() -> None:
+    """Over the limit, the refusal names total and diff-part sizes (P59)."""
+    small_bundle = "x" * 100
+    assert review.bundle_size_refusal(bundle_text=small_bundle, diff_text="d" * 10) is None
+    big_bundle = "x" * (256 * 1024 + 1)
+    refusal = review.bundle_size_refusal(bundle_text=big_bundle, diff_text="d" * 42)
+    assert refusal is not None
+    assert str(256 * 1024 + 1) in refusal
+    assert "42" in refusal
+    assert "split the pull request" in refusal
+
+
+def test_run_review_bundle_refuses_an_oversized_diff_before_writing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A fixture diff over the limit exits 3 and writes no bundle (P59)."""
+    monkeypatch.setattr(review, "digest_for_path", fake_digest)
+    monkeypatch.setenv(review.BUNDLE_SIZE_LIMIT_VARIABLE, "200")
+    diff_file = tmp_path / "big.diff"
+    diff_file.write_text(FIXTURE_DIFF_WITH_MACHINE, encoding="utf-8")
+    output_file = tmp_path / "bundle.md"
+    arguments = parse_review_arguments(
+        ["review-bundle", "--diff-file", str(diff_file), "--output", str(output_file)]
+    )
+    assert review.run_review_bundle(arguments=arguments) == review.EXIT_CODE_PRECONDITIONS_UNMET
+    assert not output_file.exists()
+
+
+def test_run_review_bundle_accepts_a_diff_under_the_limit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Under the limit the bundle is written and the exit code is 0 (P59)."""
+    monkeypatch.setattr(review, "digest_for_path", fake_digest)
+    monkeypatch.setenv(review.BUNDLE_SIZE_LIMIT_VARIABLE, str(10 * 1024 * 1024))
+    diff_file = tmp_path / "small.diff"
+    diff_file.write_text(FIXTURE_DIFF_WITHOUT_MACHINE, encoding="utf-8")
+    output_file = tmp_path / "bundle.md"
+    arguments = parse_review_arguments(
+        ["review-bundle", "--diff-file", str(diff_file), "--output", str(output_file)]
+    )
+    assert review.run_review_bundle(arguments=arguments) == _shared.EXIT_CODE_SUCCESS
+    assert output_file.exists()
+
+
+def test_run_review_propagates_the_size_refusal_as_preconditions(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """run_review maps a bundle-step exit 3 to exit 3, never to protocol failure."""
+    monkeypatch.setattr(review, "load_github_token", lambda: "token")
+    monkeypatch.setattr(review, "resolve_repository_slug", lambda: "o/r")
+    monkeypatch.setattr(
+        review,
+        "run_git",
+        lambda *, arguments: HEAD_SHA + "\n" if arguments[:1] == ["rev-parse"] else "",
+    )
+    monkeypatch.setattr(review, "REVIEW_DIRECTORY", tmp_path)
+    monkeypatch.setattr(
+        review,
+        "run_script",
+        lambda *, command: review.EXIT_CODE_PRECONDITIONS_UNMET,
+    )
+
+    pull_request = {
+        "number": 64,
+        "head": {"sha": HEAD_SHA, "ref": "feat/x"},
+        "base": {"ref": "daily"},
+    }
+
+    def fake_fetch_pull_request(**kwargs: object) -> dict[str, object]:
+        return pull_request
+
+    def fake_fetch_check_runs(**kwargs: object) -> list[dict[str, object]]:
+        return green_check_runs()
+
+    monkeypatch.setattr(_github, "fetch_pull_request", fake_fetch_pull_request)
+    monkeypatch.setattr(_github, "fetch_check_runs", fake_fetch_check_runs)
+    monkeypatch.setattr(
+        _github,
+        "open_github_client",
+        lambda *, token: httpx.Client(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200))
+        ),
+    )
+    arguments = parse_review_arguments(["review", "--pr-number", "64"])
+    assert review.run_review(arguments=arguments) == review.EXIT_CODE_PRECONDITIONS_UNMET

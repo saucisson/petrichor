@@ -16,7 +16,9 @@ diff under review. Nothing else enters the prompt - context isolation
 is enforced by construction, not by prompt discipline. Machine
 artifacts (execution records, ``audit.json``, golden corpus, vendored
 PNML) are excluded from the diff and replaced by digest lines (P58,
-ADR-0010 appendix 2026-11-19). Stdlib only,
+ADR-0010 appendix 2026-11-19). A bundle larger than
+``REVIEWER_BUNDLE_MAX_BYTES`` (default 256 KiB, P59) is refused before
+any session starts, with the "preconditions unmet" exit code. Stdlib only,
 so it runs in the bareest CI image: this module defers its
 ``httpx``-dependent imports into the ``review`` runner, on purpose.
 
@@ -29,6 +31,7 @@ a substitute for a failing local gate (ADR-0010).
 import fnmatch
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -80,6 +83,16 @@ MACHINE_ARTIFACT_EXCLUSIONS: tuple[tuple[str, str], ...] = (
 )
 EXCLUDED_DIGEST_SECTION_HEADER = "### Machine artifacts excluded from the diff (digests)"
 DIFF_FILE_HEADER_PATTERN = re.compile(r"^diff --git a/(?P<old>.+?) b/(?P<new>.+)$", re.MULTILINE)
+
+# P59 (issue #131): a bundle too large to review reliably is refused BEFORE the
+# session starts, with the semantics of the "preconditions unmet" exit code (3):
+# not a verdict, not an attempt. Default 256 KiB: the static part of the bundle
+# (role contract + architecture + checklist + all ADRs) measured ~84 KiB on
+# 2026-11-19, and the P42 incident bundle reached 164 KiB and died on deadline
+# then turn limit (docs/spikes/2026-11-19-reviewer-reliability.md).
+BUNDLE_SIZE_LIMIT_VARIABLE = "REVIEWER_BUNDLE_MAX_BYTES"
+DEFAULT_BUNDLE_MAX_BYTES = 256 * 1024
+DIFF_SECTION_HEADER = "## DIFF UNDER REVIEW"
 
 
 def read_text_file(*, path: Path) -> str:
@@ -194,6 +207,40 @@ def split_diff_chunks(*, diff_text: str) -> tuple[str, list[tuple[str, str]]]:
     return preamble, chunks
 
 
+def load_bundle_max_bytes() -> int:
+    """The bundle size limit in bytes (``REVIEWER_BUNDLE_MAX_BYTES``, P59)."""
+    raw_value = os.environ.get(BUNDLE_SIZE_LIMIT_VARIABLE, "").strip()
+    if not raw_value:
+        return DEFAULT_BUNDLE_MAX_BYTES
+    try:
+        return int(raw_value)
+    except ValueError:
+        print(
+            f"Error: {BUNDLE_SIZE_LIMIT_VARIABLE} is not an integer: {raw_value}.",
+            file=sys.stderr,
+        )
+        raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE) from None
+
+
+def bundle_size_refusal(*, bundle_text: str, diff_text: str) -> str | None:
+    """Return the refusal reason when the bundle exceeds the size limit; None otherwise.
+
+    Both the total bundle and the diff part are measured and reported, so the
+    message stays actionable: split the pull request, or check the P58
+    machine-artifact exclusions.
+    """
+    limit = load_bundle_max_bytes()
+    total_bytes = len(bundle_text.encode("utf-8"))
+    if total_bytes <= limit:
+        return None
+    diff_bytes = len(diff_text.encode("utf-8"))
+    return (
+        f"bundle too large: {total_bytes} bytes total (diff part {diff_bytes} bytes)"
+        f" exceeds the limit of {limit} bytes ({BUNDLE_SIZE_LIMIT_VARIABLE})"
+        " - split the pull request or check the P58 machine-artifact exclusions"
+    )
+
+
 def sanitize_diff(*, diff_text: str) -> str:
     """Remove machine-artifact chunks from a diff, replacing them with digest lines (P58).
 
@@ -289,6 +336,10 @@ def run_review_bundle(*, arguments: argparse.Namespace) -> int:
         description_text=description_text,
         decisions=collect_decisions(),
     )
+    refusal_reason = bundle_size_refusal(bundle_text=bundle_text, diff_text=diff_text)
+    if refusal_reason is not None:
+        print(f"Bundle refused: {refusal_reason}.", file=sys.stderr)
+        return EXIT_CODE_PRECONDITIONS_UNMET
     if arguments.output is not None:
         Path(arguments.output).write_text(bundle_text, encoding="utf-8")
     else:
@@ -486,6 +537,10 @@ def run_review(*, arguments: argparse.Namespace) -> int:
                 str(REVIEW_DIRECTORY / "bundle.md"),
             ]
         )
+        if bundle_exit_code == EXIT_CODE_PRECONDITIONS_UNMET:
+            # P59: an oversized bundle is refused before the session starts -
+            # preconditions unmet, not a verdict, not an attempt.
+            return EXIT_CODE_PRECONDITIONS_UNMET
         if bundle_exit_code != EXIT_CODE_SUCCESS:
             return EXIT_CODE_PROTOCOL_FAILURE
         review_exit_code = run_script(
