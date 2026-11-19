@@ -1,0 +1,70 @@
+{
+  "app": {
+    "title": "Petrichor — session d'élicitation",
+    "languageLabel": "Langue"
+  },
+  "header": {
+    "apiKeyLabel": "Clé API",
+    "apiKeyAria": "Clé API",
+    "sessionLabel": "Session",
+    "sessionAria": "Identifiant de session (reprise)",
+    "resume": "Reprendre la session"
+  },
+  "nav": {
+    "aria": "Étapes",
+    "steps": {
+      "amorcage": "1. Amorçage",
+      "questions": "2. Questions statiques",
+      "verifications": "3. Vérifications MC",
+      "synthese": "4. Synthèse"
+    }
+  },
+  "amorcage": {
+    "title": "Amorçage",
+    "intro": "Importez un modèle PNML, créez une session, arbitrez le profil sémantique proposé.",
+    "fileAria": "Fichier PNML",
+    "import": "Importer le modèle et créer la session",
+    "importRefused": "Import du modèle refusé : {{status}}",
+    "noProfile": "Aucun profil proposé pour cette session.",
+    "roleProposed": "rôle proposé : {{role}} (conf {{conf}})",
+    "accept": "Accepter",
+    "refuse": "Refuser"
+  },
+  "questions": {
+    "title": "Questions statiques",
+    "intro": "Cartes-question : arbitrez chaque question (Impossible / C'est normal / Vérifier d'abord).",
+    "meta": "{{formula}} ({{family}}, triage {{triage}})",
+    "status": "Statut : {{status}}",
+    "decisions": {
+      "refuse": "Impossible",
+      "accept": "C'est normal",
+      "verifyFirst": "Vérifier d'abord"
+    },
+    "cross": {
+      "verifiedByN": "Vérifiée par {{count}} outils.",
+      "controversial": "Clause controversée — remontée à l'ingénieur, jamais tranchée ici.",
+      "notVerified": "Non vérifiée.",
+      "proofLine": "{{tool}} : verdict {{verdict}}"
+    }
+  },
+  "verifications": {
+    "title": "Vérifications MC",
+    "intro": "Runs disponibles de la session (mock / statiques) — aucun verdict n'est inventé ici.",
+    "budget": "Budget MC — consommé {{consumed}} s / plafond {{cap}} s — restant {{remaining}} s (aucun report).",
+    "runLine": "{{runId}} — {{family}} / {{kind}} — statut : {{status}} — triage : {{triage}} — verdict :",
+    "witnessUnavailable": "Témoin indisponible ({{status}}).",
+    "witnessTitle": "Témoin {{id}} — {{kind}}",
+    "witnessCyclic": " — cyclique (back-edge {{edge}})",
+    "witnessAcyclic": " — acyclique",
+    "marking": "marquage : {{marking}}",
+    "fired": "tire : {{transition}}",
+    "narrationProvenance": "(provenance : {{provenance}})"
+  },
+  "synthese": {
+    "title": "Synthèse",
+    "intro": "Le contrat de la session, exportable en Markdown.",
+    "export": "Télécharger le contrat (Markdown)",
+    "unavailable": "Contrat indisponible ({{status}}).",
+    "journalTitle": "Journal d'arbitrage"
+  }
+}

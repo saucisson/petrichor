@@ -22,6 +22,10 @@ header {
   align-items: center;
 }
 
+#language-select {
+  max-width: 8rem;
+}
+
 #steps {
   display: flex;
   gap: 0.5rem;

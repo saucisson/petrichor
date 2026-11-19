@@ -1,5 +1,7 @@
 import { useCallback, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { ApiClient } from "./api";
+import { applyLanguage, SUPPORTED_LANGUAGES, type Language } from "./i18n";
 import type { Session } from "./types";
 import Amorcage from "./components/Amorcage";
 import Questions from "./components/Questions";
@@ -8,17 +10,13 @@ import Synthese from "./components/Synthese";
 
 type Step = "amorcage" | "questions" | "verifications" | "synthese";
 
-const STEPS: { id: Step; label: string }[] = [
-  { id: "amorcage", label: "1. Amorçage" },
-  { id: "questions", label: "2. Questions statiques" },
-  { id: "verifications", label: "3. Vérifications MC" },
-  { id: "synthese", label: "4. Synthèse" },
-];
+const STEP_IDS: Step[] = ["amorcage", "questions", "verifications", "synthese"];
 
 const API_KEY_STORAGE = "petrichor.apiKey";
 const SESSION_STORAGE = "petrichor.sessionId";
 
 export default function App() {
+  const { t, i18n } = useTranslation();
   const [apiKey, setApiKey] = useState<string>(() => localStorage.getItem(API_KEY_STORAGE) ?? "");
   const [sessionId, setSessionId] = useState<string>(
     () => localStorage.getItem(SESSION_STORAGE) ?? "",
@@ -41,6 +39,10 @@ export default function App() {
     bumpReload();
   };
 
+  const onLanguageChange = (language: Language) => {
+    applyLanguage(language);
+  };
+
   const resumeSession = async () => {
     const trimmed = sessionId.trim();
     try {
@@ -49,6 +51,7 @@ export default function App() {
       setResumeError(null);
       bumpReload();
     } catch (error) {
+      // Server-produced error message: displayed verbatim, never translated.
       setResumeError(error instanceof Error ? error.message : String(error));
     }
   };
@@ -56,40 +59,52 @@ export default function App() {
   return (
     <>
       <header>
-        <h1>Petrichor — session d'élicitation</h1>
-        <label htmlFor="api-key">Clé API</label>
+        <h1>{t("app.title")}</h1>
+        <label htmlFor="api-key">{t("header.apiKeyLabel")}</label>
         <input
           id="api-key"
           type="password"
           autoComplete="off"
-          aria-label="Clé API"
+          aria-label={t("header.apiKeyAria")}
           value={apiKey}
           onChange={(event) => onApiKeyChange(event.target.value)}
         />
-        <label htmlFor="session-id">Session</label>
+        <label htmlFor="session-id">{t("header.sessionLabel")}</label>
         <input
           id="session-id"
           type="text"
           autoComplete="off"
-          aria-label="Identifiant de session (reprise)"
+          aria-label={t("header.sessionAria")}
           value={sessionId}
           onChange={(event) => setSessionId(event.target.value)}
         />
         <button id="resume-session" type="button" onClick={() => void resumeSession()}>
-          Reprendre la session
+          {t("header.resume")}
         </button>
+        <label htmlFor="language-select">{t("app.languageLabel")}</label>
+        <select
+          id="language-select"
+          value={i18n.language}
+          onChange={(event) => onLanguageChange(event.target.value as Language)}
+        >
+          {SUPPORTED_LANGUAGES.map((language) => (
+            <option key={language} value={language}>
+              {language === "fr" ? "Français" : "English"}
+            </option>
+          ))}
+        </select>
       </header>
-      <nav aria-label="Étapes">
+      <nav aria-label={t("nav.aria")}>
         <ol id="steps">
-          {STEPS.map((entry) => (
-            <li key={entry.id}>
+          {STEP_IDS.map((id) => (
+            <li key={id}>
               <button
                 type="button"
-                data-step={entry.id}
-                aria-current={step === entry.id ? "step" : undefined}
-                onClick={() => setStep(entry.id)}
+                data-step={id}
+                aria-current={step === id ? "step" : undefined}
+                onClick={() => setStep(id)}
               >
-                {entry.label}
+                {t("nav.steps." + id)}
               </button>
             </li>
           ))}
