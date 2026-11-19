@@ -97,6 +97,11 @@ CHECK_TIMEOUT ?= 300
 study-p: ## Run the pilote study session on the frozen v1 materials (spec §20, issue #41).
 	$(PYTHON) -m scripts study-p --output-dir "$(OUTPUT_DIR)" --check-timeout $(CHECK_TIMEOUT)
 
+RECORD_DIR ?= docs/studies/pilote/v1/execution
+
+study-p-audit: ## Audit the pilote execution record: no verdict without an archived run (spec §20.10, issue #42).
+	$(PYTHON) -m scripts study-p-audit --record-dir "$(RECORD_DIR)"
+
 clean: ## Remove caches, build outputs, mutation cache and runtime state.
 	rm -rf .pytest_cache .mypy_cache .ruff_cache .mutmut-cache htmlcov \
 		build dist .coverage coverage.xml .review .petrichor
