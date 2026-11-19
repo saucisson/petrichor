@@ -11,10 +11,17 @@ anything it cannot verify, and exits with a status the merge driver
 
 The session spends the INCLUDED usage of the local Vibe Code plan,
 not pay-per-token API calls - that is the point of ADR-0010.
+
+P60 (issue #132): the turn budget is configurable (``REVIEWER_MAX_TOURS``,
+default 12, was a hard-coded 8), the CLI binary is pinnable
+(``REVIEWER_CLI_COMMAND``), and a preflight checks presence, version
+(>= 3.x) and ``--prompt-file`` capability before launching - a refusal
+exits 3 (preconditions unmet), never an opaque exit 2.
 """
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -28,12 +35,21 @@ if TYPE_CHECKING:
     import argparse
     from collections.abc import Sequence
 
-REVIEWER_CLI_COMMAND = "vibe"
+CLI_COMMAND_VARIABLE = "REVIEWER_CLI_COMMAND"
+DEFAULT_CLI_COMMAND = "vibe"
 REVIEWER_MODEL_VARIABLE = "REVIEWER_MODEL"
 REVIEWER_MAX_TOKENS_VARIABLE = "REVIEWER_MAX_TOKENS"
 SESSION_TIME_LIMIT_VARIABLE = "REVIEWER_TIME_LIMIT_SECONDS"
 DEFAULT_SESSION_TIME_LIMIT_SECONDS = 600
-MAXIMUM_SESSION_TURNS = 8
+SESSION_MAX_TURNS_VARIABLE = "REVIEWER_MAX_TOURS"
+# P60 (issue #132): the turn budget becomes configurable, default raised from
+# 8 to 12 - the P40/P42 reviews hit the old limit of 8 mid-session.
+DEFAULT_MAXIMUM_SESSION_TURNS = 12
+# The driver invokes the CLI with --prompt-file, which requires vibe >= 3.x.
+MINIMUM_CLI_MAJOR_VERSION = 3
+REQUIRED_CLI_OPTION = "--prompt-file"
+
+EXIT_CODE_PRECONDITIONS_UNMET = 3  # preflight refusal: the session never started
 
 BUNDLE_FILE_NAME = "bundle.md"
 SYSTEM_PROMPT_FILE_NAME = "system-prompt.md"
@@ -146,6 +162,76 @@ def load_time_limit_seconds() -> int:
         raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE) from None
 
 
+def load_max_turns() -> int:
+    """The session's turn budget (``--max-turns``); ``REVIEWER_MAX_TOURS`` (P60)."""
+    raw_value = os.environ.get(SESSION_MAX_TURNS_VARIABLE, "").strip()
+    if not raw_value:
+        return DEFAULT_MAXIMUM_SESSION_TURNS
+    try:
+        return int(raw_value)
+    except ValueError:
+        print(
+            f"Error: {SESSION_MAX_TURNS_VARIABLE} is not an integer: {raw_value}.",
+            file=sys.stderr,
+        )
+        raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE) from None
+
+
+def load_cli_command() -> str:
+    """The reviewer CLI binary; ``REVIEWER_CLI_COMMAND`` pins an exact one (P60).
+
+    This replaces the ad-hoc PATH wrappers used when the local binary was too
+    old: point the variable at a vibe 3.x binary instead.
+    """
+    return os.environ.get(CLI_COMMAND_VARIABLE, "").strip() or DEFAULT_CLI_COMMAND
+
+
+VERSION_PATTERN = re.compile(r"(\d+)\.(\d+)\.(\d+)")
+
+
+def cli_preflight(*, command: str) -> str | None:
+    """Check the reviewer CLI before launching: presence, version, capability (P60).
+
+    Returns the refusal reason, or None when the CLI can run the session. A
+    refusal exits with the "preconditions unmet" code (3): the session never
+    started - this replaces the opaque exit 2 of a too-old binary.
+    """
+    if shutil.which(command) is None:
+        return (
+            f"the reviewer CLI {command!r} is not on PATH"
+            f" - set {CLI_COMMAND_VARIABLE} to the exact binary to use"
+        )
+    try:
+        version_run = subprocess.run(
+            [command, "--version"], capture_output=True, text=True, check=False
+        )
+        help_run = subprocess.run([command, "--help"], capture_output=True, text=True, check=False)
+    except OSError as probe_error:
+        return f"could not run {command!r} --version/--help: {probe_error}"
+    version_output = version_run.stdout + version_run.stderr
+    version_match = VERSION_PATTERN.search(version_output)
+    if version_match is None:
+        return (
+            f"could not parse the version of {command!r}"
+            f" (--version output: {version_output.strip()!r})"
+            f" - set {CLI_COMMAND_VARIABLE} to a vibe {MINIMUM_CLI_MAJOR_VERSION}.x binary"
+        )
+    major_version = int(version_match.group(1))
+    if major_version < MINIMUM_CLI_MAJOR_VERSION:
+        return (
+            f"the review driver requires vibe >= {MINIMUM_CLI_MAJOR_VERSION}.x"
+            f" ({REQUIRED_CLI_OPTION} support), found {version_match.group(0)}"
+            f" - set {CLI_COMMAND_VARIABLE} to a vibe {MINIMUM_CLI_MAJOR_VERSION}.x binary"
+        )
+    help_output = help_run.stdout + help_run.stderr
+    if REQUIRED_CLI_OPTION not in help_output:
+        return (
+            f"{command!r} does not support {REQUIRED_CLI_OPTION}"
+            f" - set {CLI_COMMAND_VARIABLE} to a vibe {MINIMUM_CLI_MAJOR_VERSION}.x binary"
+        )
+    return None
+
+
 def run_reviewer_session(*, model_name: str, bundle_path: Path) -> str:
     """Run the headless reviewer session; return its final answer text.
 
@@ -155,7 +241,16 @@ def run_reviewer_session(*, model_name: str, bundle_path: Path) -> str:
     session cannot spend approval prompts either: programmatic mode
     denies any tool call that would need one, so the review answers
     from the bundle alone.
+
+    P60: the CLI is preflighted first (presence, version >= 3.x,
+    ``--prompt-file`` capability); a refusal exits 3 (preconditions
+    unmet), never the opaque exit 2 of a launch failure.
     """
+    cli_command = load_cli_command()
+    preflight_refusal = cli_preflight(command=cli_command)
+    if preflight_refusal is not None:
+        print(f"Reviewer CLI preflight refused: {preflight_refusal}.", file=sys.stderr)
+        raise SystemExit(EXIT_CODE_PRECONDITIONS_UNMET)
     session_directory = Path(tempfile.mkdtemp(prefix="reviewer-session-"))
     try:
         shutil.copyfile(bundle_path, session_directory / BUNDLE_FILE_NAME)
@@ -164,7 +259,7 @@ def run_reviewer_session(*, model_name: str, bundle_path: Path) -> str:
         )
         (session_directory / PROMPT_FILE_NAME).write_text(REVIEWER_PROMPT_TEXT, encoding="utf-8")
         command = [
-            REVIEWER_CLI_COMMAND,
+            cli_command,
             "--prompt-file",
             str(session_directory / PROMPT_FILE_NAME),
             "--system-prompt-file",
@@ -172,7 +267,7 @@ def run_reviewer_session(*, model_name: str, bundle_path: Path) -> str:
             "--output",
             "json",
             "--max-turns",
-            str(MAXIMUM_SESSION_TURNS),
+            str(load_max_turns()),
             "--time-limit",
             str(load_time_limit_seconds()),
         ]
@@ -190,8 +285,7 @@ def run_reviewer_session(*, model_name: str, bundle_path: Path) -> str:
             )
         except OSError as launch_error:
             print(
-                f"Error: the reviewer session could not start"
-                f" ({REVIEWER_CLI_COMMAND}): {launch_error}",
+                f"Error: the reviewer session could not start ({cli_command}): {launch_error}",
                 file=sys.stderr,
             )
             raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE) from launch_error
