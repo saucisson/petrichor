@@ -1,6 +1,6 @@
 {
-  "record_dir": "/home/alban/petrichor/docs/studies/pilote/v1/execution",
-  "audited_at": "2026-11-19T13:25:50.721230Z",
+  "record_dir": "docs/studies/pilote/v1/execution",
+  "audited_at": "2026-11-19T14:21:40.119961Z",
   "ok": true,
   "checks": [
     {
