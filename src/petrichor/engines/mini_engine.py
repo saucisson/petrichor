@@ -1098,3 +1098,28 @@ def non_vacuity_guard(
         status="not_applicable",
         detail=f"Formula {formula!r} is outside the EF φ / AG ψ guards (spec §14.4).",
     )
+
+
+class MiniEngineResolver:
+    """The ``StaticResolver`` protocol over the mini-engine adapters (spec §19.4).
+
+    Lives in ``engines/`` on purpose: the verdict lock forbids any module
+    outside this package from importing it. The API and the study runners
+    receive it by injection.
+    """
+
+    def capacity(self, *, model: CanonicalModel) -> CapacityReport:
+        """Probe the state-graph capacity of the model (never assumed)."""
+        return mini_capacity(model=model)
+
+    def resolve_static(
+        self, *, model: CanonicalModel, question: CheckQuestion
+    ) -> dict[str, JsonValue]:
+        """Resolve a statically-triaged question inside the mini-engine fragment."""
+        return resolve_static_payload(model=model, question=question)
+
+    def non_vacuity_guard(
+        self, *, model: CanonicalModel, family: CheckFamilyName, kind: KindPattern, formula: str
+    ) -> NonVacuityGuard:
+        """Build the non-vacuity guard of a question (spec §14.4)."""
+        return non_vacuity_guard(model=model, family=family, kind=kind, formula=formula)

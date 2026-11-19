@@ -10,7 +10,7 @@ DAY_TAG := daily-$(shell date +%F)
 .DEFAULT_GOAL := help
 .PHONY: help install lint format typecheck imports test check security build \
         day-start day-report smoke-test mutate notify review merge-pr pr claim \
-        claim-pr update-pr wait-ci night review-bundle sync-daily clean
+        claim-pr update-pr wait-ci night review-bundle sync-daily clean study-p
 
 help: ## List available targets with their description.
 	@grep --extended-regexp '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -90,6 +90,12 @@ night: ## Run the unattended loop: ISSUES="12,13,14", MILESTONES="3,4", or auto-
 
 review-bundle: ## Print the reviewer bundle against origin/daily (ADR-0010).
 	$(PYTHON) -m scripts review-bundle --base-ref origin/daily
+
+OUTPUT_DIR ?= .petrichor/study-p
+CHECK_TIMEOUT ?= 300
+
+study-p: ## Run the pilote study session on the frozen v1 materials (spec §20, issue #41).
+	$(PYTHON) -m scripts study-p --output-dir "$(OUTPUT_DIR)" --check-timeout $(CHECK_TIMEOUT)
 
 clean: ## Remove caches, build outputs and mutation cache.
 	rm -rf .pytest_cache .mypy_cache .ruff_cache .mutmut-cache htmlcov \

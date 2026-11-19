@@ -1,0 +1,13 @@
+{"detail":{"model_id":"mdl_10c2c092"},"event":"session_created","timestamp":1795078132.7986898}
+{"detail":{"decision":"accept","previous_decision":null,"question_id":"q_a0839f755b80"},"event":"arbitration_decided","timestamp":1795078132.8026235}
+{"detail":{"decision":"accept","previous_decision":null,"question_id":"q_c570f90fa00f"},"event":"arbitration_decided","timestamp":1795078132.8032045}
+{"detail":{"decision":"accept","previous_decision":null,"question_id":"q_f420ef4e4a4f"},"event":"arbitration_decided","timestamp":1795078132.8036547}
+{"detail":{"decision":"accept","previous_decision":null,"question_id":"q_e853037347cf"},"event":"arbitration_decided","timestamp":1795078132.804086}
+{"detail":{"decision":"accept","previous_decision":null,"question_id":"q_f5a4bec74e93"},"event":"arbitration_decided","timestamp":1795078132.8045008}
+{"detail":{"decision":"accept","previous_decision":null,"question_id":"q_e9b70c39dd85"},"event":"arbitration_decided","timestamp":1795078132.8048768}
+{"detail":{"run_id":"run_377c6f"},"event":"run_added","timestamp":1795078132.8387678}
+{"detail":{"run_id":"run_f2293c"},"event":"run_added","timestamp":1795078148.505769}
+{"detail":{"run_id":"run_17baf4"},"event":"run_added","timestamp":1795078163.0609245}
+{"detail":{"run_id":"run_1db2fa"},"event":"run_added","timestamp":1795078178.7339067}
+{"detail":{"run_id":"run_fff206"},"event":"run_added","timestamp":1795078193.2991624}
+{"detail":{"run_id":"run_fe7160"},"event":"run_added","timestamp":1795078208.976521}

@@ -35,7 +35,7 @@ CATALOG_PATH = Path(__file__).with_name("elicitation_catalog.v1.json")
 
 QUESTION_ID_PREFIX = "q_"
 QUESTION_ID_HEX_DIGITS = 12
-PLACEHOLDER_COUNT = 3
+PLACEHOLDER_NAMES = ("place", "place_b", "place_c")
 """The formula placeholders ``{place}``, ``{place_b}``, ``{place_c}``."""
 
 QuestionId = NewType("QuestionId", str)
@@ -144,8 +144,16 @@ def question_id(*, template_id: TemplateId, group_id: GroupId, formula: str) -> 
     return QuestionId(f"{QUESTION_ID_PREFIX}{digest[:QUESTION_ID_HEX_DIGITS]}")
 
 
-def _instantiate_formula(*, template: CatalogTemplate, elements: str, model: CanonicalModel) -> str:
-    """Fill the formula placeholders from the entry elements, e.g. ``fork_1..3``."""
+def _instantiate_formula(
+    *, template: CatalogTemplate, elements: str, model: CanonicalModel
+) -> str | None:
+    """Fill the formula placeholders from the entry elements, e.g. ``fork_1..3``.
+
+    Returns None when the entry carries fewer elements than the template
+    needs: the couple is non-productive and is documented as such by the
+    caller (spec §14.1) - never padded with an unrelated place, which would
+    produce a formula about the wrong elements.
+    """
     range_match = _ELEMENT_RANGE_PATTERN.search(elements)
     if range_match is not None:
         base = range_match.group(1)
@@ -154,9 +162,10 @@ def _instantiate_formula(*, template: CatalogTemplate, elements: str, model: Can
     else:
         token = _FIRST_TOKEN_PATTERN.search(elements)
         places = [token.group(0)] if token is not None else []
-    while len(places) < PLACEHOLDER_COUNT:
-        places.append(model.places[len(places) % len(model.places)].id)
-    return template.formula_template.format(place=places[0], place_b=places[1], place_c=places[2])
+    names = [name for name in PLACEHOLDER_NAMES if f"{{{name}}}" in template.formula_template]
+    if len(places) < len(names):
+        return None
+    return template.formula_template.format(**dict(zip(names, places, strict=False)))
 
 
 def instantiate_questions(
@@ -178,6 +187,14 @@ def instantiate_questions(
                 )
             )
             formula = _instantiate_formula(template=template, elements=entry.elements, model=model)
+            if formula is None:
+                logger.debug(
+                    "question_generation_skipped",
+                    template_id=template.id,
+                    entry_id=entry.id,
+                    reason="non-productive couple (spec §14.1): not enough elements",
+                )
+                continue
             questions.append(
                 GeneratedQuestion(
                     question_id=question_id(
