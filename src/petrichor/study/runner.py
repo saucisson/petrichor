@@ -185,11 +185,26 @@ def _as_int(*, value: object) -> int:
     return value
 
 
+def _as_object_list(*, value: object) -> list[dict[str, object]]:
+    """A JSON array of objects, narrowed explicitly."""
+    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+        raise PiloteExecutionError(f"expected an array of objects in the payload, got {value!r}")
+    return value
+
+
+def _get_json(*, client: httpx.Client, path: str) -> dict[str, object]:
+    """GET one JSON resource; a non-200 is a typed PiloteExecutionError."""
+    response = client.get(path, headers=AUTH_HEADERS)
+    _expect(response=response, status=HTTPStatus.OK)
+    payload: dict[str, object] = response.json()
+    return payload
+
+
 def _wait_terminal(*, client: httpx.Client, run_id: str) -> dict[str, object]:
     """Poll one run until it leaves the running state (real engines are slow)."""
     deadline = time.monotonic() + RUN_POLL_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
-        run: dict[str, object] = client.get(f"/v1/runs/{run_id}", headers=AUTH_HEADERS).json()
+        run = _get_json(client=client, path=f"/v1/runs/{run_id}")
         if run["status"] != "running":
             return run
         time.sleep(RUN_POLL_INTERVAL_SECONDS)
@@ -222,8 +237,10 @@ def _elicitation(
             headers=JSON_HEADERS,
         )
         _expect(response=response, status=HTTPStatus.OK)
-    contract = client.get(f"/v1/sessions/{session_id}/contract", headers=CONTRACT_HEADERS).json()
-    questions: list[dict[str, object]] = contract["questions"]
+    response = client.get(f"/v1/sessions/{session_id}/contract", headers=CONTRACT_HEADERS)
+    _expect(response=response, status=HTTPStatus.OK)
+    contract: dict[str, object] = response.json()
+    questions = _as_object_list(value=contract["questions"])
     if not questions:
         raise PiloteExecutionError("the arbitrated profile generated no question")
     for question in questions:
@@ -292,16 +309,16 @@ def _synthese(
     *, client: httpx.Client, session_id: str, output_dir: Path
 ) -> tuple[bytes, bytes, bytes, dict[str, object], list[dict[str, object]]]:
     """Export the contract (JSON + Markdown), read the budget and the journal."""
-    final_contract = client.get(
-        f"/v1/sessions/{session_id}/contract", headers=CONTRACT_HEADERS
-    ).json()
-    markdown = client.get(f"/v1/sessions/{session_id}/contract", headers=MARKDOWN_HEADERS).text
-    budget: dict[str, object] = client.get(
-        f"/v1/sessions/{session_id}/budget", headers=AUTH_HEADERS
-    ).json()
-    journal: list[dict[str, object]] = client.get(
-        f"/v1/sessions/{session_id}/journal", headers=AUTH_HEADERS
-    ).json()
+    contract_response = client.get(f"/v1/sessions/{session_id}/contract", headers=CONTRACT_HEADERS)
+    _expect(response=contract_response, status=HTTPStatus.OK)
+    final_contract = contract_response.json()
+    markdown_response = client.get(f"/v1/sessions/{session_id}/contract", headers=MARKDOWN_HEADERS)
+    _expect(response=markdown_response, status=HTTPStatus.OK)
+    markdown = markdown_response.text
+    budget = _get_json(client=client, path=f"/v1/sessions/{session_id}/budget")
+    journal_response = client.get(f"/v1/sessions/{session_id}/journal", headers=AUTH_HEADERS)
+    _expect(response=journal_response, status=HTTPStatus.OK)
+    journal: list[dict[str, object]] = journal_response.json()
     contract_bytes = json.dumps(final_contract, sort_keys=True, separators=(",", ":")).encode()
     markdown_bytes = markdown.encode("utf-8")
     journal_bytes = json.dumps(journal, sort_keys=True, separators=(",", ":")).encode()
