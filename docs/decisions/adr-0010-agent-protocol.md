@@ -95,6 +95,11 @@ review, run as a headless local session, costs no API tokens at all.
 
 ## Appendix — 2026-11-19 : deterministic exclusions in the `DIFF UNDER REVIEW` (P58, issue #130)
 
+**Status of this appendix**: accepted by the human via the session directive of
+2026-11-19 (wave 8 planning, milestone `Outillage — fiabilité de la revue`,
+issue #130) — recorded here per the escalation list, like ADR-0022 records its
+directive.
+
 The `DIFF UNDER REVIEW` section of the bundle no longer carries machine-generated
 artifacts verbatim. The following pathspecs are excluded deterministically by
 `scripts/review.py` (`MACHINE_ARTIFACT_EXCLUSIONS`), and each excluded changed path
