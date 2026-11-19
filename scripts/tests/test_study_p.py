@@ -89,9 +89,10 @@ class TestStudyPAudit:
     ) -> None:
         captured: dict[str, object] = {}
 
-        def fake_audit(*, record_dir: Path, output: Path) -> int:
+        def fake_audit(*, record_dir: Path, output: Path, audited_dir: Path) -> int:
             captured["record_dir"] = record_dir
             captured["output"] = output
+            captured["audited_dir"] = audited_dir
             return 0
 
         monkeypatch.setattr(study_p, "_audit_pilote_record", fake_audit)
@@ -101,14 +102,16 @@ class TestStudyPAudit:
         assert arguments.runner(arguments=arguments) == 0
         assert captured["record_dir"] == tmp_path / "rec"
         assert captured["output"] == tmp_path / "a.json"
+        assert captured["audited_dir"] == tmp_path / "rec"  # outside REPO_ROOT: kept as-is
 
     def test_audit_default_output_is_next_to_the_record(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         captured: dict[str, object] = {}
 
-        def fake_audit(*, record_dir: Path, output: Path) -> int:
+        def fake_audit(*, record_dir: Path, output: Path, audited_dir: Path) -> int:
             captured["output"] = output
+            captured["audited_dir"] = audited_dir
             return 1
 
         monkeypatch.setattr(study_p, "_audit_pilote_record", fake_audit)

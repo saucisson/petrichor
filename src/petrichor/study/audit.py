@@ -38,9 +38,6 @@ MARKDOWN_FILE_NAME = "contrat.md"
 JOURNAL_FILE_NAME = "journal.json"
 RAPPORT_FILE_NAME = "rapport.json"
 
-COST_MATCH_TOLERANCE = 1e-9
-"""Proof/archive cost join tolerance (the cost is copied verbatim, exact match expected)."""
-
 BUDGET_RELATIVE_TOLERANCE = 0.05
 """The API measures the wall-clock around the runner call, the driver inside it:
 same quantity, two clocks - 5% relative tolerance."""
@@ -102,12 +99,28 @@ def _read_runs(*, record_dir: Path) -> list[dict[str, object]]:
         raise AuditError(f"missing run archive {path}")
     runs: list[dict[str, object]] = []
     for line in path.read_text(encoding="utf-8").splitlines():
-        if line.strip():
-            runs.append(json.loads(line))
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError as error:
+            raise AuditError(f"malformed run archive line in {path}: {error}") from error
+        if not isinstance(entry, dict):
+            raise AuditError(f"run archive line is not an object in {path}: {line[:80]}")
+        runs.append(entry)
     return runs
 
 
+def _field(*, payload: dict[str, object], name: str) -> object:
+    """One required field of a record object; a missing key is a typed error."""
+    if name not in payload:
+        raise AuditError(f"missing field {name!r} in a record object")
+    return payload[name]
+
+
 def _sha256_file(*, path: Path) -> str:
+    if not path.is_file():
+        raise AuditError(f"missing frozen material {path}")
     return f"{pilote.HASH_ALGORITHM}:{hashlib.sha256(path.read_bytes()).hexdigest()}"
 
 
@@ -129,8 +142,12 @@ def _archive_key(*, run: dict[str, object]) -> tuple[object, object, float] | No
     )
 
 
-def audit_execution(*, record_dir: Path) -> AuditReport:
-    """Audit one execution record; return the report (never mutates the record)."""
+def audit_execution(*, record_dir: Path, audited_dir: Path | None = None) -> AuditReport:
+    """Audit one execution record; return the report (never mutates the record).
+
+    ``audited_dir`` is the label recorded in the report (repo-relative when
+    given, so a committed audit.json stays machine-independent).
+    """
     rapport = _read_json(path=record_dir / RAPPORT_FILE_NAME)
     if not isinstance(rapport, dict):
         raise AuditError(f"{RAPPORT_FILE_NAME} is not an object")
@@ -178,7 +195,7 @@ def audit_execution(*, record_dir: Path) -> AuditReport:
     )
 
     # 2. No orphan archived run: every archived run backs a contract proof.
-    orphans = sorted(str(run["run_id"]) for run, _key in available)
+    orphans = sorted(str(_field(payload=run, name="run_id")) for run, _key in available)
     checks.append(
         AuditCheck(
             name="no_orphan_run",
@@ -192,9 +209,16 @@ def audit_execution(*, record_dir: Path) -> AuditReport:
     )
 
     # 3. Journal run_added events reference runs recorded in the report.
-    report_run_ids = {str(run["run_id"]) for run in rapport.get("runs", [])}
+    report_run_ids = {
+        str(_field(payload=_as_dict(value=run, what="report run"), name="run_id"))
+        for run in rapport.get("runs", [])
+    }
     journal_runs = [
-        str(entry.get("detail", {}).get("run_id"))
+        str(
+            _field(
+                payload=_as_dict(value=entry.get("detail"), what="journal detail"), name="run_id"
+            )
+        )
         for entry in journal
         if isinstance(entry, dict) and entry.get("event") == "run_added"
     ]
@@ -213,7 +237,8 @@ def audit_execution(*, record_dir: Path) -> AuditReport:
 
     # 4. The report's budget is the recomputed sum of the archived runs.
     consumed = sum(
-        _as_float(value=run["measured_seconds"], what="measured_seconds") for run in runs
+        _as_float(value=_field(payload=run, name="measured_seconds"), what="measured_seconds")
+        for run in runs
     )
     budget = _as_dict(value=rapport.get("budget"), what="budget")
     reported_consumed = _as_float(value=budget.get("consumed_seconds"), what="consumed_seconds")
@@ -279,7 +304,7 @@ def audit_execution(*, record_dir: Path) -> AuditReport:
     )
 
     report = AuditReport(
-        record_dir=str(record_dir),
+        record_dir=str(audited_dir if audited_dir is not None else record_dir),
         audited_at=datetime.now(UTC),
         ok=all(check.ok for check in checks),
         checks=tuple(checks),

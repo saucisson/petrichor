@@ -97,6 +97,32 @@ class TestAuditCleanRecord:
         with pytest.raises(AuditError, match="missing record file"):
             audit_execution(record_dir=tmp_path / "empty")
 
+    def test_malformed_run_archive_line_is_a_typed_error(self, tmp_path: Path) -> None:
+        record_dir = _record(tmp_path)
+        runs_path = record_dir / "runs" / "runs.jsonl"
+        with runs_path.open("a", encoding="utf-8") as file:
+            file.write("{not json\n")
+        with pytest.raises(AuditError, match="malformed run archive line"):
+            audit_execution(record_dir=record_dir)
+
+    def test_run_archive_line_that_is_not_an_object_is_a_typed_error(self, tmp_path: Path) -> None:
+        record_dir = _record(tmp_path)
+        runs_path = record_dir / "runs" / "runs.jsonl"
+        with runs_path.open("a", encoding="utf-8") as file:
+            file.write("[1, 2]\n")
+        with pytest.raises(AuditError, match="not an object"):
+            audit_execution(record_dir=record_dir)
+
+    def test_missing_frozen_material_is_a_typed_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        record_dir = _record(tmp_path)
+        empty = tmp_path / "materials"
+        empty.mkdir()
+        monkeypatch.setattr(pilote, "MATERIALS_DIR", empty)
+        with pytest.raises(AuditError, match="missing frozen material"):
+            audit_execution(record_dir=record_dir)
+
 
 class TestAuditDetectsTampering:
     def test_a_verdict_without_run_is_caught(self, tmp_path: Path) -> None:

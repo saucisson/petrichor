@@ -78,11 +78,11 @@ def run_study_p(*, arguments: argparse.Namespace) -> int:
     )
 
 
-def _audit_pilote_record(*, record_dir: Path, output: Path) -> int:
+def _audit_pilote_record(*, record_dir: Path, output: Path, audited_dir: Path) -> int:
     """Audit one execution record; write audit.json; return the exit code."""
     audit = importlib.import_module("petrichor.study.audit")
 
-    report = audit.audit_execution(record_dir=record_dir)
+    report = audit.audit_execution(record_dir=record_dir, audited_dir=audited_dir)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(report.model_dump_json(indent=2) + "\n", encoding="utf-8")
     print(f"audit written to {output} (ok={report.ok})")
@@ -94,10 +94,16 @@ def _audit_pilote_record(*, record_dir: Path, output: Path) -> int:
 def run_study_p_audit(*, arguments: argparse.Namespace) -> int:
     """Entry point: record dir in, audit.json written, exit code out."""
     record_dir = Path(arguments.record_dir)
+    # Repo-relative when possible: the committed audit.json must stay
+    # machine-independent (no absolute local paths).
+    try:
+        audited_dir: Path = record_dir.relative_to(REPO_ROOT)
+    except ValueError:
+        audited_dir = record_dir
     output = (
         Path(arguments.output) if arguments.output else record_dir.parent / "audit" / "audit.json"
     )
-    return _audit_pilote_record(record_dir=record_dir, output=output)
+    return _audit_pilote_record(record_dir=record_dir, output=output, audited_dir=audited_dir)
 
 
 def register_study_p(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
