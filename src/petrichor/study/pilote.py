@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Literal
 
 import structlog
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from petrichor.elicitation import CoverageGridEntry, ElicitationCatalog, load_catalog
 from petrichor.petri_canonical import ContentHash
@@ -90,9 +90,17 @@ class GoldenPreregistration(BaseModel):
 
 
 def _read_model[ModelT: BaseModel](*, path: Path, model_type: type[ModelT]) -> ModelT:
-    """Read one JSON study material into its typed model."""
+    """Read one JSON study material into its typed model.
+
+    A missing file or malformed JSON is a ``StudyMaterialError`` too, never
+    a raw ``OSError`` / ``JSONDecodeError``.
+    """
     try:
-        return model_type.model_validate(json.loads(path.read_text(encoding="utf-8")))
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise StudyMaterialError(f"Unreadable study material {path.name}: {error}") from error
+    try:
+        return model_type.model_validate(payload)
     except ValidationError as error:
         raise StudyMaterialError(f"Invalid study material {path.name}: {error}") from error
 
@@ -152,9 +160,23 @@ def load_frozen_catalog() -> ElicitationCatalog:
     return load_catalog(path=MATERIALS_DIR / CATALOG_FILE_NAME)
 
 
+_GRID_ADAPTER: TypeAdapter[tuple[CoverageGridEntry, ...]] = TypeAdapter(
+    tuple[CoverageGridEntry, ...]
+)
+
+
 def load_frozen_grid() -> tuple[CoverageGridEntry, ...]:
-    """The frozen coverage grid (coverage groups, spec §14.6)."""
-    return load_frozen_catalog().coverage_grid
+    """The frozen coverage grid file (coverage groups, spec §14.6), validated."""
+    path = MATERIALS_DIR / GRID_FILE_NAME
+    try:
+        return _GRID_ADAPTER.validate_json(path.read_text(encoding="utf-8"))
+    except (OSError, ValidationError) as error:
+        raise StudyMaterialError(f"Invalid study material {GRID_FILE_NAME}: {error}") from error
+
+
+def load_preregistration_text() -> str:
+    """The pre-registration document (thresholds + analysis plan), hash-pinned."""
+    return (MATERIALS_DIR / PREREGISTRATION_FILE_NAME).read_text(encoding="utf-8")
 
 
 def load_golden_preregistration() -> GoldenPreregistration:
