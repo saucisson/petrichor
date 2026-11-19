@@ -113,6 +113,33 @@ class TestAuditCleanRecord:
         with pytest.raises(AuditError, match="not an object"):
             audit_execution(record_dir=record_dir)
 
+    def test_a_non_object_proof_dossier_is_a_typed_error(self, tmp_path: Path) -> None:
+        record_dir = _record(tmp_path)
+        contract_path = record_dir / "contrat.json"
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        contract["proof_dossiers"] = [42]
+        contract_path.write_text(json.dumps(contract), encoding="utf-8")
+        with pytest.raises(AuditError, match="proof dossier"):
+            audit_execution(record_dir=record_dir)
+
+    def test_a_non_object_contract_proof_is_a_typed_error(self, tmp_path: Path) -> None:
+        record_dir = _record(tmp_path)
+        contract_path = record_dir / "contrat.json"
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        contract["proof_dossiers"][0]["proofs"] = [42]
+        contract_path.write_text(json.dumps(contract), encoding="utf-8")
+        with pytest.raises(AuditError, match="contract proof"):
+            audit_execution(record_dir=record_dir)
+
+    def test_non_object_report_materials_are_a_typed_error(self, tmp_path: Path) -> None:
+        record_dir = _record(tmp_path)
+        rapport_path = record_dir / "rapport.json"
+        rapport = json.loads(rapport_path.read_text(encoding="utf-8"))
+        rapport["materials"] = []
+        rapport_path.write_text(json.dumps(rapport), encoding="utf-8")
+        with pytest.raises(AuditError, match="report materials"):
+            audit_execution(record_dir=record_dir)
+
     def test_missing_frozen_material_is_a_typed_error(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

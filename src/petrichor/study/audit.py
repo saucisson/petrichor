@@ -165,9 +165,16 @@ def audit_execution(*, record_dir: Path, audited_dir: Path | None = None) -> Aud
     # 1. Every contract proof is backed by an archived run with the same verdict.
     missing: list[str] = []
     dossiers = contract.get("proof_dossiers", [])
+    if not isinstance(dossiers, list):
+        raise AuditError(f"proof_dossiers must be an array, got {dossiers!r}")
     proof_count = 0
-    for dossier in dossiers:
-        for proof in dossier.get("proofs", []):
+    for raw_dossier in dossiers:
+        dossier = _as_dict(value=raw_dossier, what="proof dossier")
+        proofs = dossier.get("proofs", [])
+        if not isinstance(proofs, list):
+            raise AuditError(f"proofs must be an array, got {proofs!r}")
+        for raw_proof in proofs:
+            proof = _as_dict(value=raw_proof, what="contract proof")
             proof_count += 1
             proof_key = (
                 proof.get("verdict"),
@@ -262,7 +269,7 @@ def audit_execution(*, record_dir: Path, audited_dir: Path | None = None) -> Aud
     )
 
     # 5. The report's material hashes match the frozen v1 files.
-    materials = rapport.get("materials", {})
+    materials = _as_dict(value=rapport.get("materials", {}), what="report materials")
     material_mismatches = [
         name
         for name, pinned in materials.items()
