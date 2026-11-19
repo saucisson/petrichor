@@ -9,12 +9,14 @@ served without authentication - every data call goes through the API.
 
 import io
 import re
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import httpx
 import structlog.testing
 from pydantic import SecretStr
 
+from conftest import fetch_ui_bundle, fetch_ui_stylesheet
 from petrichor.api.app import create_app
 from petrichor.api.settings import ApiSettings
 from petrichor.model_store import ModelStore
@@ -39,26 +41,6 @@ def build_client() -> httpx.Client:
     return httpx.Client(transport=httpx.WSGITransport(app=app), base_url="http://testserver")
 
 
-def fetch_ui_bundle(client: httpx.Client) -> str:
-    """Fetch the built JS bundle referenced by the served index.html shell."""
-    html = client.get("/ui/").text
-    match = re.search(r'src="(/ui/assets/[^"]+\.js)"', html)
-    assert match is not None, "the index.html shell must reference the built bundle"
-    response = client.get(match.group(1))
-    assert response.status_code == 200
-    assert response.headers["content-type"].startswith("text/javascript")
-    return response.text
-
-
-def fetch_ui_stylesheet(client: httpx.Client) -> str:
-    """Fetch the built CSS asset referenced by the served index.html shell."""
-    html = client.get("/ui/").text
-    match = re.search(r'href="(/ui/assets/[^"]+\.css)"', html)
-    assert match is not None, "the index.html shell must reference the built stylesheet"
-    response = client.get(match.group(1))
-    assert response.status_code == 200
-    assert response.headers["content-type"].startswith("text/css")
-    return response.text
 
 
 class TestStaticUi:
@@ -110,8 +92,15 @@ class TestStaticUi:
         ):
             assert endpoint in script
         # The Vérifications step reads runs without inventing a verdict, and
-        # the Synthèse step negotiates the Markdown export (spec §4.8).
+        # the Synthèse step negotiates the Markdown export (spec §4.8). The
+        # property chain is pinned on the unminified source (the built bundle
+        # minifies it away).
         assert ".verdict" in script
+        component = (
+            Path(__file__).parent.parent
+            / "src/petrichor/api/ui/src/components/Verifications.tsx"
+        )
+        assert "run.output?.verdict" in component.read_text(encoding="utf-8")
         assert "text/markdown" in script
         # Question cards show the cross-verification status and, on controversy,
         # both camps; the Synthèse step lists the arbitration journal (issue #31).
@@ -156,6 +145,28 @@ class TestStaticUi:
         # The problem document is returned, never the source file content.
         assert b"petrichor.dev/problems/not_found" in body
         assert b"def _dispatch_ui" not in body
+
+    def test_absolute_path_escape_is_refused(self, tmp_path: Path) -> None:
+        # `/ui//<abs>/evil.js` yields an absolute name: pathlib would discard
+        # the static base - the guard must refuse it (review PR #146).
+        outside = tmp_path / "evil.js"
+        outside.write_text("alert(1)", encoding="utf-8")
+        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+        app = create_app(settings=settings, store=ModelStore(), run_store=RunStore(), runner=None)
+        captured: dict[str, str] = {}
+
+        def start_response(status: str, headers: list[tuple[str, str]]) -> None:
+            captured["status"] = status
+
+        environ: WSGIEnvironment = {
+            "REQUEST_METHOD": "GET",
+            "PATH_INFO": "/ui//" + str(outside),
+            "HTTP_X_API_KEY": TEST_API_KEY,
+            "wsgi.input": io.BytesIO(b""),
+        }
+        body = b"".join(app(environ, start_response))
+        assert captured["status"].startswith("404")
+        assert b"alert(1)" not in body
 
     def test_ui_asset_narration_is_pinned(self) -> None:
         client = build_client()
