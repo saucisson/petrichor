@@ -416,3 +416,165 @@ def test_run_review_propagates_the_size_refusal_as_preconditions(
     )
     arguments = parse_review_arguments(["review", "--pr-number", "64"])
     assert review.run_review(arguments=arguments) == review.EXIT_CODE_PRECONDITIONS_UNMET
+
+
+def test_load_max_attempts_default_override_and_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """P61: REVIEWER_MAX_ATTEMPTS defaults to 2 and is configurable."""
+    monkeypatch.delenv(review.MAX_ATTEMPTS_VARIABLE, raising=False)
+    assert review.load_max_attempts() == 2
+    monkeypatch.setenv(review.MAX_ATTEMPTS_VARIABLE, "5")
+    assert review.load_max_attempts() == 5
+    monkeypatch.setenv(review.MAX_ATTEMPTS_VARIABLE, "nope")
+    with pytest.raises(SystemExit) as exit_info:
+        review.load_max_attempts()
+    assert exit_info.value.code == _shared.EXIT_CODE_PROTOCOL_FAILURE
+
+
+def test_record_and_load_attempts_roundtrip_and_cap_counting(tmp_path: Path) -> None:
+    """P61: the journal round-trips per (PR, head); only failed sessions count toward the cap."""
+    journal = tmp_path / review.ATTEMPTS_JOURNAL_FILE_NAME
+    review.record_attempt(
+        journal_path=journal,
+        pull_request_number=64,
+        head_sha=HEAD_SHA,
+        phase="preconditions",
+        exit_code=3,
+        cause="preconditions",
+        escalated=False,
+    )
+    review.record_attempt(
+        journal_path=journal,
+        pull_request_number=64,
+        head_sha=HEAD_SHA,
+        phase=review.SESSION_PHASE,
+        exit_code=2,
+        cause="deadline",
+        escalated=False,
+    )
+    review.record_attempt(
+        journal_path=journal,
+        pull_request_number=64,
+        head_sha="other-head",
+        phase=review.SESSION_PHASE,
+        exit_code=2,
+        cause="turn-limit",
+        escalated=False,
+    )
+    attempts = review.load_attempts(journal_path=journal, pull_request_number=64, head_sha=HEAD_SHA)
+    assert len(attempts) == 2
+    assert review.count_failed_session_attempts(attempts=attempts) == 1
+    assert (
+        review.load_attempts(
+            journal_path=tmp_path / "missing.jsonl", pull_request_number=64, head_sha=HEAD_SHA
+        )
+        == []
+    )
+
+
+def test_cause_for_exit_code_reads_the_session_failure_report(tmp_path: Path) -> None:
+    """P61: exit 2 reads failure_cause from the report; verdicts and exit 3 map directly."""
+    (tmp_path / "review-report.json").write_text(
+        json.dumps({"exit_code": 2, "failure_cause": "turn-limit"}), encoding="utf-8"
+    )
+    assert review.cause_for_exit_code(exit_code=2, review_directory=tmp_path) == "turn-limit"
+    assert review.cause_for_exit_code(exit_code=0, review_directory=tmp_path) == "clean"
+    assert review.cause_for_exit_code(exit_code=1, review_directory=tmp_path) == "blocking"
+    assert review.cause_for_exit_code(exit_code=3, review_directory=tmp_path) == "preconditions"
+    empty_directory = tmp_path / "empty"
+    assert review.cause_for_exit_code(exit_code=2, review_directory=empty_directory) == "protocol"
+
+
+def _mock_github_for_run_review(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, session_exit_code: int
+) -> list[str]:
+    """Mock the GitHub layer and the script runner; return the agent-review launch log."""
+    monkeypatch.setattr(review, "load_github_token", lambda: "token")
+    monkeypatch.setattr(review, "resolve_repository_slug", lambda: "o/r")
+    monkeypatch.setattr(
+        review,
+        "run_git",
+        lambda *, arguments: HEAD_SHA + "\n" if arguments[:1] == ["rev-parse"] else "",
+    )
+    monkeypatch.setattr(review, "REVIEW_DIRECTORY", tmp_path)
+    launches: list[str] = []
+
+    def fake_run_script(*, command: list[str]) -> int:
+        if "review-bundle" in command:
+            return _shared.EXIT_CODE_SUCCESS
+        launches.append(" ".join(command))
+        (tmp_path / "review-report.json").write_text(
+            json.dumps({"exit_code": session_exit_code, "failure_cause": "deadline"}),
+            encoding="utf-8",
+        )
+        return session_exit_code
+
+    monkeypatch.setattr(review, "run_script", fake_run_script)
+    pull_request = {
+        "number": 64,
+        "head": {"sha": HEAD_SHA, "ref": "feat/x"},
+        "base": {"ref": "daily"},
+    }
+    monkeypatch.setattr(_github, "fetch_pull_request", lambda **kwargs: pull_request)
+    monkeypatch.setattr(_github, "fetch_check_runs", lambda **kwargs: green_check_runs())
+    monkeypatch.setattr(
+        _github,
+        "open_github_client",
+        lambda *, token: httpx.Client(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200))
+        ),
+    )
+    return launches
+
+
+def test_run_review_two_failures_escalate_then_third_refused(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """P61 end to end: two failed sessions -> escalation journaled, third run refused (exit 3)."""
+    monkeypatch.delenv(review.MAX_ATTEMPTS_VARIABLE, raising=False)
+    launches = _mock_github_for_run_review(monkeypatch, tmp_path, session_exit_code=2)
+    escalations: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        review,
+        "escalate_to_human",
+        lambda **kwargs: escalations.append(kwargs),
+    )
+    arguments = parse_review_arguments(["review", "--pr-number", "64"])
+
+    assert review.run_review(arguments=arguments) == _shared.EXIT_CODE_PROTOCOL_FAILURE
+    assert len(escalations) == 0
+    assert review.run_review(arguments=arguments) == _shared.EXIT_CODE_PROTOCOL_FAILURE
+    assert len(escalations) == 1
+    assert escalations[0]["failed_attempts"] == 2
+    assert review.run_review(arguments=arguments) == review.EXIT_CODE_PRECONDITIONS_UNMET
+    assert len(escalations) == 1
+    assert len(launches) == 2  # the third run never launched a session
+
+    journal = tmp_path / review.ATTEMPTS_JOURNAL_FILE_NAME
+    entries = [
+        json.loads(line)
+        for line in journal.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    session_entries = [entry for entry in entries if entry["phase"] == review.SESSION_PHASE]
+    assert len(session_entries) == 2
+    assert session_entries[0]["cause"] == "deadline"
+    assert session_entries[0]["escalated"] is False
+    assert session_entries[1]["escalated"] is True
+    assert any(entry["phase"] == "cap" for entry in entries)
+
+
+def test_run_review_cap_is_configurable_and_resets_on_new_head(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """P61: REVIEWER_MAX_ATTEMPTS=1 escalates on the first failure, the second run is refused."""
+    monkeypatch.setenv(review.MAX_ATTEMPTS_VARIABLE, "1")
+    launches = _mock_github_for_run_review(monkeypatch, tmp_path, session_exit_code=2)
+    escalations: list[dict[str, object]] = []
+    monkeypatch.setattr(review, "escalate_to_human", lambda **kwargs: escalations.append(kwargs))
+    arguments = parse_review_arguments(["review", "--pr-number", "64"])
+    assert review.run_review(arguments=arguments) == _shared.EXIT_CODE_PROTOCOL_FAILURE
+    assert len(escalations) == 1
+    assert review.run_review(arguments=arguments) == review.EXIT_CODE_PRECONDITIONS_UNMET
+    assert len(launches) == 1

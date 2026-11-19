@@ -17,6 +17,12 @@ default 12, was a hard-coded 8), the CLI binary is pinnable
 (``REVIEWER_CLI_COMMAND``), and a preflight checks presence, version
 (>= 3.x) and ``--prompt-file`` capability before launching - a refusal
 exits 3 (preconditions unmet), never an opaque exit 2.
+
+P61 (issue #133): every session failure carries a TYPED cause
+(``FailureCause``: deadline / turn-limit / preconditions / protocol),
+written into the report file as ``failure_cause`` - never a bare
+"exit 2". The review driver (``scripts/review.py``) reads it to journal
+bounded attempts and escalate to the human.
 """
 
 import json
@@ -66,6 +72,60 @@ UNKNOWN_SEVERITY_NOTE = (
 
 class ReviewProtocolError(RuntimeError):
     """The reviewer answer violated the report contract."""
+
+
+class FailureCause(StrEnum):
+    """The typed cause of a failed review session (P61, issue #133).
+
+    A closed set: the journal and the escalation message never carry a
+    bare exit code, always one of these causes.
+    """
+
+    DEADLINE = "deadline"
+    TURN_LIMIT = "turn-limit"
+    PRECONDITIONS = "preconditions"
+    PROTOCOL = "protocol"
+
+
+class SessionFailure(SystemExit):
+    """A failed session exit carrying its typed cause (P61).
+
+    Subclasses ``SystemExit`` so the existing exit-code contract is
+    unchanged; ``failure_cause`` lets the caller journal the failure
+    without re-parsing stderr.
+    """
+
+    def __init__(self, *, code: int, failure_cause: FailureCause) -> None:
+        """Carry the exit code (SystemExit contract) and the typed cause."""
+        super().__init__(code)
+        self.failure_cause = failure_cause
+
+
+def classify_session_failure(*, returncode: int, stderr: str) -> FailureCause:
+    """Map a session exit to its typed cause (P61).
+
+    Exit 3 is always preconditions (the session never started). For a
+    runtime failure (exit 2), the CLI's stderr names the budget that was
+    reached: deadline (wall-clock) or turn limit - the two budgets that
+    killed the P40/P42 reviews. Anything else is a protocol failure.
+    """
+    if returncode == EXIT_CODE_PRECONDITIONS_UNMET:
+        return FailureCause.PRECONDITIONS
+    lowered_stderr = stderr.lower()
+    if (
+        "time limit" in lowered_stderr
+        or "time-limit" in lowered_stderr
+        or "deadline" in lowered_stderr
+    ):
+        return FailureCause.DEADLINE
+    if (
+        "max turns" in lowered_stderr
+        or "max-turns" in lowered_stderr
+        or "turn limit" in lowered_stderr
+        or "turns" in lowered_stderr
+    ):
+        return FailureCause.TURN_LIMIT
+    return FailureCause.PROTOCOL
 
 
 class FindingSeverity(StrEnum):
@@ -292,13 +352,17 @@ def run_reviewer_session(*, model_name: str, bundle_path: Path) -> str:
     finally:
         shutil.rmtree(session_directory, ignore_errors=True)
     if completed_process.returncode != EXIT_CODE_REVIEWED_CLEAN:
+        failure_cause = classify_session_failure(
+            returncode=completed_process.returncode,
+            stderr=completed_process.stderr,
+        )
         print(
-            f"Error: the reviewer session exited with code"
-            f" {completed_process.returncode} (not started, runtime failure,"
-            f" or a budget limit reached): {completed_process.stderr.strip()}",
+            f"Error: the reviewer session failed with cause {failure_cause.value}"
+            f" (exit code {completed_process.returncode}):"
+            f" {completed_process.stderr.strip()}",
             file=sys.stderr,
         )
-        raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
+        raise SessionFailure(code=EXIT_CODE_PROTOCOL_FAILURE, failure_cause=failure_cause)
     return extract_answer_text(raw_session_output=completed_process.stdout)
 
 
@@ -494,18 +558,50 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     subparser.set_defaults(runner=run)
 
 
+def write_failure_report(*, report_file: str, exit_code: int, failure_cause: FailureCause) -> None:
+    """Write a failure report so the driver can journal the typed cause (P61).
+
+    A failed session still produces a report file - with ``failure_cause``
+    instead of findings - so ``scripts/review.py`` never journals a bare
+    exit code.
+    """
+    Path(report_file).write_text(
+        json.dumps({"exit_code": exit_code, "failure_cause": failure_cause.value}, indent=2),
+        encoding="utf-8",
+    )
+
+
 def run(*, arguments: argparse.Namespace) -> int:
     """Entry point: bundle in, verified verdict out."""
-    answer_text = run_reviewer_session(
-        model_name=load_model_name(),
-        bundle_path=Path(arguments.bundle_file),
-    )
+    try:
+        answer_text = run_reviewer_session(
+            model_name=load_model_name(),
+            bundle_path=Path(arguments.bundle_file),
+        )
+    except SystemExit as exit_error:
+        exit_code = (
+            exit_error.code if isinstance(exit_error.code, int) else EXIT_CODE_PROTOCOL_FAILURE
+        )
+        failure_cause = getattr(exit_error, "failure_cause", None)
+        if not isinstance(failure_cause, FailureCause):
+            failure_cause = classify_session_failure(returncode=exit_code, stderr="")
+        write_failure_report(
+            report_file=arguments.report_file,
+            exit_code=exit_code,
+            failure_cause=failure_cause,
+        )
+        return exit_code
     try:
         reported_findings = parse_report(answer_text=narrow_json_answer(answer_text=answer_text))
     except ReviewProtocolError as protocol_error:
         print(
             f"Error: the reviewer answer violated the contract: {protocol_error}",
             file=sys.stderr,
+        )
+        write_failure_report(
+            report_file=arguments.report_file,
+            exit_code=EXIT_CODE_PROTOCOL_FAILURE,
+            failure_cause=FailureCause.PROTOCOL,
         )
         return EXIT_CODE_PROTOCOL_FAILURE
     findings = reported_findings

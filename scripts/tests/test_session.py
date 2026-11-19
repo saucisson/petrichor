@@ -296,3 +296,81 @@ def test_run_reviewer_session_uses_env_cli_and_max_turns(
     recorded = (tmp_path / "fake-vibe.args").read_text(encoding="utf-8")
     launch_line = next(line for line in recorded.splitlines() if "--prompt-file" in line)
     assert "--max-turns 17" in launch_line
+
+
+def test_classify_session_failure_maps_each_cause() -> None:
+    """P61: every failure maps to a typed cause, never a bare exit code."""
+    assert (
+        session.classify_session_failure(returncode=3, stderr="")
+        == session.FailureCause.PRECONDITIONS
+    )
+    assert (
+        session.classify_session_failure(returncode=2, stderr="Error: time limit reached")
+        == session.FailureCause.DEADLINE
+    )
+    assert (
+        session.classify_session_failure(returncode=2, stderr="max turns (12) exceeded")
+        == session.FailureCause.TURN_LIMIT
+    )
+    assert (
+        session.classify_session_failure(returncode=2, stderr="segmentation fault")
+        == session.FailureCause.PROTOCOL
+    )
+
+
+def test_run_reviewer_session_failure_carries_a_typed_cause(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """P61: a runtime failure raises SessionFailure with the classified cause."""
+    bundle = tmp_path / "bundle.md"
+    bundle.write_text("# bundle", encoding="utf-8")
+    fake = make_fake_cli(tmp_path, version="vibe 3.1.3", help_text="--prompt-file FILE")
+    monkeypatch.setenv(session.CLI_COMMAND_VARIABLE, str(fake))
+
+    real_run = subprocess.run
+
+    def dispatching_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if command[1] in ("--version", "--help"):
+            return real_run(command, capture_output=True, text=True, check=False)
+        return subprocess.CompletedProcess(
+            command, 1, stdout="", stderr="Error: time limit reached after 600s"
+        )
+
+    monkeypatch.setattr(subprocess, "run", dispatching_run)
+    with pytest.raises(session.SessionFailure) as excinfo:
+        session.run_reviewer_session(model_name="", bundle_path=bundle)
+    assert excinfo.value.code == session.EXIT_CODE_PROTOCOL_FAILURE
+    assert excinfo.value.failure_cause == session.FailureCause.DEADLINE
+
+
+def test_run_writes_a_failure_report_with_the_typed_cause(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """P61: a failed session still writes review-report.json with failure_cause."""
+    bundle = tmp_path / "bundle.md"
+    bundle.write_text("# bundle", encoding="utf-8")
+    report = tmp_path / "review-report.json"
+
+    def failing_session(*, model_name: str, bundle_path: Path) -> str:
+        raise session.SessionFailure(
+            code=session.EXIT_CODE_PROTOCOL_FAILURE,
+            failure_cause=session.FailureCause.TURN_LIMIT,
+        )
+
+    monkeypatch.setattr(session, "run_reviewer_session", failing_session)
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    session.register(subparsers)
+    arguments = parser.parse_args(
+        [
+            "agent-review",
+            "--bundle-file",
+            str(bundle),
+            "--report-file",
+            str(report),
+        ]
+    )
+    assert session.run(arguments=arguments) == session.EXIT_CODE_PROTOCOL_FAILURE
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["failure_cause"] == "turn-limit"
+    assert payload["exit_code"] == session.EXIT_CODE_PROTOCOL_FAILURE
