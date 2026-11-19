@@ -1,0 +1,70 @@
+{
+  "app": {
+    "title": "Petrichor — elicitation session",
+    "languageLabel": "Language"
+  },
+  "header": {
+    "apiKeyLabel": "API key",
+    "apiKeyAria": "API key",
+    "sessionLabel": "Session",
+    "sessionAria": "Session identifier (resume)",
+    "resume": "Resume session"
+  },
+  "nav": {
+    "aria": "Steps",
+    "steps": {
+      "amorcage": "1. Setup",
+      "questions": "2. Static questions",
+      "verifications": "3. MC checks",
+      "synthese": "4. Summary"
+    }
+  },
+  "amorcage": {
+    "title": "Setup",
+    "intro": "Import a PNML model, create a session, arbitrate the proposed semantic profile.",
+    "fileAria": "PNML file",
+    "import": "Import model and create session",
+    "importRefused": "Model import refused: {{status}}",
+    "noProfile": "No profile proposed for this session.",
+    "roleProposed": "proposed role: {{role}} (conf {{conf}})",
+    "accept": "Accept",
+    "refuse": "Refuse"
+  },
+  "questions": {
+    "title": "Static questions",
+    "intro": "Question cards: arbitrate each question (Impossible / That's normal / Verify first).",
+    "meta": "{{formula}} ({{family}}, triage {{triage}})",
+    "status": "Status: {{status}}",
+    "decisions": {
+      "refuse": "Impossible",
+      "accept": "That's normal",
+      "verifyFirst": "Verify first"
+    },
+    "cross": {
+      "verifiedByN": "Verified by {{count}} tools.",
+      "controversial": "Controversial clause — escalated to the engineer, never decided here.",
+      "notVerified": "Not verified.",
+      "proofLine": "{{tool}} : verdict {{verdict}}"
+    }
+  },
+  "verifications": {
+    "title": "MC checks",
+    "intro": "Runs available for the session (mock / static) — no verdict is invented here.",
+    "budget": "MC budget — consumed {{consumed}} s / cap {{cap}} s — remaining {{remaining}} s (no carry-over).",
+    "runLine": "{{runId}} — {{family}} / {{kind}} — status: {{status}} — triage: {{triage}} — verdict:",
+    "witnessUnavailable": "Witness unavailable ({{status}}).",
+    "witnessTitle": "Witness {{id}} — {{kind}}",
+    "witnessCyclic": " — cyclic (back-edge {{edge}})",
+    "witnessAcyclic": " — acyclic",
+    "marking": "marking: {{marking}}",
+    "fired": "fires: {{transition}}",
+    "narrationProvenance": "(provenance: {{provenance}})"
+  },
+  "synthese": {
+    "title": "Summary",
+    "intro": "The session contract, exportable as Markdown.",
+    "export": "Download contract (Markdown)",
+    "unavailable": "Contract unavailable ({{status}}).",
+    "journalTitle": "Arbitration journal"
+  }
+}

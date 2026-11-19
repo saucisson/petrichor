@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { ApiClient } from "../api";
 import type { Contract } from "../types";
 
@@ -12,8 +13,10 @@ interface SyntheseProps {
 }
 
 /* Step 4 - the session contract as Markdown (exportable) and the arbitration
-   journal, both read verbatim from the server. */
+   journal, both read verbatim from the server and never translated (spec §9
+   v1.3): the Markdown export and the journal entries are study data. */
 export default function Synthese({ hidden, client, sessionId, reloadToken }: SyntheseProps) {
+  const { t } = useTranslation();
   const [markdown, setMarkdown] = useState<string | null>(null);
   const [markdownError, setMarkdownError] = useState<number | null>(null);
   const [contract, setContract] = useState<Contract | null>(null);
@@ -58,17 +61,17 @@ export default function Synthese({ hidden, client, sessionId, reloadToken }: Syn
 
   return (
     <section id="step-synthese" hidden={hidden} aria-labelledby="h-synthese">
-      <h2 id="h-synthese">Synthèse</h2>
-      <p>Le contrat de la session, exportable en Markdown.</p>
+      <h2 id="h-synthese">{t("synthese.title")}</h2>
+      <p>{t("synthese.intro")}</p>
       <button id="export-markdown" type="button" onClick={downloadMarkdown}>
-        Télécharger le contrat (Markdown)
+        {t("synthese.export")}
       </button>
       <pre id="contract-preview" aria-live="polite">
         {markdownError !== null
-          ? `Contrat indisponible (${markdownError}).`
+          ? t("synthese.unavailable", { status: markdownError })
           : (markdown ?? "")}
       </pre>
-      <h3>Journal d'arbitrage</h3>
+      <h3>{t("synthese.journalTitle")}</h3>
       <ul id="journal-list" aria-live="polite">
         {contract?.journal.map((entry, index) => {
           const detail =

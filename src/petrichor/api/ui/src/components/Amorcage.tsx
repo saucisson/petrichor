@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { ApiClient } from "../api";
 import type { Profile, ProfileEntry } from "../types";
 
@@ -13,7 +14,9 @@ interface AmorcageProps {
 
 /* Step 1 - import the PNML model, create the session, arbitrate the proposed
    semantic profile. Server state is the source of truth: the profile view is
-   rebuilt from GET /profile after every arbitration. */
+   rebuilt from GET /profile after every arbitration. Server-produced values
+   (entry ids, roles, confidences, error messages) are rendered verbatim and
+   never translated (spec §9 v1.3). */
 export default function Amorcage({
   hidden,
   client,
@@ -22,6 +25,7 @@ export default function Amorcage({
   reloadToken,
   resumeError,
 }: AmorcageProps) {
+  const { t } = useTranslation();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [profileMissing, setProfileMissing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -51,7 +55,7 @@ export default function Amorcage({
       headers: { "Content-Type": "application/pnml+xml" },
       body: text,
     });
-    if (imported.status !== 201) throw new Error("Import du modèle refusé: " + imported.status);
+    if (imported.status !== 201) throw new Error(t("amorcage.importRefused", { status: imported.status }));
     const model = (await imported.json()) as { id: string };
     const created = await client.postJson<{ session_id: string }>("/v1/sessions", {
       model_id: model.id,
@@ -70,9 +74,9 @@ export default function Amorcage({
 
   return (
     <section id="step-amorcage" hidden={hidden} aria-labelledby="h-amorcage">
-      <h2 id="h-amorcage">Amorçage</h2>
-      <p>Importez un modèle PNML, créez une session, arbitrez le profil sémantique proposé.</p>
-      <input id="pnml-file" type="file" accept=".pnml,.xml" aria-label="Fichier PNML" />
+      <h2 id="h-amorcage">{t("amorcage.title")}</h2>
+      <p>{t("amorcage.intro")}</p>
+      <input id="pnml-file" type="file" accept=".pnml,.xml" aria-label={t("amorcage.fileAria")} />
       <button
         id="import-model"
         type="button"
@@ -85,22 +89,22 @@ export default function Amorcage({
           );
         }}
       >
-        Importer le modèle et créer la session
+        {t("amorcage.import")}
       </button>
       <div id="profile" aria-live="polite">
         {error !== null ? String(error) : null}
         {resumeError !== null ? resumeError : null}
-        {profileMissing ? "Aucun profil proposé pour cette session." : null}
+        {profileMissing ? t("amorcage.noProfile") : null}
         {profile?.proposed.map((entry) => (
           <div className="profile-entry" key={entry.id}>
             <span>
-              {entry.id} — rôle proposé : {entry.role} (conf {entry.conf})
+              {entry.id} — {t("amorcage.roleProposed", { role: entry.role, conf: entry.conf })}
             </span>
             <button type="button" onClick={() => void arbitrate(entry, true)}>
-              Accepter
+              {t("amorcage.accept")}
             </button>
             <button type="button" onClick={() => void arbitrate(entry, false)}>
-              Refuser
+              {t("amorcage.refuse")}
             </button>
           </div>
         ))}
