@@ -38,6 +38,9 @@ QUESTION_ID_HEX_DIGITS = 12
 PLACEHOLDER_NAMES = ("place", "place_b", "place_c")
 """The formula placeholders ``{place}``, ``{place_b}``, ``{place_c}``."""
 
+PLACEHOLDER_INDEX = {"place": 0, "place_b": 1, "place_c": 2}
+"""The positional index of each placeholder: ``{place_b}`` is always the 2nd element."""
+
 QuestionId = NewType("QuestionId", str)
 """A stable generated-question identifier, e.g. ``q_3f9a1c2b7d4e``."""
 
@@ -163,9 +166,14 @@ def _instantiate_formula(
         token = _FIRST_TOKEN_PATTERN.search(elements)
         places = [token.group(0)] if token is not None else []
     names = [name for name in PLACEHOLDER_NAMES if f"{{{name}}}" in template.formula_template]
-    if len(places) < len(names):
+    # Positional binding, as before: {place} -> places[0], {place_b} -> places[1],
+    # {place_c} -> places[2]; a template using a later placeholder needs that many
+    # elements (a non-productive couple is skipped, never padded).
+    needed = max((PLACEHOLDER_INDEX[name] for name in names), default=-1) + 1
+    if len(places) < needed:
         return None
-    return template.formula_template.format(**dict(zip(names, places, strict=False)))
+    values = {name: places[PLACEHOLDER_INDEX[name]] for name in names}
+    return template.formula_template.format(**values)
 
 
 def instantiate_questions(
