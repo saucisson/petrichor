@@ -26,7 +26,9 @@ turn-limit / preconditions / protocol - read from the session's failure
 report, never a bare exit code). After ``REVIEWER_MAX_ATTEMPTS`` failed
 session attempts (default 2) the review is refused before any new
 session starts (exit 3, not a verdict, not an attempt) and the human is
-escalated via the existing notify pipeline (``make notify``). Stdlib
+escalated via the existing notify pipeline (``make notify``). Session
+attempts also journal the bundle sizes (total and diff part, P62) so the
+day-report can confront bundle size with failures. Stdlib
 only, so it runs in the bareest CI image: this module defers its
 ``httpx``-dependent imports into the ``review`` runner, on purpose.
 
@@ -353,6 +355,23 @@ def count_failed_session_attempts(*, attempts: list[dict[str, object]]) -> int:
     )
 
 
+def measure_bundle_sizes(*, review_directory: Path) -> tuple[int, int]:
+    """Return (total bundle bytes, diff-part bytes) of the built bundle (P62).
+
+    The diff part is everything after the ``## DIFF UNDER REVIEW`` header in
+    ``bundle.md`` - the sanitized diff the reviewer actually reads. (0, 0)
+    when the bundle was never built.
+    """
+    bundle_path = review_directory / "bundle.md"
+    if not bundle_path.is_file():
+        return 0, 0
+    bundle_text = bundle_path.read_text(encoding="utf-8")
+    total_bytes = len(bundle_text.encode("utf-8"))
+    marker_index = bundle_text.find(DIFF_SECTION_HEADER)
+    diff_part = bundle_text[marker_index + len(DIFF_SECTION_HEADER) :] if marker_index != -1 else ""
+    return total_bytes, len(diff_part.encode("utf-8"))
+
+
 def record_attempt(
     *,
     journal_path: Path,
@@ -362,9 +381,15 @@ def record_attempt(
     exit_code: int,
     cause: AttemptCause,
     escalated: bool,
+    bundle_sizes: tuple[int, int] | None = None,
 ) -> None:
-    """Append one attempt line to the journal (P61); best-effort, never masks the verdict."""
-    entry = {
+    """Append one attempt line to the journal (P61); best-effort, never masks the verdict.
+
+    Session attempts also carry the bundle sizes as ``(total, diff part)``
+    (P62) so the day-report can plot bundle size against failures without
+    any hand-entered data.
+    """
+    entry: dict[str, object] = {
         "timestamp": datetime.now(UTC).isoformat(),
         "pr_number": pull_request_number,
         "head_sha": head_sha,
@@ -374,6 +399,8 @@ def record_attempt(
         "attempt": phase == AttemptPhase.SESSION,
         "escalated": escalated,
     }
+    if bundle_sizes is not None:
+        entry["bundle_bytes"], entry["diff_bytes"] = bundle_sizes
     try:
         journal_path.parent.mkdir(parents=True, exist_ok=True)
         with journal_path.open("a", encoding="utf-8") as journal_file:
@@ -853,6 +880,7 @@ def run_review(*, arguments: argparse.Namespace) -> int:
             exit_code=review_exit_code,
             cause=attempt_cause,
             escalated=escalated,
+            bundle_sizes=measure_bundle_sizes(review_directory=REVIEW_DIRECTORY),
         )
         if escalated:
             escalate_to_human(

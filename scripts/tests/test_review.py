@@ -584,3 +584,16 @@ def test_run_review_cap_is_configurable_and_resets_on_new_head(
     assert len(escalations) == 1
     assert review.run_review(arguments=arguments) == review.EXIT_CODE_PRECONDITIONS_UNMET
     assert len(launches) == 1
+
+
+def test_measure_bundle_sizes_reports_total_and_diff_part(tmp_path: Path) -> None:
+    """P62: the journaled sizes are the bundle total and the DIFF UNDER REVIEW part."""
+    bundle = tmp_path / "bundle.md"
+    bundle.write_text(
+        "## ROLE CONTRACT\n\nabc\n\n---\n\n## DIFF UNDER REVIEW\n\ndiff --git a/x b/x\n",
+        encoding="utf-8",
+    )
+    total, diff_part = review.measure_bundle_sizes(review_directory=tmp_path)
+    assert total == len(bundle.read_bytes())
+    assert diff_part == len(b"\n\ndiff --git a/x b/x\n")
+    assert review.measure_bundle_sizes(review_directory=tmp_path / "empty") == (0, 0)
