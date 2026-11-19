@@ -97,7 +97,7 @@ CHECK_TIMEOUT ?= 300
 study-p: ## Run the pilote study session on the frozen v1 materials (spec §20, issue #41).
 	$(PYTHON) -m scripts study-p --output-dir "$(OUTPUT_DIR)" --check-timeout $(CHECK_TIMEOUT)
 
-clean: ## Remove caches, build outputs and mutation cache.
+clean: ## Remove caches, build outputs, mutation cache and runtime state.
 	rm -rf .pytest_cache .mypy_cache .ruff_cache .mutmut-cache htmlcov \
-		build dist .coverage coverage.xml .review
+		build dist .coverage coverage.xml .review .petrichor
 	find . -name __pycache__ -type d -prune -exec rm -rf {} +
