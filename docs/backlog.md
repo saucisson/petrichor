@@ -1,10 +1,10 @@
-# Petrichor — Backlog complet (vagues 1–6)
+# Petrichor — Backlog complet (vagues 1–7)
 
-Corps de toutes les issues, prêts à peupler GitHub via le script idempotent (§19.2 : labels → milestones → issues, `--dry-run` d'abord). Conventions : **1 issue = 1 PR** d'une session ; chaque corps cite ses sections de spécification (le document « Petrichor — Conception complète », v1.2) ; critères d'acceptation vérifiables par commande ou test ; hors-périmètre explicite ; dépendances notées `blocked-by`.
+Corps de toutes les issues, prêts à peupler GitHub via le script idempotent (§19.2 : labels → milestones → issues, `--dry-run` d'abord). Conventions : **1 issue = 1 PR** d'une session ; chaque corps cite ses sections de spécification (le document « Petrichor — Conception complète », v1.3) ; critères d'acceptation vérifiables par commande ou test ; hors-périmètre explicite ; dépendances notées `blocked-by`.
 
-**Milestones** : `P0 — socle` · `P1 — MVP élicitation` · `Outillage — moteurs & transformations` · `P2 — chaîne MC` · `P3 — pilote` · `P4 — études & publication`.
+**Milestones** : `P0 — socle` · `P1 — MVP élicitation` · `Outillage — moteurs & transformations` · `P2 — chaîne MC` · `P3 — pilote` · `P4 — études & publication` · `UI v2 — refonte frontend`.
 
-**Labels** : `area:api` `area:ui` `area:llm` `area:engine` `area:static` `area:docs` `area:study` · `kind:feat` `kind:test` `kind:chore` `kind:spike`.
+**Labels** : `area:api` `area:ui` `area:llm` `area:engine` `area:static` `area:docs` `area:study` `area:i18n` · `kind:feat` `kind:test` `kind:chore` `kind:spike`.
 
 **Index**
 
@@ -57,9 +57,17 @@ Corps de toutes les issues, prêts à peupler GitHub via le script idempotent (�
 | P45 | study-c : pipeline d'injection de fautes et oracle par concordance | P23, P44 |
 | P46 | Replays LLM et bornage de la variance | P36, P45 |
 | P47 | study-b : qualité des propositions LLM (experts) | P36 |
-| P48 | study-a : élicitation guidée vs manuelle (sujets humains) | P45, P47 |
+| P48 | study-a : élicitation guidée vs manuelle (sujets humains) | P45, P47, P57 |
 | P49 | Analyse, figures et paquet artifact evaluation | P45–P48 |
 | P50 | Squelette de publication : papier outil + résultats empiriques | P49 |
+| P52 | Socle UI v2 : migration React/TypeScript/Vite et ADR | — |
+| P53 | i18n fr/en du chrome d'interface | P52 |
+| P54 | Formule éditable dans l'UI | P52 |
+| P55 | Dossiers de preuve cliquables dans le contrat | P52 |
+| P56 | Convergence asymétrique affichée | P52 |
+| P57 | F5 fermée : UI observée en CI et addendum d'audit | P53–P56 |
+
+*Note : P51 est déjà pris par l'issue #93 (WORKLOG v2, ADR-0022) — la vague 7 commence à P52.*
 
 ---
 
@@ -722,6 +730,101 @@ Corps de toutes les issues, prêts à peupler GitHub via le script idempotent (�
 - [ ] Squelette LaTeX : section outil (architecture, 8 services, principes) et section résultats (A–D, seuils vs mesures).
 - [ ] Figures importées depuis les notebooks ; aucune donnée dupliquée à la main.
 - [ ] Déclaration des licences et de la disponibilité de l'artifact.
+
+---
+
+## Vague 7 — Milestone `UI v2 — refonte frontend`
+
+### P52 · Socle UI v2 : migration React/TypeScript/Vite et ADR
+
+**Labels** `kind:feat` `area:ui` · **Dép.** —
+
+**Contexte.** Spec §9 v1.3 ; friction F5 (`docs/studies/pilote/v1/audit/frictions.md`) ; la P18 avait livré une UI « statique sans dépendance », décision aujourd'hui remplacée ; maquette `docs/ui-mockup/philosophes-3.tsx` (fonctions P1–P12) comme référence d'exigences.
+
+**Critères d'acceptation.**
+- [ ] ADR (numérotation suivante dans `docs/decisions/`) qui **supersede** la décision « UI statique sans dépendance » de P18 et acte React 18+ / TypeScript strict / Vite, justifié face à Svelte/Solid/vue (maquette React existante, écosystème i18n, outillage de tests) ;
+- [ ] Stratégie build/servage : build Node → `dist/` servi par l'API **sous `/ui/` sans écart d'URL** ; toolchain épinglé (version de Node fixée, lockfile commis) ;
+- [ ] Nouvelles gates frontend intégrées à `make check` (ESLint, `tsc --noEmit`, vitest + `@testing-library/react`), sans casser les gates Python existants ;
+- [ ] Migration **à parité stricte** des 4 étapes actuelles (amorçage/import PNML, cartes/arbitrages « Impossible / C'est normal / Vérifier d'abord », runs/budget/témoins, synthèse/export/journal, reprise de session, `X-API-Key`, localStorage) — parité prouvée par tests ;
+- [ ] Suppression des fichiers vanilla une fois la parité prouvée ;
+- [ ] Aucun verdict inventé côté client ; le serveur reste l'unique source de vérité (§9, §19.4) ; a11y P12 de la maquette préservée.
+
+**Hors périmètre.** i18n (P53) ; features manquantes (P54–P56) ; e2e navigateur (P57).
+
+### P53 · i18n fr/en du chrome d'interface
+
+**Labels** `kind:feat` `area:ui` `area:i18n` · **Dép.** P52
+
+**Contexte.** Spec §9 v1.3 ; study-a (P48) impliquera des sujets humains francophones et anglophones.
+
+**Critères d'acceptation.**
+- [ ] `react-i18next` ; **français par défaut** ; sélecteur de langue persisté (localStorage) avec `<html lang>` synchronisé ;
+- [ ] 100 % des chaînes du chrome extraites : navigation, boutons, titres d'étapes, messages d'erreur, messages d'état, `aria-labels` ;
+- [ ] Les contenus produits par le serveur (formules, verdicts, témoins, narrations LLM, contrat, journal) sont affichés **tels quels**, jamais traduits côté client — documenté dans le code ;
+- [ ] Tests sur les deux locales ; aucune régression de mise en page (textes longs, wrap, contraste).
+
+**Hors périmètre.** Traduction de données d'étude ; autres locales ; RTL.
+
+### P54 · Formule éditable dans l'UI
+
+**Labels** `kind:feat` `area:ui` `area:api` · **Dép.** P52
+
+**Contexte.** P37 livré côté API (PR #117, `src/petrichor/question_edits.py`, spec §4.8) mais pas branché dans l'UI.
+
+**Critères d'acceptation.**
+- [ ] Éditer une formule depuis la carte-question via les endpoints P37 existants ;
+- [ ] La re-lecture inverse est affichée et étiquetée `provenance: llm` ;
+- [ ] L'historique d'édition journalisé est visible (append-only, avant/après) ;
+- [ ] La re-vérification passe par la chaîne standard, jamais contournée ; aucune valeur de verdict calculée côté client ;
+- [ ] Les erreurs de l'API (validation, budget, 429) sont affichées explicitement ;
+- [ ] Tests composants + intégration sur endpoints réels (mock).
+
+**Hors périmètre.** Nouvel endpoint ; modification du format §4.8.
+
+### P55 · Dossiers de preuve cliquables dans le contrat
+
+**Labels** `kind:feat` `area:ui` · **Dép.** P52
+
+**Contexte.** P38 livré côté API (PR #118, `src/petrichor/contract.py`, spec §17.4) mais pas branché dans l'UI.
+
+**Critères d'acceptation.**
+- [ ] Chaque preuve du contrat est cliquable et mène à son dossier (pièces : formule, verdict, témoin, coûts, versions d'outils) ;
+- [ ] Les clauses controversées (camps) sont rendues **telles quelles**, sans lissage ;
+- [ ] Rejeu d'un témoin step-by-step depuis l'archive (réutilise le lecteur P32) ;
+- [ ] L'export Markdown reste inchangé et tous les liens du contrat restent fonctionnels ;
+- [ ] Tests.
+
+**Hors périmètre.** Nouveau format d'archive ; régénération côté client.
+
+### P56 · Convergence asymétrique affichée
+
+**Labels** `kind:feat` `area:ui` · **Dép.** P52
+
+**Contexte.** P34 livré côté API (PR #112, `src/petrichor/convergence.py`, spec §4.8/§12.7) mais pas branché dans l'UI.
+
+**Critères d'acceptation.**
+- [ ] Les convergences détectées à la génération sont signalées dans l'UI ;
+- [ ] L'arbitrage humain de fusion (accepter/refuser) est opérationnel ;
+- [ ] La propagation des révisions est visible sur les cartes filles et dans le journal d'arbitrage ;
+- [ ] L'historique reste affiché comme append-only (aucune révision silencieuse) ;
+- [ ] Tests.
+
+**Hors périmètre.** Fusion automatique ; nouvelle sémantique de convergence.
+
+### P57 · F5 fermée : UI observée en CI et addendum d'audit
+
+**Labels** `kind:test` `area:ui` `area:study` · **Dép.** P53, P54, P55, P56
+
+**Contexte.** Friction F5 de l'audit du pilote (`docs/studies/pilote/v1/audit/frictions.md`, spec §20.10) ; leçon CI de P39 : un run lent est un verdict lent, jamais une erreur de watchdog ; images pré-buildées hors watchdog.
+
+**Critères d'acceptation.**
+- [ ] E2E navigateur scriptée (Playwright) sur le compose réel : parcours complet des 4 étapes + arbitrage, bascule de langue, édition de formule, dossier de preuve, convergence ;
+- [ ] En CI derrière un marqueur distinct (pattern `@ui`), images pré-buildées et timeouts adaptés, comme P39 l'a établi pour `@engine` ;
+- [ ] Addendum d'audit (**nouveau document**, le `frictions.md`/`audit.json` committés ne sont jamais modifiés) réévaluant F5 : la voie UI est désormais observée ;
+- [ ] Rejouable par une cible `make` documentée ;
+- [ ] Preuves dans le PR (trace, capture, journal CI).
+
+**Hors périmètre.** Réécriture de l'audit committé ; refonte du protocole d'étude.
 
 ---
 
