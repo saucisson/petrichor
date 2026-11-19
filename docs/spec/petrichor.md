@@ -4,7 +4,7 @@
 
 **Identité.** Le nom **Petrichor** désigne l'odeur de la terre sèche au premier contact de la pluie : ce qui devient perceptible juste avant de se révéler — exactement le produit, des propriétés invisibles rendues sensibles avant d'être prouvées. Le mot contient « Petri ». Tagline : *« L'IA propose, l'ingénieur arbitre, les outils tranchent. »* Aucun outil de vérification formelle ne porte ce nom.
 
-Document de référence v1.2 · Base : architecture API v2 actée + maquette d'élicitation Philosophes-3 (toutes ses fonctions sont reprises ci-dessous comme exigences frontend) + spécifications détaillées (format canonique, moteur d'élicitation, contrat LLM, témoins, capacité des outils MCC, protocole d'implémentation).
+Document de référence v1.3 · Base : architecture API v2 actée + maquette d'élicitation Philosophes-3 (toutes ses fonctions sont reprises ci-dessous comme exigences frontend) + spécifications détaillées (format canonique, moteur d'élicitation, contrat LLM, témoins, capacité des outils MCC, protocole d'implémentation). Voir le changelog en fin de document.
 
 ---
 
@@ -229,6 +229,14 @@ La maquette d'élicitation devient la **spécification UI de référence**. L'ap
 - **Révisabilité** de chaque arbitrage + **journal horodaté** latéral ; **budget MC cumulé** ; **session reprenable** ; accessibilité (aria, focus visible, lecteurs de témoins au clavier).
 
 **Architecture front.** React + TypeScript + Vite ; client REST typé avec hook de polling générique (`202 + Location` → polling → notification) ; état serveur = source de vérité (`GET /sessions/{sid}`), état local optimiste pour l'UI ; rendu SVG du réseau **piloté par le layout canonique** (le composant NetView de la maquette devient le moteur de rendu générique).
+
+**v1.3 (2026-11-19) — décisions actées (vague 7, issues P52–P57).**
+
+1. **Framework** : React 18+ & TypeScript strict & Vite remplacent le vanilla JS livré en P18 (« UI statique sans dépendance » — décision supersédée ; l'ADR d'implémentation de P52 la justifie face aux alternatives, argument principal : la maquette de référence `docs/ui-mockup/philosophes-3.tsx` est déjà en React TSX, écosystème i18n et tests matures). Pile complémentaire : `react-i18next`, `vitest` + `@testing-library/react`, ESLint + `tsc --noEmit` en gates, Playwright pour l'e2e navigateur.
+2. **i18n** : français par défaut, anglais disponible. Le **chrome d'UI est traduit, jamais les données d'étude produites par le serveur** (formules, verdicts, témoins, narrations LLM, contrat, journal affichés tels quels).
+3. **Complétude** : P34 (convergence asymétrique), P37 (formule éditable) et P38 (dossiers de preuve cliquables) deviennent utilisables au clic ; la friction F5 « UI non observé » (`docs/studies/pilote/v1/audit/frictions.md`) est fermée par une e2e UI en CI + un **addendum** d'audit (l'audit commité n'est jamais réécrit, culture append-only).
+4. **Serveur source de vérité** : aucun verdict n'est calculé côté client (§19.4 inchangé) ; le build frontend est servi sous `/ui/` sans écart d'URL.
+5. **Calendrier** : la vague 7 est un prérequis de P48 (study-a, sujets humains) ; elle peut courir en parallèle de P43/P45–P47.
 
 ---
 
@@ -675,3 +683,10 @@ Descriptifs + IC 95 % (Wilson pour proportions, bootstrap pour coûts) ; compara
 
 - **P3 pilote** : go si contrat complet, coût ≤ plafond, audit « zéro verdict inventé », journal de frictions (au plus k changements majeurs avant P4) ; sinon itération de phase 2.
 - **P4** : C et D d'abord (automatisées, itérables sans coût humain), puis B (experts), puis A (sujets) — l'ordre protège les sujets humains des instabilités du moteur. Tout échec de seuil en C/D se traite par version d'étude v2, jamais par ajustement silencieux des seuils.
+
+---
+
+## Changelog
+
+- **v1.3 — 2026-11-19** : §9 acté en v1.3 — framework React 18+ / TypeScript strict / Vite (supersède le vanilla JS de P18), i18n fr (défaut) / en du chrome d'UI uniquement, complétude côté client de P34/P37/P38, fermeture de la friction F5 par e2e navigateur en CI + addendum d'audit (append-only). Décisions détaillées en §9 « v1.3 », vague 7 du backlog (P52–P57, prérequis de P48).
+- **v1.2** : architecture API v2 actée + maquette d'élicitation Philosophes-3 comme spécification UI de référence (base du document).
