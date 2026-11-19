@@ -18,8 +18,16 @@ artifacts (execution records, ``audit.json``, golden corpus, vendored
 PNML) are excluded from the diff and replaced by digest lines (P58,
 ADR-0010 appendix 2026-11-19). A bundle larger than
 ``REVIEWER_BUNDLE_MAX_BYTES`` (default 256 KiB, P59) is refused before
-any session starts, with the "preconditions unmet" exit code. Stdlib only,
-so it runs in the bareest CI image: this module defers its
+any session starts, with the "preconditions unmet" exit code.
+
+P61 (issue #133): review attempts are journaled per pull request and
+head in ``.review/review-attempts.jsonl`` with a typed cause (deadline /
+turn-limit / preconditions / protocol - read from the session's failure
+report, never a bare exit code). After ``REVIEWER_MAX_ATTEMPTS`` failed
+session attempts (default 2) the review is refused before any new
+session starts (exit 3, not a verdict, not an attempt) and the human is
+escalated via the existing notify pipeline (``make notify``). Stdlib
+only, so it runs in the bareest CI image: this module defers its
 ``httpx``-dependent imports into the ``review`` runner, on purpose.
 
 The developer agent runs ``review`` after opening a pull request and
@@ -35,6 +43,7 @@ import os
 import re
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -93,6 +102,22 @@ DIFF_FILE_HEADER_PATTERN = re.compile(r"^diff --git a/(?P<old>.+?) b/(?P<new>.+)
 BUNDLE_SIZE_LIMIT_VARIABLE = "REVIEWER_BUNDLE_MAX_BYTES"
 DEFAULT_BUNDLE_MAX_BYTES = 256 * 1024
 DIFF_SECTION_HEADER = "## DIFF UNDER REVIEW"
+
+# P61 (issue #133, docs/spikes/2026-11-19-reviewer-reliability.md): bounded
+# retries. Every review invocation appends one line to the attempts journal
+# (``.review/review-attempts.jsonl``), keyed by pull request + head SHA, with
+# a typed cause. After REVIEWER_MAX_ATTEMPTS failed SESSION attempts (default
+# 2 - the P40/P42 incidents each burned several full sessions), the review is
+# refused before any new session starts: exit 3 (preconditions unmet - not a
+# verdict, not an attempt), the pull request stays open, nothing merges on a
+# failed review (fail-closed unchanged), and the human is escalated through
+# the existing notify pipeline. A new head SHA starts a fresh attempt count.
+MAX_ATTEMPTS_VARIABLE = "REVIEWER_MAX_ATTEMPTS"
+DEFAULT_MAX_ATTEMPTS = 2
+ATTEMPTS_JOURNAL_FILE_NAME = "review-attempts.jsonl"
+SESSION_PHASE = "session"
+NOTIFY_SEVERITY_URGENT = "urgent"
+NOTIFY_COMMAND: tuple[str, ...] = ("uv", "run", "notify", "send")
 
 
 def read_text_file(*, path: Path) -> str:
@@ -239,6 +264,169 @@ def bundle_size_refusal(*, bundle_text: str, diff_text: str) -> str | None:
         f" exceeds the limit of {limit} bytes ({BUNDLE_SIZE_LIMIT_VARIABLE})"
         " - split the pull request or check the P58 machine-artifact exclusions"
     )
+
+
+def load_max_attempts() -> int:
+    """The per-head cap on failed review session attempts (``REVIEWER_MAX_ATTEMPTS``, P61)."""
+    raw_value = os.environ.get(MAX_ATTEMPTS_VARIABLE, "").strip()
+    if not raw_value:
+        return DEFAULT_MAX_ATTEMPTS
+    try:
+        return int(raw_value)
+    except ValueError:
+        print(
+            f"Error: {MAX_ATTEMPTS_VARIABLE} is not an integer: {raw_value}.",
+            file=sys.stderr,
+        )
+        raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE) from None
+
+
+def load_attempts(
+    *, journal_path: Path, pull_request_number: int, head_sha: str
+) -> list[dict[str, object]]:
+    """Read the journaled attempts for one pull request head (P61).
+
+    A missing or unreadable journal means zero attempts - the cap never
+    blocks a first review because of a corrupt journal.
+    """
+    if not journal_path.is_file():
+        return []
+    attempts: list[dict[str, object]] = []
+    for raw_line in journal_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            entry: object = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("pr_number") != pull_request_number or entry.get("head_sha") != head_sha:
+            continue
+        attempts.append(entry)
+    return attempts
+
+
+def count_failed_session_attempts(*, attempts: list[dict[str, object]]) -> int:
+    """Count the journaled SESSION attempts that failed (P61).
+
+    Only real session runs count toward the cap: precondition and bundle
+    refusals never started a session, they are not attempts.
+    """
+    return sum(
+        1
+        for entry in attempts
+        if entry.get("phase") == SESSION_PHASE and entry.get("exit_code") != EXIT_CODE_SUCCESS
+    )
+
+
+def record_attempt(
+    *,
+    journal_path: Path,
+    pull_request_number: int,
+    head_sha: str,
+    phase: str,
+    exit_code: int,
+    cause: str,
+    escalated: bool,
+) -> None:
+    """Append one attempt line to the journal (P61); best-effort, never masks the verdict."""
+    entry = {
+        "timestamp": datetime.now(UTC).isoformat(),
+        "pr_number": pull_request_number,
+        "head_sha": head_sha,
+        "phase": phase,
+        "exit_code": exit_code,
+        "cause": cause,
+        "attempt": phase == SESSION_PHASE,
+        "escalated": escalated,
+    }
+    try:
+        journal_path.parent.mkdir(parents=True, exist_ok=True)
+        with journal_path.open("a", encoding="utf-8") as journal_file:
+            journal_file.write(json.dumps(entry) + "\n")
+    except OSError as journal_error:
+        print(
+            f"Warning: could not journal the review attempt ({journal_error});"
+            " the verdict is unchanged.",
+            file=sys.stderr,
+        )
+
+
+def cause_for_exit_code(*, exit_code: int, review_directory: Path) -> str:
+    """The typed cause of a review outcome (P61): never a bare exit code.
+
+    Exit 0/1 are verdicts (clean / blocking findings). Exit 2 reads the
+    session's failure report for the precise cause (deadline / turn-limit /
+    protocol); exit 3 is preconditions.
+    """
+    if exit_code == EXIT_CODE_SUCCESS:
+        return "clean"
+    if exit_code == EXIT_CODE_CRITERIA_UNMET:
+        return "blocking"
+    if exit_code == EXIT_CODE_PRECONDITIONS_UNMET:
+        return "preconditions"
+    report_path = review_directory / "review-report.json"
+    if report_path.is_file():
+        try:
+            report: object = json.loads(report_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            report = None
+        if isinstance(report, dict):
+            failure_cause = report.get("failure_cause")
+            if isinstance(failure_cause, str) and failure_cause:
+                return failure_cause
+    return "protocol"
+
+
+def escalate_to_human(
+    *,
+    pull_request_number: int,
+    head_sha: str,
+    failed_attempts: int,
+    max_attempts: int,
+    last_cause: str,
+) -> None:
+    """Escalate to the human via the existing notify pipeline (P61, ``make notify``).
+
+    Best-effort by contract: a notification failure never masks the review
+    verdict and never raises.
+    """
+    message = (
+        f"Revue de la PR #{pull_request_number} (head {head_sha[:8]}) :"
+        f" {failed_attempts}/{max_attempts} tentatives de session épuisées sans revue propre"
+        f" (dernier échec : {last_cause}). Aucune fusion ne sera faite sans revue propre ;"
+        " intervention humaine requise."
+    )
+    try:
+        completed = subprocess.run(
+            [
+                *NOTIFY_COMMAND,
+                "--severity",
+                NOTIFY_SEVERITY_URGENT,
+                "--message",
+                message,
+                "--issue-identifier",
+                f"PR-{pull_request_number}",
+            ],
+            cwd=REPOSITORY_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as notify_error:
+        print(
+            f"Warning: human escalation could not be sent ({notify_error}); the refusal stands.",
+            file=sys.stderr,
+        )
+        return
+    if completed.returncode != 0:
+        print(
+            f"Warning: human escalation failed (exit {completed.returncode}):"
+            f" {completed.stderr.strip()}; the refusal stands.",
+            file=sys.stderr,
+        )
 
 
 def sanitize_diff(*, diff_text: str) -> str:
@@ -506,8 +694,47 @@ def run_review(*, arguments: argparse.Namespace) -> int:
             pending_changes=pending_changes,
             check_runs=check_runs,
         )
+        journal_path = REVIEW_DIRECTORY / ATTEMPTS_JOURNAL_FILE_NAME
         if refusal_reason is not None:
+            record_attempt(
+                journal_path=journal_path,
+                pull_request_number=arguments.pr_number,
+                head_sha=head_sha,
+                phase="preconditions",
+                exit_code=EXIT_CODE_PRECONDITIONS_UNMET,
+                cause="preconditions",
+                escalated=False,
+            )
             print(f"Review refused: {refusal_reason}.", file=sys.stderr)
+            return EXIT_CODE_PRECONDITIONS_UNMET
+        # P61: bounded retries - after REVIEWER_MAX_ATTEMPTS failed session
+        # attempts on this head, refuse before any new session starts (exit 3:
+        # not a verdict, not an attempt). The human was already escalated when
+        # the cap was reached; the nightly stops looping here.
+        max_attempts = load_max_attempts()
+        attempts = load_attempts(
+            journal_path=journal_path,
+            pull_request_number=arguments.pr_number,
+            head_sha=head_sha,
+        )
+        failed_attempts = count_failed_session_attempts(attempts=attempts)
+        if failed_attempts >= max_attempts:
+            record_attempt(
+                journal_path=journal_path,
+                pull_request_number=arguments.pr_number,
+                head_sha=head_sha,
+                phase="cap",
+                exit_code=EXIT_CODE_PRECONDITIONS_UNMET,
+                cause="preconditions",
+                escalated=False,
+            )
+            print(
+                f"Review refused: {failed_attempts} failed session attempts on head"
+                f" {head_sha[:8]} reached the cap of {max_attempts}"
+                f" ({MAX_ATTEMPTS_VARIABLE}) - the human was escalated via `make notify`;"
+                " fix the cause, push a new head, then re-run `make review`.",
+                file=sys.stderr,
+            )
             return EXIT_CODE_PRECONDITIONS_UNMET
         base_ref_container = pull_request.get("base")
         base_ref = (
@@ -540,8 +767,26 @@ def run_review(*, arguments: argparse.Namespace) -> int:
         if bundle_exit_code == EXIT_CODE_PRECONDITIONS_UNMET:
             # P59: an oversized bundle is refused before the session starts -
             # preconditions unmet, not a verdict, not an attempt.
+            record_attempt(
+                journal_path=journal_path,
+                pull_request_number=arguments.pr_number,
+                head_sha=head_sha,
+                phase="bundle",
+                exit_code=EXIT_CODE_PRECONDITIONS_UNMET,
+                cause="preconditions",
+                escalated=False,
+            )
             return EXIT_CODE_PRECONDITIONS_UNMET
         if bundle_exit_code != EXIT_CODE_SUCCESS:
+            record_attempt(
+                journal_path=journal_path,
+                pull_request_number=arguments.pr_number,
+                head_sha=head_sha,
+                phase="bundle",
+                exit_code=EXIT_CODE_PROTOCOL_FAILURE,
+                cause="protocol",
+                escalated=False,
+            )
             return EXIT_CODE_PROTOCOL_FAILURE
         review_exit_code = run_script(
             command=[
@@ -557,6 +802,31 @@ def run_review(*, arguments: argparse.Namespace) -> int:
                 str(REVIEW_DIRECTORY / "review-comment.md"),
             ]
         )
+        # P61: journal the session attempt with its typed cause, and escalate
+        # to the human once the cap of failed attempts is reached - the nightly
+        # stops looping, the pull request stays open, nothing merges (fail-closed).
+        attempt_cause = cause_for_exit_code(
+            exit_code=review_exit_code, review_directory=REVIEW_DIRECTORY
+        )
+        failed_after = failed_attempts + (1 if review_exit_code != EXIT_CODE_SUCCESS else 0)
+        escalated = review_exit_code != EXIT_CODE_SUCCESS and failed_after >= max_attempts
+        record_attempt(
+            journal_path=journal_path,
+            pull_request_number=arguments.pr_number,
+            head_sha=head_sha,
+            phase=SESSION_PHASE,
+            exit_code=review_exit_code,
+            cause=attempt_cause,
+            escalated=escalated,
+        )
+        if escalated:
+            escalate_to_human(
+                pull_request_number=arguments.pr_number,
+                head_sha=head_sha,
+                failed_attempts=failed_after,
+                max_attempts=max_attempts,
+                last_cause=attempt_cause,
+            )
         post_review_comment(
             http_client=http_client,
             repository_slug=repository_slug,
