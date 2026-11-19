@@ -210,6 +210,45 @@ def test_path_is_excluded_matches_every_machine_pattern() -> None:
     assert not review.path_is_excluded(path="docs/studies/pilote/v1/audit/frictions.md")
 
 
+def test_glob_match_double_star_matches_zero_directories() -> None:
+    """Git `**` semantics: `**` matches zero or more whole segments."""
+    assert review.glob_match(pattern="**/audit.json", path="audit.json")
+    assert review.glob_match(pattern="**/audit.json", path="a/b/audit.json")
+    assert review.glob_match(
+        pattern="docs/studies/**/execution/**", path="docs/studies/execution/r.json"
+    )
+    assert review.glob_match(
+        pattern="docs/studies/**/execution/**", path="docs/studies/pilote/v1/execution/runs/r.jsonl"
+    )
+    assert review.glob_match(
+        pattern="src/petrichor/study/**/*.pnml", path="src/petrichor/study/model.pnml"
+    )
+    assert not review.glob_match(
+        pattern="docs/studies/**/execution/**", path="docs/studies/pilote/v1/audit/audit.json"
+    )
+    assert not review.glob_match(pattern="**/audit.json", path="audit.json.bak")
+
+
+def test_path_is_excluded_zero_directory_cases() -> None:
+    """The zero-directory `**` cases match too (git pathspec semantics)."""
+    assert review.path_is_excluded(path="docs/studies/execution/record.json")
+    assert review.path_is_excluded(path="src/petrichor/study/model.pnml")
+
+
+def test_digest_for_path_falls_back_to_the_working_tree_for_additions(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A machine artifact added by the PR (absent at HEAD) is digested from disk."""
+    monkeypatch.setattr(review, "REPOSITORY_ROOT", tmp_path)
+    monkeypatch.setattr(review, "digest_for_head_path", lambda *, path: None)
+    added = tmp_path / "docs/studies/p/v1/execution/new.json"
+    added.parent.mkdir(parents=True)
+    added.write_bytes(b'{"new": true}')
+    digest = review.digest_for_path(path="docs/studies/p/v1/execution/new.json")
+    assert digest == (13, hashlib.sha256(b'{"new": true}').hexdigest())
+    assert review.digest_for_path(path="docs/studies/p/v1/execution/gone.json") is None
+
+
 def test_controller_for_path_names_the_controlling_test() -> None:
     """The digest line names the test or command controlling the artifact."""
     execution_path = "docs/studies/p/v1/execution/journal.json"
@@ -223,7 +262,7 @@ def test_sanitize_diff_removes_machine_chunks_and_adds_digests(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Machine chunks leave the diff; one sorted digest line per excluded path."""
-    monkeypatch.setattr(review, "digest_for_head_path", fake_digest)
+    monkeypatch.setattr(review, "digest_for_path", fake_digest)
     sanitized = review.sanitize_diff(diff_text=FIXTURE_DIFF_WITH_MACHINE)
     assert "r.json" not in sanitized.split(review.EXCLUDED_DIGEST_SECTION_HEADER)[0]
     assert "<pnml-new/>" not in sanitized
@@ -240,7 +279,7 @@ def test_sanitize_diff_is_deterministic_and_idempotent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Two runs on the same diff produce byte-identical output; re-sanitizing is a no-op."""
-    monkeypatch.setattr(review, "digest_for_head_path", fake_digest)
+    monkeypatch.setattr(review, "digest_for_path", fake_digest)
     first = review.sanitize_diff(diff_text=FIXTURE_DIFF_WITH_MACHINE)
     second = review.sanitize_diff(diff_text=FIXTURE_DIFF_WITH_MACHINE)
     assert first == second
@@ -252,7 +291,7 @@ def test_bundle_diff_part_is_equal_with_and_without_machine_files(
 ) -> None:
     """Golden: the diff part of the bundle is identical whether or not the
     fixture diff carries machine files - only the digest lines are added."""
-    monkeypatch.setattr(review, "digest_for_head_path", fake_digest)
+    monkeypatch.setattr(review, "digest_for_path", fake_digest)
     with_machine = review.sanitize_diff(diff_text=FIXTURE_DIFF_WITH_MACHINE)
     without_machine = review.sanitize_diff(diff_text=FIXTURE_DIFF_WITHOUT_MACHINE)
     diff_part = with_machine.split(review.EXCLUDED_DIGEST_SECTION_HEADER)[0]
@@ -263,7 +302,7 @@ def test_run_review_bundle_sanitizes_a_diff_file(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """review-bundle --diff-file applies the exclusions before assembling."""
-    monkeypatch.setattr(review, "digest_for_head_path", fake_digest)
+    monkeypatch.setattr(review, "digest_for_path", fake_digest)
     diff_file = tmp_path / "pr.diff"
     diff_file.write_text(FIXTURE_DIFF_WITH_MACHINE, encoding="utf-8")
     output_file = tmp_path / "bundle.md"

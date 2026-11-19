@@ -101,12 +101,37 @@ def collect_decisions() -> list[tuple[str, str]]:
 
 
 def glob_match(*, pattern: str, path: str) -> bool:
-    """Match a git-style glob (``**`` crosses directories) against a repo path."""
-    if fnmatch.fnmatchcase(path, pattern):
-        return True
-    if pattern.startswith("**/"):
-        return fnmatch.fnmatchcase(path, pattern[3:])
-    return False
+    """Match a git-style glob against a repo path, with git ``**`` semantics.
+
+    A ``**`` segment matches zero or more whole path segments, so
+    ``docs/studies/**/execution/**`` also matches ``docs/studies/execution/x``
+    and ``**/audit.json`` also matches a root-level ``audit.json``.
+    """
+    return _match_segments(
+        pattern_segments=pattern.split("/"),
+        path_segments=path.split("/"),
+    )
+
+
+def _match_segments(*, pattern_segments: list[str], path_segments: list[str]) -> bool:
+    """Recursive segment matcher: ``**`` consumes zero or more path segments."""
+    if not pattern_segments:
+        return not path_segments
+    head = pattern_segments[0]
+    if head == "**":
+        return any(
+            _match_segments(
+                pattern_segments=pattern_segments[1:],
+                path_segments=path_segments[offset:],
+            )
+            for offset in range(len(path_segments) + 1)
+        )
+    if not path_segments:
+        return False
+    return fnmatch.fnmatchcase(path_segments[0], head) and _match_segments(
+        pattern_segments=pattern_segments[1:],
+        path_segments=path_segments[1:],
+    )
 
 
 def path_is_excluded(*, path: str) -> bool:
@@ -141,6 +166,23 @@ def digest_for_head_path(*, path: str) -> tuple[int, str] | None:
     return len(payload), hashlib.sha256(payload).hexdigest()
 
 
+def digest_for_path(*, path: str) -> tuple[int, str] | None:
+    """Digest of a changed file: HEAD blob first, working-tree file for additions.
+
+    A machine artifact newly added by the PR is absent at HEAD; its digest is
+    then computed from the checked-out file. None only when the file is truly
+    gone (deleted in the diff).
+    """
+    head_digest = digest_for_head_path(path=path)
+    if head_digest is not None:
+        return head_digest
+    working_file = REPOSITORY_ROOT / path
+    if working_file.is_file():
+        payload = working_file.read_bytes()
+        return len(payload), hashlib.sha256(payload).hexdigest()
+    return None
+
+
 def split_diff_chunks(*, diff_text: str) -> tuple[str, list[tuple[str, str]]]:
     """Split a unified diff into (preamble, [(path, chunk)]) per ``diff --git`` header."""
     matches = list(DIFF_FILE_HEADER_PATTERN.finditer(diff_text))
@@ -168,7 +210,7 @@ def sanitize_diff(*, diff_text: str) -> str:
             kept_chunks.append(chunk)
             continue
         controller = controller_for_path(path=path)
-        digest = digest_for_head_path(path=path)
+        digest = digest_for_path(path=path)
         if digest is None:
             digest_lines.append(f"- `{path}` — supprimé dans ce diff — audité par `{controller}`")
         else:
