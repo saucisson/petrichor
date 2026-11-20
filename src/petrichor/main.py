@@ -11,6 +11,7 @@ answers ``503 runner_not_configured``.
 """
 
 import logging
+import os
 from pathlib import Path
 from wsgiref.simple_server import WSGIServer, make_server
 
@@ -31,6 +32,10 @@ from petrichor.witness import WitnessStore
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8080
+HOST_ENVIRONMENT_VARIABLE = "PETRICHOR_HOST"
+PORT_ENVIRONMENT_VARIABLE = "PETRICHOR_PORT"
+"""Container deployment (ADR-0102): the API listens on 0.0.0.0 inside the
+container so the published port can reach it; locally it stays on loopback."""
 DEFAULT_SESSIONS_DIRECTORY = ".petrichor/sessions"
 DEFAULT_ARBITRATIONS_DIRECTORY = ".petrichor/arbitrations"
 DEFAULT_CONVERGENCES_DIRECTORY = ".petrichor/convergences"
@@ -58,6 +63,8 @@ def build_server(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
     witness_store: WitnessStore,
     llm_provider: LLMProvider,
     edit_store: FormulaEditStore,
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
 ) -> WSGIServer:
     """Assemble the WSGI server around the application."""
     app = create_app(
@@ -73,7 +80,7 @@ def build_server(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
         llm_provider=llm_provider,
         edit_store=edit_store,
     )
-    return make_server(DEFAULT_HOST, DEFAULT_PORT, app)
+    return make_server(host, port, app)
 
 
 def select_llm_provider(*, settings: ApiSettings) -> LLMProvider:
@@ -93,6 +100,8 @@ def main() -> None:
     """Entry point: configure, build, serve."""
     configure_logging()
     logger = structlog.get_logger(__name__)
+    host = os.environ.get(HOST_ENVIRONMENT_VARIABLE, DEFAULT_HOST)
+    port = int(os.environ.get(PORT_ENVIRONMENT_VARIABLE, str(DEFAULT_PORT)))
     settings = ApiSettings()
     session_store = SessionStore(directory=Path(DEFAULT_SESSIONS_DIRECTORY))
     arbitrator = ProfileArbitrator()
@@ -111,8 +120,10 @@ def main() -> None:
         witness_store=witness_store,
         llm_provider=select_llm_provider(settings=settings),
         edit_store=edit_store,
+        host=host,
+        port=port,
     )
-    logger.info("api_server_started", host=DEFAULT_HOST, port=DEFAULT_PORT)
+    logger.info("api_server_started", host=host, port=port)
     server.serve_forever()  # pragma: no cover - the serving loop is the entry point
 
 
