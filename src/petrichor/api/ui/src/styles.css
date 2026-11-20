@@ -161,6 +161,20 @@
     @apply my-1 flex items-center gap-2;
   }
 
+  /* Explicit import zone (issue #163): click to browse or drop a file; the
+     selected file name and size are shown before sending. */
+  .import-zone {
+    @apply my-2 rounded-card border border-dashed border-line bg-surface p-3;
+  }
+
+  .import-zone-label {
+    @apply block cursor-pointer text-sm font-semibold text-primary hover:underline;
+  }
+
+  .import-file-info {
+    @apply my-1 text-sm text-muted;
+  }
+
   .formula-editor {
     @apply mt-2 border-t border-dashed border-line pt-2;
   }
