@@ -35,7 +35,7 @@ from collections.abc import Callable, Iterable
 from http import HTTPStatus
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TypeGuard
-from urllib.parse import unquote
+from urllib.parse import parse_qs, unquote
 from wsgiref.types import StartResponse, WSGIEnvironment
 
 import structlog
@@ -1315,11 +1315,10 @@ def _catalog_query_from_environ(*, environ: WSGIEnvironment) -> CatalogQuery | P
     if isinstance(pagination, ProblemPayload):
         return pagination
     limit, offset = pagination
-    params: dict[str, str] = {}
-    for pair in environ.get("QUERY_STRING", "").split("&"):
-        if "=" in pair:
-            key, value = pair.split("=", maxsplit=1)
-            params[key] = value
+    params = {
+        key: values[-1]
+        for key, values in parse_qs(environ.get("QUERY_STRING", ""), keep_blank_values=True).items()
+    }
     facets = {
         key: value
         for key, value in params.items()

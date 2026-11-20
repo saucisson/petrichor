@@ -11,6 +11,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+import structlog.testing
 from pydantic import SecretStr
 
 from petrichor.api import create_app
@@ -68,7 +69,10 @@ class FakeCatalog:
         items = [
             entry
             for entry in self._entries
-            if query.search.lower() in entry.name.lower()
+            if (
+                query.search.lower() in entry.name.lower()
+                or query.search.lower() in entry.family.lower()
+            )
             and all(
                 (entry.formalism if facet == "formalism" else getattr(entry, facet, None)) == value
                 for facet, value in query.facets.items()
@@ -238,3 +242,60 @@ class TestCatalogImport:
     def test_import_requires_the_api_key(self, client: httpx.Client) -> None:
         response = client.post("/v1/catalog/import", json={"name": "Philosophers-PT-010"})
         assert response.status_code == 401
+
+
+class TestCatalogNarration:
+    """The catalog endpoints' narration events are pinned (ADR-0005)."""
+
+    def test_listing_and_import_are_narrated(self, client: httpx.Client) -> None:
+        with structlog.testing.capture_logs() as logs:
+            response = client.get("/v1/catalog/models", headers=AUTH_HEADERS)
+            assert response.status_code == 200
+            response = client.post(
+                "/v1/catalog/import", json={"name": "Philosophers-PT-010"}, headers=AUTH_HEADERS
+            )
+            assert response.status_code == 201
+        events = [log["event"] for log in logs]
+        assert "api_catalog_listed" in events
+        assert "api_catalog_imported" in events
+
+
+class TestCatalogQueryDecoding:
+    """Query-string parameters are percent-decoded before matching."""
+
+    def test_percent_encoding_in_search_is_decoded(self, client: httpx.Client) -> None:
+        # %54 is 'T': without percent-decoding the search would not match.
+        response = client.get("/v1/catalog/models?search=%54okenRing", headers=AUTH_HEADERS)
+        assert response.status_code == 200
+        assert response.json()["total"] == 1
+
+    def test_plus_decodes_to_space_in_search(self) -> None:
+        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+        spaced = FakeCatalog()
+        spaced._entries.append(
+            CatalogEntry(
+                name="Odd-PT-001",
+                family="Token Ring",
+                formalism="PT",
+                edition="2026",
+                source="pnmcc-2026",
+                size_bucket="small",
+                url="https://yanntm.github.io/pnmcc-models-2026/INPUTS/Odd-PT-001.tgz",
+            )
+        )
+        app = create_app(
+            settings=settings,
+            store=ModelStore(),
+            run_store=RunStore(),
+            runner=None,
+            catalog=spaced,
+        )
+        spaced_client = httpx.Client(
+            transport=httpx.WSGITransport(app=app), base_url="http://testserver"
+        )
+        response = spaced_client.get("/v1/catalog/models?search=token+ring", headers=AUTH_HEADERS)
+        assert response.status_code == 200
+        assert response.json()["total"] == 1
+        response = spaced_client.get("/v1/catalog/models?search=token%20ring", headers=AUTH_HEADERS)
+        assert response.status_code == 200
+        assert response.json()["total"] == 1

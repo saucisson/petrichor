@@ -31,9 +31,8 @@ import structlog
 from pydantic import BaseModel, Field
 
 from petrichor.archive_ingest import (
-    NoPnmlError,
+    ArchiveError,
     PnmlCandidate,
-    UnsafeArchiveError,
     extract_pnml_candidates,
 )
 from petrichor.catalog import (
@@ -137,6 +136,10 @@ _FAMILY_ARCHIVE_PATTERN = re.compile(
 _STATIC_INDEX_PATTERN = re.compile(r'href="\./INPUTS/(?P<name>[A-Za-z0-9.\-]+\.tgz)"')
 
 
+MAX_INDEX_BYTES = 4 << 20
+"""Cap on the size of a fetched index page (models.php / index.html / metadata.json)."""
+
+
 class _BaseSource:
     """Common behavior of the source adapters: config + HTTP helpers."""
 
@@ -149,7 +152,7 @@ class _BaseSource:
         return http_get_text(
             url=url,
             timeout_seconds=self.catalog_config.timeout_seconds,
-            max_bytes=4 << 20,
+            max_bytes=MAX_INDEX_BYTES,
             user_agent=self.catalog_config.user_agent,
         )
 
@@ -397,7 +400,7 @@ class CatalogService:
         sha256 = f"sha256:{hashlib.sha256(archive).hexdigest()}"
         try:
             candidates = extract_pnml_candidates(data=archive, content_type="application/gzip")
-        except (UnsafeArchiveError, NoPnmlError) as error:
+        except ArchiveError as error:
             raise InvalidCatalogPnmlError(f"Archive de {name!r} illisible : {error}") from error
         candidate = _pick_instance_candidate(candidates=candidates, name=name)
         if candidate is None:

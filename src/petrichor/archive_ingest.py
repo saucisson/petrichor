@@ -48,6 +48,14 @@ class NoPnmlError(ArchiveError):
     """The archive contains no PNML document."""
 
 
+class CorruptArchiveError(ArchiveError):
+    """The archive bytes cannot be decoded as their declared format."""
+
+
+class MalformedPnmlError(ArchiveError):
+    """A PNML member is not UTF-8 or not well-formed XML."""
+
+
 class PnmlCandidate(BaseModel):
     """One PNML document extracted from an archive, with its provenance data."""
 
@@ -88,13 +96,17 @@ def _safe_member_name(*, name: str) -> str | None:
 
 def _candidate_from_member(*, name: str, data: bytes) -> PnmlCandidate:
     """Build the candidate of one PNML member (UTF-8 decode + formalism)."""
-    text = data.decode("utf-8")
+    try:
+        text = data.decode("utf-8")
+        formalism = detect_formalism(text=text)
+    except (UnicodeDecodeError, ET.ParseError) as error:
+        raise MalformedPnmlError(f"Membre PNML illisible {name!r} : {error}") from error
     return PnmlCandidate(
         name=name,
         size_bytes=len(data),
         sha256=f"sha256:{hashlib.sha256(data).hexdigest()}",
         content=text,
-        formalism=detect_formalism(text=text),
+        formalism=formalism,
     )
 
 
@@ -114,39 +126,61 @@ def _collect(*, members: list[tuple[str, bytes]]) -> list[PnmlCandidate]:
     return candidates
 
 
+def _zip_members(*, data: bytes) -> list[tuple[str, bytes]]:
+    """The (name, bytes) members of a zip archive; CorruptArchiveError when unreadable."""
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile as error:
+        raise CorruptArchiveError(f"Archive zip corrompue : {error}") from error
+    with archive:
+        return [
+            (info.filename, archive.read(info)) for info in archive.infolist() if not info.is_dir()
+        ]
+
+
+def _tar_members(*, data: bytes) -> list[tuple[str, bytes]]:
+    """The (name, bytes) file members of a tar/tgz archive."""
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as archive:
+        members = []
+        for member in archive.getmembers():
+            if not member.isfile():
+                continue
+            extracted = archive.extractfile(member)
+            if extracted is not None:
+                members.append((member.name, extracted.read()))
+        return members
+
+
+def _gzip_pnml_candidate(*, data: bytes) -> list[PnmlCandidate]:
+    """A bare gzip stream may hold one gzipped PNML document."""
+    try:
+        decompressed = gzip.decompress(data)
+    except OSError as error:
+        raise CorruptArchiveError(f"Archive gzip corrompue : {error}") from error
+    try:
+        text = decompressed.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise MalformedPnmlError(f"Document gzip non UTF-8 : {error}") from error
+    if text.lstrip().startswith("<"):
+        return [_candidate_from_member(name="model.pnml", data=decompressed)]
+    return []
+
+
 def extract_pnml_candidates(*, data: bytes, content_type: str) -> list[PnmlCandidate]:
     """Extract the PNML candidates of an archive (zip, tgz/tar.gz, tar).
 
-    Raises UnsafeArchiveError on zip-slip members, NoPnmlError when the
-    archive holds no PNML document.
+    Raises UnsafeArchiveError on zip-slip members, CorruptArchiveError on
+    undecodable archive bytes, MalformedPnmlError on invalid PNML members and
+    NoPnmlError when the archive holds no PNML document.
     """
     if content_type == CONTENT_TYPE_ZIP:
-        with zipfile.ZipFile(io.BytesIO(data)) as archive:
-            members = [
-                (info.filename, archive.read(info))
-                for info in archive.infolist()
-                if not info.is_dir()
-            ]
-        candidates = _collect(members=members)
+        candidates = _collect(members=_zip_members(data=data))
     elif content_type in (CONTENT_TYPE_GZIP, CONTENT_TYPE_TAR):
         try:
-            with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as archive:
-                members = []
-                for member in archive.getmembers():
-                    if not member.isfile():
-                        continue
-                    extracted = archive.extractfile(member)
-                    if extracted is not None:
-                        members.append((member.name, extracted.read()))
-            candidates = _collect(members=members)
+            candidates = _collect(members=_tar_members(data=data))
         except tarfile.TarError:
             # A bare gzip stream (not a tar): maybe a gzipped PNML document.
-            decompressed = gzip.decompress(data)
-            text = decompressed.decode("utf-8")
-            if text.lstrip().startswith("<"):
-                candidates = [_candidate_from_member(name="model.pnml", data=decompressed)]
-            else:
-                candidates = []
+            candidates = _gzip_pnml_candidate(data=data)
     else:
         raise ArchiveError(f"Unsupported archive content type: {content_type!r}")
     if not candidates:

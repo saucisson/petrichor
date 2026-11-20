@@ -16,9 +16,14 @@ import zipfile
 from pathlib import Path
 
 import pytest
+import structlog.testing
+from hypothesis import given
+from hypothesis import strategies as st
 
 from petrichor import catalog_sources
 from petrichor.archive_ingest import (
+    CorruptArchiveError,
+    MalformedPnmlError,
     NoPnmlError,
     UnsafeArchiveError,
     detect_formalism,
@@ -29,6 +34,7 @@ from petrichor.catalog import (
     CatalogIndex,
     CatalogQuery,
     CatalogUnavailableError,
+    InvalidCatalogPnmlError,
     QuotaExceededError,
     SourceUnavailableError,
     UnknownModelError,
@@ -357,3 +363,104 @@ class TestCatalogService:
         tiny.refresh()
         with pytest.raises(QuotaExceededError):
             tiny.fetch(name="A-PT-1")
+
+
+class TestPropertyTier:
+    """Hypothesis invariants of the catalog domain logic (ADR-0012)."""
+
+    @pytest.mark.property
+    @given(
+        names=st.lists(
+            st.from_regex(r"[A-Za-z]+-(PT|COL)-[0-9]+", fullmatch=True), min_size=0, max_size=30
+        )
+    )
+    def test_facet_counts_always_sum_to_total(self, names: list[str]) -> None:
+        index = CatalogIndex(entries=[entry(name=name) for name in names])
+        page = index.search(query=CatalogQuery(limit=100))
+        assert sum(page.facets.formalism.values()) == page.total
+        assert sum(page.facets.family.values()) == page.total
+        assert sum(page.facets.source.values()) == page.total
+
+    @pytest.mark.property
+    @given(
+        names=st.lists(
+            st.from_regex(r"[A-Za-z]+-(PT|COL)-[0-9]+", fullmatch=True),
+            min_size=1,
+            max_size=25,
+            unique=True,
+        )
+    )
+    def test_pagination_never_drops_nor_duplicates(self, names: list[str]) -> None:
+        index = CatalogIndex(entries=[entry(name=name) for name in names])
+        seen: list[str] = []
+        offset = 0
+        while True:
+            page = index.search(query=CatalogQuery(limit=3, offset=offset, sort="name"))
+            seen.extend(item.name for item in page.items)
+            if offset + 3 >= page.total:
+                break
+            offset += 3
+        assert sorted(seen) == sorted(
+            {item.name for item in index.search(query=CatalogQuery(limit=100)).items}
+        )
+
+    @pytest.mark.property
+    @given(bytes_count=st.integers(min_value=0, max_value=300 << 20))
+    def test_size_bucket_is_monotonic_in_bytes(self, bytes_count: int) -> None:
+        order = {"small": 0, "medium": 1, "large": 2, "huge": 3}
+        bucket = size_bucket_of(compressed_bytes=bytes_count)
+        assert bucket is not None
+        if bytes_count > 0:
+            smaller = size_bucket_of(compressed_bytes=bytes_count - 1)
+            assert smaller is not None
+            assert order[smaller] <= order[bucket]
+
+    @pytest.mark.property
+    @given(st.from_regex(r"[A-Za-z]+-(PT|COL)-[0-9]+", fullmatch=True))
+    def test_parse_instance_name_round_trips(self, name: str) -> None:
+        parsed = parse_instance_name(name=name)
+        assert parsed is not None
+        assert f"{parsed.family}-{parsed.formalism}-{parsed.params}" == name
+
+
+class TestNarrationAndRobustness:
+    """The catalog service's narration events are pinned (ADR-0005)."""
+
+    def test_refresh_and_fetch_events_are_narrated(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        service = TestCatalogService()._service(tmp_path, monkeypatch)
+        with structlog.testing.capture_logs() as logs:
+            service.refresh()
+            service.fetch(name="Philosophers-PT-010")
+        events = [log["event"] for log in logs]
+        assert "catalog_index_refreshed" in events
+        assert "catalog_instance_fetched" in events
+
+    def test_failing_source_is_narrated(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        service = TestCatalogService()._service(tmp_path, monkeypatch, fail=True)
+        with structlog.testing.capture_logs() as logs:
+            service.refresh()
+        events = [log["event"] for log in logs]
+        assert "catalog_source_unavailable" in events
+        assert "catalog_index_refreshed" in events
+
+    def test_corrupt_archive_is_a_typed_error(self) -> None:
+        with pytest.raises(CorruptArchiveError):
+            extract_pnml_candidates(data=b"not a gzip at all", content_type="application/gzip")
+
+    def test_malformed_pnml_member_is_a_typed_error(self) -> None:
+        archive = make_tgz(members={"A-PT-1/model.pnml": b"<not-xml"})
+        with pytest.raises(MalformedPnmlError):
+            extract_pnml_candidates(data=archive, content_type="application/gzip")
+
+    def test_service_fetch_wraps_archive_errors(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        service = TestCatalogService()._service(tmp_path, monkeypatch)
+        service.refresh()
+        monkeypatch.setattr(catalog_sources, "http_get_bytes", lambda **kwargs: b"corrupt-bytes")
+        with pytest.raises(InvalidCatalogPnmlError):
+            service.fetch(name="Philosophers-PT-010")
