@@ -24,7 +24,7 @@ from petrichor.api.settings import ApiSettings
 from petrichor.arbitration import ArbitrationStore
 from petrichor.convergence import ConvergenceStore
 from petrichor.llm.provider import DeterministicMockProvider
-from petrichor.main import build_server, main
+from petrichor.main import ConfigurationError, build_server, main
 from petrichor.model_store import ModelStore
 from petrichor.petri_canonical import ModelId
 from petrichor.pnml_import import import_pnml
@@ -346,6 +346,49 @@ class TestCompositionRoot:
         monkeypatch.setenv("PETRICHOR_API_KEY", TEST_API_KEY)
         monkeypatch.setattr(WSGIServer, "serve_forever", lambda self: self.server_close())
         main()
+
+    def test_build_server_uses_host_and_port_parameters(self, tmp_path: Path) -> None:
+        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+        server = build_server(
+            settings=settings,
+            store=ModelStore(),
+            run_store=RunStore(),
+            session_store=SessionStore(directory=tmp_path / "sessions"),
+            arbitrator=ProfileArbitrator(),
+            arbitration_store=ArbitrationStore(directory=tmp_path / "arbitrations"),
+            convergence_store=ConvergenceStore(directory=tmp_path / "convergences"),
+            witness_store=WitnessStore(directory=tmp_path / "witnesses"),
+            llm_provider=DeterministicMockProvider(),
+            edit_store=FormulaEditStore(directory=tmp_path / "formula_edits"),
+            host="127.0.0.2",
+            port=9999,
+        )
+        assert server.server_address == ("127.0.0.2", 9999)
+        server.server_close()
+
+    def test_main_reads_host_and_port_from_environment(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("PETRICHOR_API_KEY", TEST_API_KEY)
+        monkeypatch.setenv("PETRICHOR_HOST", "127.0.0.2")
+        monkeypatch.setenv("PETRICHOR_PORT", "9998")
+        captured: dict[str, object] = {}
+
+        def fake_serve_forever(self: WSGIServer) -> None:
+            captured["address"] = self.server_address
+            self.server_close()
+
+        monkeypatch.setattr(WSGIServer, "serve_forever", fake_serve_forever)
+        main()
+        assert captured["address"] == ("127.0.0.2", 9998)
+
+    def test_main_rejects_non_integer_port_with_typed_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("PETRICHOR_API_KEY", TEST_API_KEY)
+        monkeypatch.setenv("PETRICHOR_PORT", "not-a-number")
+        with pytest.raises(ConfigurationError, match="PETRICHOR_PORT"):
+            main()
 
 
 SAMPLE_PNML_FOR_STORE = (
