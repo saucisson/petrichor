@@ -839,11 +839,11 @@ def run_review(*, arguments: argparse.Namespace) -> int:
         )
         print(f"Reviewing PR #{arguments.pr_number} against {base_ref}.")
         write_review_inputs(pull_request=pull_request, review_directory=REVIEW_DIRECTORY)
-        write_review_context(
-            pull_request_number=arguments.pr_number,
-            head_sha=head_sha,
-            review_directory=REVIEW_DIRECTORY,
-        )
+        # The review context is written ONLY after the reviewer session has
+        # run (below): a bundle refusal or any pre-session exit must leave a
+        # stale context in place, so the merge driver refuses instead of
+        # pairing a fresh context with a stale clean report (fail-open seen
+        # on PR #145/#148/#150).
         build_diff(base_ref=base_ref, review_directory=REVIEW_DIRECTORY)
         bundle_exit_code = run_script(
             command=[
@@ -896,6 +896,14 @@ def run_review(*, arguments: argparse.Namespace) -> int:
                 "--comment-file",
                 str(REVIEW_DIRECTORY / "review-comment.md"),
             ]
+        )
+        # The session ran on this head and (re)wrote the report - only now is
+        # the context legitimate: it binds the report on disk to this PR and
+        # head, so the merge driver can trust the pair (fail-closed otherwise).
+        write_review_context(
+            pull_request_number=arguments.pr_number,
+            head_sha=head_sha,
+            review_directory=REVIEW_DIRECTORY,
         )
         # P61: journal the session attempt with its typed cause, and escalate
         # to the human once the cap of failed attempts is reached - the nightly
