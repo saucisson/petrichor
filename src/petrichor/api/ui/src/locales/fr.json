@@ -4,6 +4,8 @@
     "languageLabel": "Langue"
   },
   "header": {
+    "groupConnection": "Connexion",
+    "groupSession": "Session",
     "apiKeyLabel": "Clé API",
     "apiKeyAria": "Clé API",
     "sessionLabel": "Session",
@@ -12,6 +14,7 @@
   },
   "nav": {
     "aria": "Étapes",
+    "noSession": "Créez ou reprenez une session en Amorçage pour activer cette étape.",
     "steps": {
       "amorcage": "1. Amorçage",
       "questions": "2. Questions statiques",
@@ -24,6 +27,8 @@
     "intro": "Importez un modèle PNML, créez une session, arbitrez le profil sémantique proposé.",
     "fileAria": "Fichier PNML",
     "import": "Importer le modèle et créer la session",
+    "importing": "Envoi du modèle en cours…",
+    "sessionCreated": "Session créée : {{id}}.",
     "importRefused": "Import du modèle refusé : {{status}}",
     "noProfile": "Aucun profil proposé pour cette session.",
     "roleProposed": "rôle proposé : {{role}} (conf {{conf}})",

@@ -29,6 +29,8 @@ export default function Amorcage({
   const [profile, setProfile] = useState<Profile | null>(null);
   const [profileMissing, setProfileMissing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [createdId, setCreatedId] = useState<string | null>(null);
 
   const loadProfile = useCallback(async () => {
     if (!sessionId) return;
@@ -49,18 +51,26 @@ export default function Amorcage({
   }, [loadProfile, reloadToken]);
 
   const importModelAndCreateSession = async (file: File) => {
-    const text = await file.text();
-    const imported = await client.request("/v1/models", {
-      method: "POST",
-      headers: { "Content-Type": "application/pnml+xml" },
-      body: text,
-    });
-    if (imported.status !== 201) throw new Error(t("amorcage.importRefused", { status: imported.status }));
-    const model = (await imported.json()) as { id: string };
-    const created = await client.postJson<{ session_id: string }>("/v1/sessions", {
-      model_id: model.id,
-    });
-    onSessionCreated(created.session_id);
+    setImporting(true);
+    setError(null);
+    setCreatedId(null);
+    try {
+      const text = await file.text();
+      const imported = await client.request("/v1/models", {
+        method: "POST",
+        headers: { "Content-Type": "application/pnml+xml" },
+        body: text,
+      });
+      if (imported.status !== 201) throw new Error(t("amorcage.importRefused", { status: imported.status }));
+      const model = (await imported.json()) as { id: string };
+      const created = await client.postJson<{ session_id: string }>("/v1/sessions", {
+        model_id: model.id,
+      });
+      setCreatedId(created.session_id);
+      onSessionCreated(created.session_id);
+    } finally {
+      setImporting(false);
+    }
   };
 
   const arbitrate = async (entry: ProfileEntry, accepted: boolean) => {
@@ -87,6 +97,7 @@ export default function Amorcage({
         id="import-model"
         type="button"
         className="btn btn-primary"
+        disabled={importing}
         onClick={() => {
           const input = document.getElementById("pnml-file") as HTMLInputElement | null;
           const file = input?.files?.[0];
@@ -99,9 +110,29 @@ export default function Amorcage({
         {t("amorcage.import")}
       </button>
       <div id="profile" aria-live="polite">
-        {error !== null ? String(error) : null}
-        {resumeError !== null ? resumeError : null}
-        {profileMissing ? t("amorcage.noProfile") : null}
+        {/* Typed messages (issue #162): server errors verbatim in an alert,
+            loading and confirmations as status - never translated. */}
+        {error !== null ? (
+          <p className="message message-error" role="alert">
+            {String(error)}
+          </p>
+        ) : null}
+        {resumeError !== null ? (
+          <p className="message message-error" role="alert">
+            {resumeError}
+          </p>
+        ) : null}
+        {importing ? (
+          <p className="message message-info" role="status">
+            {t("amorcage.importing")}
+          </p>
+        ) : null}
+        {createdId !== null ? (
+          <p className="message message-ok" role="status">
+            {t("amorcage.sessionCreated", { id: createdId })}
+          </p>
+        ) : null}
+        {profileMissing ? <p className="message message-info">{t("amorcage.noProfile")}</p> : null}
         {profile?.proposed.entries.map((entry) => (
           <div className="profile-entry" key={entry.id}>
             <span>

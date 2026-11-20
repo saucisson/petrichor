@@ -4,6 +4,8 @@
     "languageLabel": "Language"
   },
   "header": {
+    "groupConnection": "Connection",
+    "groupSession": "Session",
     "apiKeyLabel": "API key",
     "apiKeyAria": "API key",
     "sessionLabel": "Session",
@@ -12,6 +14,7 @@
   },
   "nav": {
     "aria": "Steps",
+    "noSession": "Create or resume a session in Setup to enable this step.",
     "steps": {
       "amorcage": "1. Setup",
       "questions": "2. Static questions",
@@ -28,7 +31,9 @@
     "noProfile": "No profile proposed for this session.",
     "roleProposed": "proposed role: {{role}} (conf {{conf}})",
     "accept": "Accept",
-    "refuse": "Refuse"
+    "refuse": "Refuse",
+    "importing": "Uploading model…",
+    "sessionCreated": "Session created: {{id}}."
   },
   "questions": {
     "title": "Static questions",
