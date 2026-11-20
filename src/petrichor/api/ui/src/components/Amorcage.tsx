@@ -3,6 +3,16 @@ import { useTranslation } from "react-i18next";
 import type { ApiClient } from "../api";
 import type { Profile, ProfileEntry } from "../types";
 
+const ACCEPTED_EXTENSIONS = [".pnml", ".xml"];
+
+/* Human-readable size with a translated unit (chrome string, issue #163):
+   fr unit "o" -> "o"/"Ko"/"Mo", en unit "B" -> "B"/"KB"/"MB". */
+function formatSize(bytes: number, unit: string): string {
+  if (bytes < 1024) return `${bytes} ${unit}`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} K${unit}`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} M${unit}`;
+}
+
 interface AmorcageProps {
   hidden: boolean;
   client: ApiClient;
@@ -31,6 +41,8 @@ export default function Amorcage({
   const [error, setError] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const [createdId, setCreatedId] = useState<string | null>(null);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [importedModel, setImportedModel] = useState<{ id: string; known: boolean } | null>(null);
 
   const loadProfile = useCallback(async () => {
     if (!sessionId) return;
@@ -50,10 +62,18 @@ export default function Amorcage({
     );
   }, [loadProfile, reloadToken]);
 
+  const hasAcceptedExtension = (file: File): boolean =>
+    ACCEPTED_EXTENSIONS.some((extension) => file.name.toLowerCase().endsWith(extension));
+
   const importModelAndCreateSession = async (file: File) => {
+    if (!hasAcceptedExtension(file)) {
+      setError(t("amorcage.badExtension"));
+      return;
+    }
     setImporting(true);
     setError(null);
     setCreatedId(null);
+    setImportedModel(null);
     try {
       const text = await file.text();
       const imported = await client.request("/v1/models", {
@@ -61,8 +81,12 @@ export default function Amorcage({
         headers: { "Content-Type": "application/pnml+xml" },
         body: text,
       });
-      if (imported.status !== 201) throw new Error(t("amorcage.importRefused", { status: imported.status }));
+      // 201 = new model, 200 = idempotent re-import of a known model (P03).
+      if (imported.status !== 201 && imported.status !== 200) {
+        throw new Error(t("amorcage.importRefused", { status: imported.status }));
+      }
       const model = (await imported.json()) as { id: string };
+      setImportedModel({ id: model.id, known: imported.status === 200 });
       const created = await client.postJson<{ session_id: string }>("/v1/sessions", {
         model_id: model.id,
       });
@@ -86,29 +110,54 @@ export default function Amorcage({
     <section id="step-amorcage" hidden={hidden} aria-labelledby="h-amorcage">
       <h2 id="h-amorcage">{t("amorcage.title")}</h2>
       <p>{t("amorcage.intro")}</p>
-      <input
-        id="pnml-file"
-        type="file"
-        accept=".pnml,.xml"
-        aria-label={t("amorcage.fileAria")}
-        className="text-sm"
-      />
-      <button
-        id="import-model"
-        type="button"
-        className="btn btn-primary"
-        disabled={importing}
-        onClick={() => {
-          const input = document.getElementById("pnml-file") as HTMLInputElement | null;
-          const file = input?.files?.[0];
-          if (!file) return;
-          importModelAndCreateSession(file).catch((importError: unknown) =>
-            setError(importError instanceof Error ? importError.message : String(importError)),
-          );
+      <div
+        className="import-zone"
+        onDragOver={(event) => event.preventDefault()}
+        onDrop={(event) => {
+          event.preventDefault();
+          const file = event.dataTransfer.files[0];
+          if (file !== undefined) setSelectedFile(file);
         }}
       >
-        {t("amorcage.import")}
-      </button>
+        <label htmlFor="pnml-file" className="import-zone-label">
+          {t("amorcage.dropZone")}
+        </label>
+        <input
+          id="pnml-file"
+          type="file"
+          accept=".pnml,.xml"
+          aria-label={t("amorcage.fileAria")}
+          className="text-sm"
+          onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
+        />
+        {selectedFile !== null ? (
+          <p className="import-file-info">
+            {t("amorcage.fileSelected", {
+              name: selectedFile.name,
+              size: formatSize(selectedFile.size, t("amorcage.sizeUnit")),
+            })}
+          </p>
+        ) : null}
+        <button
+          id="import-model"
+          type="button"
+          className="btn btn-primary"
+          disabled={importing}
+          onClick={() => {
+            const input = document.getElementById("pnml-file") as HTMLInputElement | null;
+            const file = selectedFile ?? input?.files?.[0];
+            if (!file) {
+              setError(t("amorcage.noFile"));
+              return;
+            }
+            importModelAndCreateSession(file).catch((importError: unknown) =>
+              setError(importError instanceof Error ? importError.message : String(importError)),
+            );
+          }}
+        >
+          {t("amorcage.import")}
+        </button>
+      </div>
       <div id="profile" aria-live="polite">
         {/* Typed messages (issue #162): server errors verbatim in an alert,
             loading and confirmations as status - never translated. */}
@@ -125,6 +174,13 @@ export default function Amorcage({
         {importing ? (
           <p className="message message-info" role="status">
             {t("amorcage.importing")}
+          </p>
+        ) : null}
+        {importedModel !== null ? (
+          <p className="message message-ok" role="status">
+            {importedModel.known
+              ? t("amorcage.modelKnown", { id: importedModel.id })
+              : t("amorcage.modelImported", { id: importedModel.id })}
           </p>
         ) : null}
         {createdId !== null ? (

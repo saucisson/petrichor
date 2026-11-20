@@ -23,17 +23,24 @@
     }
   },
   "amorcage": {
+    "fileAria": "PNML file",
+    "dropZone": "Drop a PNML file here, or click to browse",
+    "fileSelected": "Selected file: {{name}} ({{size}})",
+    "sizeUnit": "B",
+    "noFile": "No file selected.",
+    "badExtension": "Extension refused: only .pnml and .xml are accepted.",
+    "import": "Import model and create session",
+    "importing": "Uploading model…",
+    "modelImported": "Model imported: {{id}}.",
+    "modelKnown": "Model already known (idempotent import): {{id}}.",
+    "sessionCreated": "Session created: {{id}}.",
+    "importRefused": "Model import refused: {{status}}",
     "title": "Setup",
     "intro": "Import a PNML model, create a session, arbitrate the proposed semantic profile.",
-    "fileAria": "PNML file",
-    "import": "Import model and create session",
-    "importRefused": "Model import refused: {{status}}",
     "noProfile": "No profile proposed for this session.",
     "roleProposed": "proposed role: {{role}} (conf {{conf}})",
     "accept": "Accept",
-    "refuse": "Refuse",
-    "importing": "Uploading model…",
-    "sessionCreated": "Session created: {{id}}."
+    "refuse": "Refuse"
   },
   "questions": {
     "title": "Static questions",
