@@ -31,11 +31,15 @@ automatically.
   loopback port). The site config lives in `deploy/nginx/` and is installed
   alongside the existing `layered-data.linard.fr` config, never over it.
   TLS is terminated by the proxy with a Let's Encrypt certificate.
-- **CI**: `.github/workflows/deploy.yml` triggers on push to `daily` and
-  runs `deploy/deploy.sh` on the VPS over SSH, using the repository secrets
-  `SSH_PRIVATE_KEY` and `VPS_HOST` (user `ubuntu`, overridable via the
-  `VPS_USER` variable). Secrets are never committed (ADR-0008); the API key
-  lives only in the git-ignored `.env` on the VPS.
+- **CI**: `.github/workflows/deploy.yml` triggers on push to `daily` (and
+  manually via `workflow_dispatch`) and runs `deploy/deploy.sh` on the VPS
+  over SSH as the dedicated `deploy` user — the same convention as
+  `layered-data` (`/srv/petrichor` owned by `deploy`, public key in
+  `/home/deploy/.ssh/authorized_keys`, `deploy` in the `docker` group) —
+  using the repository secrets `SSH_PRIVATE_KEY` and `VPS_HOST` (user
+  overridable via the `VPS_USER` variable, default `deploy`). Secrets are
+  never committed (ADR-0008); the API key lives only in the git-ignored
+  `.env` on the VPS.
 
 ## Consequences
 
