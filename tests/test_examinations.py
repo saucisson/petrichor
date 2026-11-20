@@ -30,12 +30,15 @@ from petrichor.examinations import (
 )
 
 ALL_FAMILIES: tuple[CheckFamilyName, ...] = tuple(FAMILY_PATTERNS.keys())
-ALL_KINDS = tuple(kind for kinds in FAMILY_PATTERNS.values() for kind in kinds)
+# Sorted: FAMILY_PATTERNS values are frozensets, whose iteration order varies
+# with the process hash seed - under pytest-xdist each worker must collect
+# the identical test list, in the identical order.
+ALL_KINDS = tuple(sorted(kind for kinds in FAMILY_PATTERNS.values() for kind in kinds))
 LIVENESS_RECOVERY_FAMILIES: tuple[CheckFamilyName, ...] = ("liveness", "recovery")
 LIVENESS_RECOVERY_KINDS = tuple(
-    kind for family in LIVENESS_RECOVERY_FAMILIES for kind in FAMILY_PATTERNS[family]
+    sorted(kind for family in LIVENESS_RECOVERY_FAMILIES for kind in FAMILY_PATTERNS[family])
 )
-SAFETY_KINDS = tuple(FAMILY_PATTERNS["safety"])
+SAFETY_KINDS = tuple(sorted(FAMILY_PATTERNS["safety"]))
 ENGINES: tuple[EngineDialect, ...] = ("verifypn", "its-tools", "smpt")
 INVARIANT_FORMULA = "AG (fork_1 <= 1)"
 
