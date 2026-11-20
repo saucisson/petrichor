@@ -11,6 +11,8 @@ name: deploy
 on:
   push:
     branches: [daily]
+  # Manual re-run (e.g. after the SSH_PRIVATE_KEY / VPS_HOST secrets are set).
+  workflow_dispatch:
 
 permissions:
   contents: read
