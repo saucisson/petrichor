@@ -1,0 +1,115 @@
+{
+  "version": 1,
+  "user_agent": "petrichor-catalog/1.0 (https://petrichor.linard.fr)",
+  "timeout_seconds": 30,
+  "max_archive_bytes": 104857600,
+  "cache": {
+    "directory": ".petrichor/catalog-cache",
+    "quota_bytes": 536870912,
+    "ttl_seconds": 86400
+  },
+  "sources": [
+    {
+      "kind": "metadata",
+      "name": "pnrepository-mcc",
+      "base_url": "https://pnrepository.lip6.fr/mcc/",
+      "edition": null
+    },
+    {
+      "kind": "edition",
+      "name": "mcc-2026",
+      "base_url": "https://mcc.lip6.fr/2026/",
+      "edition": "2026"
+    },
+    {
+      "kind": "edition",
+      "name": "mcc-2025",
+      "base_url": "https://mcc.lip6.fr/2025/",
+      "edition": "2025"
+    },
+    {
+      "kind": "edition",
+      "name": "mcc-2024",
+      "base_url": "https://mcc.lip6.fr/2024/",
+      "edition": "2024"
+    },
+    {
+      "kind": "edition",
+      "name": "mcc-2023",
+      "base_url": "https://mcc.lip6.fr/2023/",
+      "edition": "2023"
+    },
+    {
+      "kind": "edition",
+      "name": "mcc-2022",
+      "base_url": "https://mcc.lip6.fr/2022/",
+      "edition": "2022"
+    },
+    {
+      "kind": "edition",
+      "name": "mcc-2021",
+      "base_url": "https://mcc.lip6.fr/2021/",
+      "edition": "2021"
+    },
+    {
+      "kind": "static-index",
+      "name": "pnmcc-2026",
+      "base_url": "https://yanntm.github.io/pnmcc-models-2026/",
+      "edition": "2026"
+    },
+    {
+      "kind": "static-index",
+      "name": "pnmcc-2025",
+      "base_url": "https://yanntm.github.io/pnmcc-models-2025/",
+      "edition": "2025"
+    },
+    {
+      "kind": "static-index",
+      "name": "pnmcc-2024",
+      "base_url": "https://yanntm.github.io/pnmcc-models-2024/",
+      "edition": "2024"
+    },
+    {
+      "kind": "static-index",
+      "name": "pnmcc-2023",
+      "base_url": "https://yanntm.github.io/pnmcc-models-2023/",
+      "edition": "2023"
+    },
+    {
+      "kind": "static-index",
+      "name": "pnmcc-2022",
+      "base_url": "https://yanntm.github.io/pnmcc-models-2022/",
+      "edition": "2022"
+    },
+    {
+      "kind": "static-index",
+      "name": "pnmcc-2021",
+      "base_url": "https://yanntm.github.io/pnmcc-models-2021/",
+      "edition": "2021"
+    },
+    {
+      "kind": "static-index",
+      "name": "pnmcc-2020",
+      "base_url": "https://yanntm.github.io/pnmcc-models-2020/",
+      "edition": "2020"
+    },
+    {
+      "kind": "static-index",
+      "name": "pnmcc-2019",
+      "base_url": "https://yanntm.github.io/pnmcc-models-2019/",
+      "edition": "2019"
+    },
+    {
+      "kind": "static-index",
+      "name": "pnmcc-2018",
+      "base_url": "https://yanntm.github.io/pnmcc-models-2018/",
+      "edition": "2018"
+    },
+    {
+      "kind": "static-index",
+      "name": "pnmcc-2017",
+      "base_url": "https://yanntm.github.io/pnmcc-models-2017/",
+      "edition": "2017"
+    }
+  ]
+}
