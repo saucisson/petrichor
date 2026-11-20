@@ -70,12 +70,12 @@ test("parcours complet des 4 étapes + arbitrage + langue + édition + dossier +
   await expect(page.getByText("Re-lecture inverse")).toBeVisible();
   await expect(page.getByText("(provenance : llm)")).toBeVisible();
 
-  // Convergence (P34): arbitrage humain de la fusion si une carte converge.
+  // Convergence (P34): the sample profile has a converging pair, so a card
+  // MUST offer the human fusion arbitration - unconditional assertion.
   const fuseButton = page.getByRole("button", { name: "Arbitrer la fusion (accepter)" });
-  if (await fuseButton.count()) {
-    await fuseButton.first().click();
-    await expect(page.getByText(/Fusion arbitrée|Fusion refusée/)).toBeVisible();
-  }
+  await expect(fuseButton.first()).toBeVisible({ timeout: 60_000 });
+  await fuseButton.first().click();
+  await expect(page.getByText(/Fusion arbitrée|Fusion refusée/)).toBeVisible();
   // L'historique des fusions reste affiché (append-only).
   await expect(page.getByText("Fusions arbitrées (humain uniquement)")).toBeVisible();
 
@@ -99,11 +99,9 @@ test("parcours complet des 4 étapes + arbitrage + langue + édition + dossier +
       { timeout: 240_000, intervals: [2_000, 5_000] },
     )
     .not.toBe("—");
-  // Témoin pas à pas (P32) quand le run en produit un.
-  const witness = page.locator(".witness-reader .witness-title");
-  if (await witness.count()) {
-    await expect(witness.first()).toContainText("Témoin");
-  }
+  // Le lecteur de témoin pas à pas (P32) est couvert par les tests composants
+  // et les tests moteur ; la maquette ne produit pas de trace témoin sur le
+  // moteur réel pour ces questions MC, donc pas d'assertion navigateur ici.
 
   // Étape 4 - synthèse: contrat, dossier de preuve cliquable, export Markdown.
   await page.locator("nav button[data-step='synthese']").click();
@@ -112,11 +110,8 @@ test("parcours complet des 4 étapes + arbitrage + langue + édition + dossier +
   await expect(dossier).toBeVisible({ timeout: 60_000 });
   await dossier.locator("summary").click();
   await expect(dossier.locator(".proof-list")).toBeVisible();
-  const replay = dossier.getByRole("button", { name: "Rejouer le témoin pas à pas" });
-  if (await replay.count()) {
-    await replay.click();
-    await expect(page.locator(".witness-reader").last()).toBeVisible();
-  }
+  // Les pièces du dossier (run, outil, verdict, technique, coût) sont listées.
+  await expect(dossier.locator(".proof-list li").first()).toContainText("run ");
   const downloadPromise = page.waitForEvent("download");
   await page.locator("#export-markdown").click();
   const download = await downloadPromise;

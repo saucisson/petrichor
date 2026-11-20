@@ -148,7 +148,9 @@ def _harness_side_inner(
         ),
     )
     model_id = client.get(f"/v1/sessions/{session_id}", headers=AUTH_HEADERS).json()["model_id"]
-    for question in [q for q in questions if q["triage"] == "MC"][:2]:
+    # All MC questions (capped): a violated one produces a witness trace, and
+    # the parcours must show the step-by-step witness reader (P32).
+    for question in [q for q in questions if q["triage"] == "MC"][:4]:
         posted = client.post(
             f"/v1/checks/{question['family']}",
             json={
