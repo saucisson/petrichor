@@ -45,7 +45,16 @@
       "controversial": "Clause controversée — remontée à l'ingénieur, jamais tranchée ici.",
       "notVerified": "Non vérifiée.",
       "proofLine": "{{tool}} : verdict {{verdict}}"
-    }
+    },
+    "edit": "Éditer la formule",
+    "editLabel": "Nouvelle formule",
+    "editSave": "Enregistrer",
+    "editCancel": "Annuler",
+    "editDone": "Formule mise à jour — journalisée (append-only).",
+    "editError": "Édition refusée ({{status}}) : {{detail}}",
+    "readingTitle": "Re-lecture inverse",
+    "readingNone": "Aucune re-lecture disponible pour cette formule.",
+    "readingNotSays": "Ne dit pas : {{notSays}}"
   },
   "verifications": {
     "title": "Vérifications MC",

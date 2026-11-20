@@ -35,6 +35,34 @@ export interface JournalEntry {
   detail?: Record<string, unknown> | null;
 }
 
+// P37 (issue #37): one append-only formula edit record, as returned by
+// POST /v1/sessions/{sid}/questions/{qid}/formula.
+export interface FormulaEditRecord {
+  session_id: string;
+  question_id: string;
+  old_formula: string;
+  new_formula: string;
+  timestamp: number;
+}
+
+// The inverse reading of a formula: an LLM proposition labeled
+// provenance: llm - never a verdict. `degraded` readings carry a server
+// note instead of the reading fields.
+export interface FormulaReading {
+  reading?: string;
+  not_says?: string;
+  pattern?: string;
+  cross?: string;
+  provenance?: string;
+  degraded?: boolean;
+  note?: string;
+}
+
+export interface FormulaEditResponse {
+  record: FormulaEditRecord;
+  reading: FormulaReading | null;
+}
+
 export interface Contract {
   questions: Question[];
   journal: JournalEntry[];
