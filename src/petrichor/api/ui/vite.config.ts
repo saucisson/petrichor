@@ -14,5 +14,8 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: ["./tests/setup.ts"],
+    // Component tests only: e2e/*.spec.ts are Playwright browser tests
+    // (issue #128), run by `make ui-e2e`, never by vitest.
+    include: ["tests/**/*.test.{ts,tsx}"],
   },
 });

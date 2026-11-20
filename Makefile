@@ -34,8 +34,8 @@ typecheck: ## Run the reference type checker (mypy strict, ADR-0006).
 imports: ## Verify the onion layer contract (import-linter, ADR-0002).
 	$(UV) run lint-imports
 
-test: ## Run the full test suite with the coverage floor (ADR-0007).
-	$(UV) run pytest
+test: ## Run the full test suite with the coverage floor (ADR-0007). The @ui browser e2e is excluded here: it runs in its own CI job and via `make ui-e2e` (issue #128).
+	$(UV) run pytest -m "not ui"
 
 check: lint typecheck imports test ui-gates ## Full quality gate: run before reporting work.
 
@@ -44,6 +44,12 @@ ui-gates: ## Frontend gates of the UI v2 (ADR-0101): ESLint, tsc --noEmit, vites
 
 ui-build: ## Build the UI v2 into src/petrichor/api/static (served under /ui/, ADR-0101).
 	cd $(UI_DIR) && npm run build
+
+ui-e2e-deps: ## Install the UI dependencies and the Playwright Chromium browser (for the @ui e2e, issue #128). Needs node on PATH (.node-version).
+	cd $(UI_DIR) && { [ -d node_modules ] || npm ci --silent; } && npx playwright install --with-deps chromium --quiet
+
+ui-e2e: ui-e2e-deps ## E2E navigateur de la voie UI (Playwright, marqueur @ui, issue #128): real browser against the real API on the real compose engines. Needs node on PATH (.node-version) and docker.
+	$(UV) run pytest -m ui tests/test_ui_e2e.py
 
 security: ## Secret scan of the whole history (gitleaks, ADR-0008).
 	gitleaks git --no-banner --redact .
