@@ -193,6 +193,7 @@ markers = [
     "integration: exercises adapter boundaries through injected fakes (http, filesystem).",
     "property: hypothesis-based invariant tests (ADR-0012).",
     "engine: runs a driver inside its real docker compose container; a failure is a CI failure, never a skip (spec §19.4).",
+    "ui: drives the built UI in a real browser (Playwright) against the real API on the real compose engines; a failure is a CI failure, never a skip (spec §20.10, issue #128).",
 ]
 filterwarnings = ["error"]
 
