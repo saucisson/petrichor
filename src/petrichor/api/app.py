@@ -117,6 +117,7 @@ from petrichor.triage import (
 )
 from petrichor.url_import import (
     DownloadFailedError,
+    ImportUrl,
     PrivateNetworkError,
     UrlImportConfig,
     UrlNotAllowedError,
@@ -388,6 +389,12 @@ def _read_body(
             reason="invalid_content_length",
             detail="The Content-Length header is not an integer.",
         )
+    if length < 0:
+        return _problem(
+            status=HTTPStatus.BAD_REQUEST,
+            reason="invalid_content_length",
+            detail="The Content-Length header is negative.",
+        )
     if length > MAX_UPLOAD_BYTES:
         return _problem(
             status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
@@ -395,7 +402,8 @@ def _read_body(
             detail=f"The upload exceeds the quota of {MAX_UPLOAD_BYTES} bytes.",
         )
     stream = environ["wsgi.input"]
-    return stream.read(length) if length else b""
+    # Read at most quota+1 bytes: a lying Content-Length cannot bypass the quota.
+    return stream.read(min(length, MAX_UPLOAD_BYTES + 1)) if length else b""
 
 
 def _store_pnml_text(
@@ -450,7 +458,9 @@ def _candidates_payload(*, candidates: list[PnmlCandidate]) -> bytes:
                 f"The source contains {len(candidates)} PNML documents;"
                 " re-POST with the candidate query parameter to choose one."
             ),
-            "candidates": [candidate.model_dump(mode="json") for candidate in candidates],
+            "candidates": [
+                candidate.model_dump(mode="json", exclude={"content"}) for candidate in candidates
+            ],
         }
     ).encode("utf-8")
 
@@ -581,7 +591,7 @@ def _sniff_content_type(*, url: str, data: bytes) -> str:
 class ModelImportUrlBody(BaseModel):
     """The JSON body of POST /v1/models/import-url."""
 
-    url: str
+    url: ImportUrl
     candidate: str | None = None
 
 

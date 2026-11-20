@@ -21,6 +21,7 @@ from pydantic import SecretStr
 import petrichor.api.app as app_module
 import petrichor.url_import as url_import_module
 from petrichor.api import create_app
+from petrichor.api.app import _read_body
 from petrichor.api.settings import ApiSettings
 from petrichor.model_store import ModelStore
 from petrichor.run_store import RunStore
@@ -124,6 +125,7 @@ class TestArchiveUpload:
             "B-PT-2/model.pnml",
         }
         assert all(c["sha256"].startswith("sha256:") for c in body["candidates"])
+        assert all("content" not in c for c in body["candidates"])  # no PNML echoed back
         assert {c["formalism"] for c in body["candidates"]} == {"pt", "symmetric"}
         assert len(store) == 0  # nothing stored without an explicit choice
         response = post_archive(guarded, archive, "application/gzip", query="?candidate=nope")
@@ -312,3 +314,30 @@ class TestImportNarration:
         events = [log["event"] for log in logs]
         assert "api_model_candidates_listed" in events
         assert "api_model_stored" in events
+
+
+class TestReadBodyQuota:
+    """The upload quota cannot be bypassed by a negative or lying Content-Length."""
+
+    def _environ(self, *, content_length: str, payload: bytes) -> dict[str, object]:
+        return {"CONTENT_LENGTH": content_length, "wsgi.input": io.BytesIO(payload)}
+
+    def test_negative_content_length_is_a_typed_400(self) -> None:
+        result = _read_body(
+            environ=self._environ(content_length="-1", payload=b"x" * 10),
+            start_response=lambda *a, **k: None,
+        )
+        assert not isinstance(result, bytes)
+        assert result.reason == "invalid_content_length"
+        assert result.status.value == 400
+
+    def test_lying_content_length_is_capped_at_the_quota(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("petrichor.api.app.MAX_UPLOAD_BYTES", 10)
+        result = _read_body(
+            environ=self._environ(content_length="5", payload=b"x" * 1000),
+            start_response=lambda *a, **k: None,
+        )
+        assert isinstance(result, bytes)
+        assert len(result) == 5  # the declared length is honored and bounded by the quota

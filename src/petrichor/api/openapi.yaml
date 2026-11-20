@@ -206,6 +206,14 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+        "503":
+          description: URL import is not configured on this server (reason url_import_not_configured).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
   /models/{model_id}:
     get:
       summary: Read a model in its canonical form
