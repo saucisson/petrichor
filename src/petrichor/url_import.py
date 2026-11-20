@@ -14,8 +14,12 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from typing import IO, TYPE_CHECKING
 
 from pydantic import BaseModel, Field
+
+if TYPE_CHECKING:
+    from http.client import HTTPMessage
 
 DEFAULT_CONFIG_PATH = Path(__file__).parent / "url_import.json"
 
@@ -121,14 +125,14 @@ class _RevalidatingRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(
         self,
         req: urllib.request.Request,
-        fp: object,
+        fp: IO[bytes],
         code: int,
         msg: str,
-        headers: object,
+        headers: HTTPMessage,
         newurl: str,
     ) -> urllib.request.Request | None:
         validate_url(url=newurl, config=self._config)
-        return super().redirect_request(req, fp, code, msg, headers, newurl)  # type: ignore[arg-type]
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 def download(*, url: str, config: UrlImportConfig) -> bytes:
