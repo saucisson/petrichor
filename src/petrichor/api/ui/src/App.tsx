@@ -56,65 +56,87 @@ export default function App() {
     }
   };
 
+  // Guided stepper (issue #162): without an active session, every step but
+  // Amorçage is disabled and the reason is displayed next to the stepper.
+  const sessionActive = sessionId.trim() !== "";
+
   return (
     <>
       <header>
         <h1>{t("app.title")}</h1>
-        <label htmlFor="api-key">{t("header.apiKeyLabel")}</label>
-        <input
-          id="api-key"
-          type="password"
-          autoComplete="off"
-          aria-label={t("header.apiKeyAria")}
-          value={apiKey}
-          onChange={(event) => onApiKeyChange(event.target.value)}
-        />
-        <label htmlFor="session-id">{t("header.sessionLabel")}</label>
-        <input
-          id="session-id"
-          type="text"
-          autoComplete="off"
-          aria-label={t("header.sessionAria")}
-          value={sessionId}
-          onChange={(event) => setSessionId(event.target.value)}
-        />
-        <button
-          id="resume-session"
-          type="button"
-          className="btn btn-primary"
-          onClick={() => void resumeSession()}
-        >
-          {t("header.resume")}
-        </button>
-        <label htmlFor="language-select">{t("app.languageLabel")}</label>
-        <select
-          id="language-select"
-          value={i18n.language}
-          onChange={(event) => onLanguageChange(event.target.value as Language)}
-        >
-          {SUPPORTED_LANGUAGES.map((language) => (
-            <option key={language} value={language}>
-              {language === "fr" ? "Français" : "English"}
-            </option>
-          ))}
-        </select>
+        <div className="header-group">
+          <span className="header-group-label">{t("header.groupConnection")}</span>
+          <label htmlFor="api-key">{t("header.apiKeyLabel")}</label>
+          <input
+            id="api-key"
+            type="password"
+            autoComplete="off"
+            aria-label={t("header.apiKeyAria")}
+            value={apiKey}
+            onChange={(event) => onApiKeyChange(event.target.value)}
+          />
+        </div>
+        <div className="header-group">
+          <span className="header-group-label">{t("header.groupSession")}</span>
+          <label htmlFor="session-id">{t("header.sessionLabel")}</label>
+          <input
+            id="session-id"
+            type="text"
+            autoComplete="off"
+            aria-label={t("header.sessionAria")}
+            value={sessionId}
+            onChange={(event) => setSessionId(event.target.value)}
+          />
+          <button
+            id="resume-session"
+            type="button"
+            className="btn btn-primary"
+            onClick={() => void resumeSession()}
+          >
+            {t("header.resume")}
+          </button>
+        </div>
+        <div className="header-group">
+          <span className="header-group-label">{t("app.languageLabel")}</span>
+          <label htmlFor="language-select">{t("app.languageLabel")}</label>
+          <select
+            id="language-select"
+            value={i18n.language}
+            onChange={(event) => onLanguageChange(event.target.value as Language)}
+          >
+            {SUPPORTED_LANGUAGES.map((language) => (
+              <option key={language} value={language}>
+                {language === "fr" ? "Français" : "English"}
+              </option>
+            ))}
+          </select>
+        </div>
       </header>
       <nav aria-label={t("nav.aria")}>
         <ol id="steps">
-          {STEP_IDS.map((id) => (
-            <li key={id}>
-              <button
-                type="button"
-                className="btn"
-                data-step={id}
-                aria-current={step === id ? "step" : undefined}
-                onClick={() => setStep(id)}
-              >
-                {t("nav.steps." + id)}
-              </button>
-            </li>
-          ))}
+          {STEP_IDS.map((id) => {
+            const locked = id !== "amorcage" && !sessionActive;
+            return (
+              <li key={id}>
+                <button
+                  type="button"
+                  className="btn"
+                  data-step={id}
+                  aria-current={step === id ? "step" : undefined}
+                  disabled={locked}
+                  onClick={() => setStep(id)}
+                >
+                  {t("nav.steps." + id)}
+                </button>
+              </li>
+            );
+          })}
         </ol>
+        {!sessionActive ? (
+          <p id="nav-hint" className="nav-hint">
+            {t("nav.noSession")}
+          </p>
+        ) : null}
       </nav>
       <main className="mt-4">
         <Amorcage

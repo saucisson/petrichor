@@ -56,6 +56,40 @@
     @apply flex flex-wrap items-center gap-2;
   }
 
+  /* Header groups (issue #162): connection / session / language, each with
+     a visible label - the primary action (resume) is a btn-primary. */
+  .header-group {
+    @apply flex items-center gap-2 rounded-card border border-line bg-surface px-2 py-1;
+  }
+
+  .header-group-label {
+    @apply text-xs font-semibold tracking-wide text-muted uppercase;
+  }
+
+  /* Guided stepper hint (issue #162): the reason the locked steps are
+     disabled, displayed next to the stepper. */
+  .nav-hint {
+    @apply mt-1 text-sm text-muted;
+  }
+
+  /* Typed messages (issue #162): error = alert in error color, info/ok =
+     status. Server-produced texts stay verbatim inside the alert. */
+  .message {
+    @apply my-1 text-sm;
+  }
+
+  .message-error {
+    @apply font-semibold text-error;
+  }
+
+  .message-info {
+    @apply text-muted;
+  }
+
+  .message-ok {
+    @apply font-semibold text-primary;
+  }
+
   #language-select {
     @apply max-w-32;
   }
