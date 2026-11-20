@@ -165,3 +165,61 @@ export interface Witness {
   steps: WitnessStep[];
   narrations?: Narration[];
 }
+
+// P71 (issue #166, spec §21): catalog listing and the three import paths.
+export interface CatalogEntry {
+  name: string;
+  family: string;
+  formalism: "PT" | "COL" | null;
+  edition: string | null;
+  source: string;
+  size_bucket: "small" | "medium" | "large" | "huge" | null;
+  url: string;
+  sha256: string | null;
+}
+
+export interface CatalogFacets {
+  family: Record<string, number>;
+  formalism: Record<string, number>;
+  edition: Record<string, number>;
+  source: Record<string, number>;
+  size: Record<string, number>;
+}
+
+export interface CatalogPage {
+  items: CatalogEntry[];
+  total: number;
+  limit: number;
+  offset: number;
+  facets: CatalogFacets;
+}
+
+export interface PnmlCandidate {
+  name: string;
+  size_bytes: number;
+  sha256: string;
+  formalism: "pt" | "symmetric";
+}
+
+export interface CandidateList {
+  reason: "multiple_candidates";
+  detail: string;
+  candidates: PnmlCandidate[];
+}
+
+// Provenance recorded server-side in model.metadata.provenance (P69/P70).
+export interface ModelProvenance {
+  source: string;
+  url?: string;
+  candidate?: string;
+  sha256?: string;
+  archive_sha256?: string;
+  catalog?: string;
+  edition?: string | null;
+  name?: string;
+}
+
+export interface ImportedModel {
+  id: string;
+  metadata?: { provenance?: ModelProvenance };
+}
