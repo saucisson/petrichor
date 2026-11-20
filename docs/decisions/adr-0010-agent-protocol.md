@@ -142,3 +142,22 @@ the reviewer's role of seeking counterexamples against every recorded decision.
 256 KiB precondition limit (observed via the bundle sizes journaled per
 attempt, P62), the one-line-index option is re-evaluated with the day-report
 numbers — not before.
+## Appendix — 2026-11-20 : frontend machine artifacts join the deterministic exclusions
+
+**Status of this appendix**: accepted by the human on 2026-11-20 (session
+questionnaire, escalation list: constitutional file) — the three pathspecs below
+extend the 2026-11-19 appendix and are now part of `MACHINE_ARTIFACT_EXCLUSIONS`
+in `scripts/review.py`:
+
+- `**/node_modules/**` — audité par `make ui-gates` (constat PR #145 : 6855
+  fichiers `node_modules` mergés par accident, ~64 Mo de diff, le garde-fou P59
+  a refusé le bundle)
+- `src/petrichor/api/static/assets/**` — audité par `make ui-build && make ui-gates`
+  (constat PR #148 : les assets minifiés du build SPA, ~400 Ko de diff illisible)
+- `**/package-lock.json` — audité par `npm ci` (CI `ui-gates`) : le lockfile est
+  régénéré de façon déterministe, le build reproductible est contrôlé par les gates
+
+Même doctrine que l'appendice précédent, inchangée : chaque chemin exclu est
+remplacé dans le bundle par une ligne de digest (chemin, taille, sha256, contrôle),
+et l'isolation de contexte est préservée — le bundle reste tout le contexte du
+reviewer, débarrassé du bruit que les gates CI contrôlent mieux que le reviewer.
