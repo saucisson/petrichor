@@ -66,6 +66,32 @@ export interface FormulaEditResponse {
 export interface Contract {
   questions: Question[];
   journal: JournalEntry[];
+  proof_dossiers?: ProofDossier[];
+}
+
+// P38 (issue #38): one clickable proof dossier of the contract - a clause
+// with its runs (verdict per tool, technique, cost, witness id) and, on
+// controversy, the two camps exported as-is (spec §17.4).
+export interface ContractProof {
+  run_id: string;
+  link: string;
+  status: string;
+  triage: string;
+  verdict: string | null;
+  tool_version: string;
+  technique: string | null;
+  cost_tool_seconds: number | null;
+  witness_id: string | null;
+}
+
+export interface ProofDossier {
+  question_id: string;
+  formula: string;
+  status: string;
+  cross_status: string;
+  verified_by: number;
+  proofs: ContractProof[];
+  camps: string[];
 }
 
 export interface Budget {

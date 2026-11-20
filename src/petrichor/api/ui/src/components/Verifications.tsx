@@ -15,7 +15,7 @@ interface VerificationsProps {
    The fired transition of each step is highlighted. Witness ids, kinds,
    markings, transitions, narrations and provenance labels are server data:
    rendered verbatim, never translated (spec §9 v1.3). */
-function WitnessReader({ client, runId }: { client: ApiClient; runId: string }) {
+export function WitnessReader({ client, runId }: { client: ApiClient; runId: string }) {
   const { t } = useTranslation();
   const [witness, setWitness] = useState<Witness | null>(null);
   const [unavailable, setUnavailable] = useState<number | null>(null);
