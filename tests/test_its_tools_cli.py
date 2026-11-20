@@ -92,8 +92,8 @@ def _fake_record(tmp_path: Path) -> tuple[list[str], str, str]:
     """What the fake binary saw: (argv, laid-out model, examination property)."""
     raw = (tmp_path / "fake-args.txt").read_text(encoding="utf-8")
     argv, _, rest = raw.partition("=== model ===\n")
-    model, _, prop = rest.partition("=== property ===\n")
-    return argv.splitlines(), model.strip("\n"), prop
+    model, _, property_xml = rest.partition("=== property ===\n")
+    return argv.splitlines(), model.strip("\n"), property_xml
 
 
 # --- Translation: classification and DAG emission ---
@@ -329,6 +329,20 @@ class TestRunReducer:
         assert run(argv, home=home) == 0
         argv_upstream, _, _ = _fake_record(tmp_path)
         assert argv_upstream[-2:] == ["--reduce", "SI_LTL"]
+
+    def test_crashed_reducer_is_a_failure_not_a_maybe(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A non-zero upstream exit in reducer mode: exit code through, no MAYBE."""
+        monkeypatch.setenv("ITS_FAKE_MODE", "fail")
+        monkeypatch.setenv("ITS_FAKE_ARGS", str(tmp_path / "fake-args.txt"))
+        home = _fake_home(tmp_path)
+        argv = self._reducer_argv(tmp_path, "AG (wait_1 <= 1)")
+        assert run(argv, home=home) == 3
+        out = capsys.readouterr().out
+        assert MAYBE_LINE not in out
+        assert not (tmp_path / "model.sr.pnml").exists()
+        assert not (tmp_path / "query.sr.props").exists()
 
 
 @pytest.mark.parametrize(

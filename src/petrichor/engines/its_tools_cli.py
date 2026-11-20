@@ -102,11 +102,15 @@ class Arith:
     constant: int = 0
 
 
+type ComparisonOp = Literal["<", "<=", ">", ">=", "==", "!=", "="]
+"""The comparison operators of the dialect; ``=`` is an alias of ``==``."""
+
+
 @dataclass(frozen=True)
 class Cmp:
     """A comparison of two arithmetic sides."""
 
-    op: Literal["<", "<=", ">", ">=", "==", "!="]
+    op: ComparisonOp
     left: Arith
     right: Arith
 
@@ -137,6 +141,8 @@ class Temporal:
     child: Node | None = None
     before: Node | None = None
 
+
+_COMPARISON_OPS: tuple[ComparisonOp, ...] = ("<=", ">=", "==", "!=", "<", ">", "=")
 
 COMPARISON_TAG = {
     "<": "integer-lt",
@@ -212,6 +218,14 @@ class _Parser:
             return word
         return None
 
+    def accept_comparison_op(self) -> ComparisonOp | None:
+        """Consume the next token when it is one of the comparison operators."""
+        token = self.peek()
+        if token is None or token[0] not in ("op1", "op2") or token[1] not in _COMPARISON_OPS:
+            return None
+        self.index += 1
+        return token[1]
+
     def parse_formula(self) -> Node:
         """The root formula, rejecting any trailing token."""
         node = self.parse_implication()
@@ -232,9 +246,11 @@ class _Parser:
         """or, left associative, flattened."""
         node = self.parse_conjunction()
         while self.accept_op("or", "||"):
-            rhs = self.parse_conjunction()
+            right_side = self.parse_conjunction()
             children = (
-                (*node.children, rhs) if isinstance(node, Bool) and node.op == "or" else (node, rhs)
+                (*node.children, right_side)
+                if isinstance(node, Bool) and node.op == "or"
+                else (node, right_side)
             )
             node = Bool("or", children)
         return node
@@ -243,11 +259,11 @@ class _Parser:
         """and, left associative, flattened."""
         node = self.parse_negation()
         while self.accept_op("and", "&&"):
-            rhs = self.parse_negation()
+            right_side = self.parse_negation()
             children = (
-                (*node.children, rhs)
+                (*node.children, right_side)
                 if isinstance(node, Bool) and node.op == "and"
-                else (node, rhs)
+                else (node, right_side)
             )
             node = Bool("and", children)
         return node
@@ -324,13 +340,13 @@ class _Parser:
     def parse_comparison(self) -> Node:
         """Comparison ``left <op> right`` over token counts and constants."""
         left = self.parse_arith()
-        op = self.accept_op("<=", ">=", "==", "!=", "<", ">", "=")
+        op = self.accept_comparison_op()
         if op is None:
             raise FormulaError(
                 "a bare token count is not a formula: comparisons need one of <= >= == != < >."
             )
         right = self.parse_arith()
-        return Cmp(op, left, right)  # type: ignore[arg-type]
+        return Cmp(op, left, right)
 
     def parse_arith(self) -> Arith:
         """A sum of token counts, or one constant; no mixed sides."""
@@ -691,7 +707,9 @@ def run(argv: list[str] | None = None, *, home: Path | None = None) -> int:
         sys.stdout.flush()
         sys.stderr.write(completed.stderr)
         sys.stderr.flush()
-        if reducer:
+        if reducer and completed.returncode == 0:
+            # A crashed upstream (non-zero exit) is a failure, not an undecided
+            # reduction: no MAYBE line, no mirrored artifacts.
             _mirror_reducer_artifacts(
                 folder=folder, examination=examination, query=query_path, stdout=completed.stdout
             )
