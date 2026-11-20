@@ -42,6 +42,7 @@ function ProofDossierCard({
                 {" "}— {t("synthese.dossiers.proof.witness", { witnessId: proof.witness_id })}
                 <button
                   type="button"
+                  className="btn"
                   onClick={() =>
                     setReplayRunId(replayRunId === proof.run_id ? null : proof.run_id)
                   }
@@ -130,7 +131,7 @@ export default function Synthese({ hidden, client, sessionId, reloadToken }: Syn
     <section id="step-synthese" hidden={hidden} aria-labelledby="h-synthese">
       <h2 id="h-synthese">{t("synthese.title")}</h2>
       <p>{t("synthese.intro")}</p>
-      <button id="export-markdown" type="button" onClick={downloadMarkdown}>
+      <button id="export-markdown" type="button" className="btn btn-primary" onClick={downloadMarkdown}>
         {t("synthese.export")}
       </button>
       <pre id="contract-preview" aria-live="polite">

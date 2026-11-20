@@ -121,7 +121,7 @@ function FormulaEditor({
         value={draft}
         onChange={(event) => setDraft(event.target.value)}
       />
-      <button type="button" disabled={busy} onClick={() => void save()}>
+      <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void save()}>
         {t("questions.editSave")}
       </button>
       {error !== null ? <p className="edit-error">{error}</p> : null}
@@ -250,10 +250,14 @@ export default function Questions({ hidden, client, sessionId, reloadToken }: Qu
             !refusedIds.has(question.question_id) ? (
               <div className="convergence hint">
                 <p>{t("questions.convergenceHint", { hint: question.convergence_hint })}</p>
-                <button type="button" onClick={() => void fuse(question)}>
+                <button type="button" className="btn" onClick={() => void fuse(question)}>
                   {t("questions.fuse")}
                 </button>
-                <button type="button" onClick={() => refuseFusion(question.question_id)}>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => refuseFusion(question.question_id)}
+                >
                   {t("questions.refuseFusion")}
                 </button>
               </div>
@@ -263,6 +267,7 @@ export default function Questions({ hidden, client, sessionId, reloadToken }: Qu
                 <button
                   key={decision.id}
                   type="button"
+                  className="btn"
                   onClick={() => void decide(question.question_id, decision.id)}
                 >
                   {t("questions.decisions." + decision.labelKey)}
@@ -270,6 +275,7 @@ export default function Questions({ hidden, client, sessionId, reloadToken }: Qu
               ))}
               <button
                 type="button"
+                className="btn"
                 onClick={() =>
                   setEditingId(editingId === question.question_id ? null : question.question_id)
                 }
