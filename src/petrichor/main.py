@@ -33,6 +33,13 @@ from petrichor.profile import ProfileArbitrator
 from petrichor.question_edits import FormulaEditStore
 from petrichor.run_store import RunStore
 from petrichor.session_store import SessionStore
+from petrichor.url_import import (
+    DEFAULT_CONFIG_PATH as DEFAULT_URL_IMPORT_CONFIG_PATH,
+)
+from petrichor.url_import import (
+    UrlImportConfig,
+    load_url_import_config,
+)
 from petrichor.witness import WitnessStore
 
 DEFAULT_HOST = "127.0.0.1"
@@ -70,6 +77,7 @@ def build_server(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
     llm_provider: LLMProvider,
     edit_store: FormulaEditStore,
     catalog: CatalogService | None = None,
+    url_import: UrlImportConfig | None = None,
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
 ) -> WSGIServer:
@@ -87,6 +95,7 @@ def build_server(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
         llm_provider=llm_provider,
         edit_store=edit_store,
         catalog=catalog,
+        url_import=url_import,
     )
     return make_server(host, port, app)
 
@@ -132,6 +141,7 @@ def main() -> None:
     witness_store = WitnessStore(directory=Path(DEFAULT_WITNESSES_DIRECTORY))
     edit_store = FormulaEditStore(directory=Path(DEFAULT_FORMULA_EDITS_DIRECTORY))
     catalog_config = load_catalog_config(path=DEFAULT_CONFIG_PATH)
+    url_import_config = load_url_import_config(path=DEFAULT_URL_IMPORT_CONFIG_PATH)
     catalog = CatalogService(
         config=catalog_config, cache_directory=Path(DEFAULT_CATALOG_CACHE_DIRECTORY)
     )
@@ -148,6 +158,7 @@ def main() -> None:
         llm_provider=select_llm_provider(settings=settings),
         edit_store=edit_store,
         catalog=catalog,
+        url_import=url_import_config,
         host=host,
         port=port,
     )
