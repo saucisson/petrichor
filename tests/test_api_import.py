@@ -96,16 +96,26 @@ class TestArchiveUpload:
         response = post_archive(client, archive, "application/zip")
         assert response.status_code == 201
 
-    def test_multi_pnml_lists_candidates_and_never_imports_silently(
-        self, client: httpx.Client
-    ) -> None:
+    def test_multi_pnml_lists_candidates_and_never_imports_silently(self) -> None:
+        # Guard test: the store is inspected, so an implementation that stored
+        # every candidate while still answering 409 would fail here.
+        store = ModelStore()
+        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+        app = create_app(
+            settings=settings,
+            store=store,
+            run_store=RunStore(),
+            runner=None,
+            url_import=UrlImportConfig(),
+        )
+        guarded = httpx.Client(transport=httpx.WSGITransport(app=app), base_url="http://testserver")
         archive = make_tgz(
             members={
                 "A-PT-1/model.pnml": PHILOSOPHES_PNML.encode(),
                 "B-PT-2/model.pnml": SYMMETRIC_PNML.encode(),
             }
         )
-        response = post_archive(client, archive, "application/gzip")
+        response = post_archive(guarded, archive, "application/gzip")
         assert response.status_code == 409
         body = response.json()
         assert body["reason"] == "multiple_candidates"
@@ -115,6 +125,10 @@ class TestArchiveUpload:
         }
         assert all(c["sha256"].startswith("sha256:") for c in body["candidates"])
         assert {c["formalism"] for c in body["candidates"]} == {"pt", "symmetric"}
+        assert len(store) == 0  # nothing stored without an explicit choice
+        response = post_archive(guarded, archive, "application/gzip", query="?candidate=nope")
+        assert response.status_code == 404
+        assert len(store) == 0  # an unknown candidate stores nothing either
 
     def test_explicit_candidate_choice_imports(self, client: httpx.Client) -> None:
         archive = make_tgz(

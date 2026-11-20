@@ -106,15 +106,6 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
-        "422":
-          description: >-
-            Unsafe archive (reason unsafe_archive, refused members listed),
-            no PNML in the archive (no_pnml), corrupt archive or invalid PNML
-            (invalid_archive / invalid_pnml).
-          content:
-            application/problem+json:
-              schema:
-                $ref: "#/components/schemas/Problem"
         "201":
           description: Model created; Location header points at the resource.
           headers:
@@ -137,7 +128,14 @@ paths:
         "415":
           $ref: "#/components/responses/UnsupportedMediaType"
         "422":
-          $ref: "#/components/responses/InvalidPnml"
+          description: >-
+            Invalid or unsupported PNML (InvalidPnml), unsafe archive
+            (reason unsafe_archive, refused members listed), no PNML in the
+            archive (no_pnml), corrupt archive (invalid_archive).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /models/import-url:
     post:
       summary: Import a PNML or an archive from an allowlisted https URL (spec §21.3, ADR-0008)
