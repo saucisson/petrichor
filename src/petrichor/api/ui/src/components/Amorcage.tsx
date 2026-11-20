@@ -76,10 +76,17 @@ export default function Amorcage({
     <section id="step-amorcage" hidden={hidden} aria-labelledby="h-amorcage">
       <h2 id="h-amorcage">{t("amorcage.title")}</h2>
       <p>{t("amorcage.intro")}</p>
-      <input id="pnml-file" type="file" accept=".pnml,.xml" aria-label={t("amorcage.fileAria")} />
+      <input
+        id="pnml-file"
+        type="file"
+        accept=".pnml,.xml"
+        aria-label={t("amorcage.fileAria")}
+        className="text-sm"
+      />
       <button
         id="import-model"
         type="button"
+        className="btn btn-primary"
         onClick={() => {
           const input = document.getElementById("pnml-file") as HTMLInputElement | null;
           const file = input?.files?.[0];
@@ -100,10 +107,10 @@ export default function Amorcage({
             <span>
               {entry.id} — {t("amorcage.roleProposed", { role: entry.role, conf: entry.conf })}
             </span>
-            <button type="button" onClick={() => void arbitrate(entry, true)}>
+            <button type="button" className="btn" onClick={() => void arbitrate(entry, true)}>
               {t("amorcage.accept")}
             </button>
-            <button type="button" onClick={() => void arbitrate(entry, false)}>
+            <button type="button" className="btn" onClick={() => void arbitrate(entry, false)}>
               {t("amorcage.refuse")}
             </button>
           </div>

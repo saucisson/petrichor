@@ -78,7 +78,12 @@ export default function App() {
           value={sessionId}
           onChange={(event) => setSessionId(event.target.value)}
         />
-        <button id="resume-session" type="button" onClick={() => void resumeSession()}>
+        <button
+          id="resume-session"
+          type="button"
+          className="btn btn-primary"
+          onClick={() => void resumeSession()}
+        >
           {t("header.resume")}
         </button>
         <label htmlFor="language-select">{t("app.languageLabel")}</label>
@@ -100,6 +105,7 @@ export default function App() {
             <li key={id}>
               <button
                 type="button"
+                className="btn"
                 data-step={id}
                 aria-current={step === id ? "step" : undefined}
                 onClick={() => setStep(id)}
@@ -110,7 +116,7 @@ export default function App() {
           ))}
         </ol>
       </nav>
-      <main>
+      <main className="mt-4">
         <Amorcage
           hidden={step !== "amorcage"}
           client={client}

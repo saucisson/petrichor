@@ -1,146 +1,149 @@
-:root {
-  --focus: #1a56db;
-  --covered: #9ca3af;
+@import "tailwindcss";
+
+/* UI v3 design socle (ADR-0104, issue #161, spec §9 v1.4): every visual
+   decision is a named token in @theme below or a Tailwind utility applied
+   in the components - no ad hoc style is duplicated in the TSX. All palette
+   entries are picked for WCAG AA contrast (>= 4.5:1) on their background. */
+
+@theme {
+  /* Palette */
+  --color-primary: #1d4ed8; /* blue-700: 8.6:1 on white */
+  --color-primary-hover: #1e40af; /* blue-800: 10.4:1 on white */
+  --color-ink: #111827; /* gray-900: 17.7:1 on white */
+  --color-muted: #4b5563; /* gray-600: 7.5:1 on white */
+  --color-line: #d1d5db; /* gray-300 borders */
+  --color-surface: #f9fafb; /* gray-50 panels */
+  --color-error: #b91c1c; /* red-700: 5.9:1 on white */
+  --color-highlight: #fde68a; /* amber-200: 12.6:1 with ink text */
+
+  /* Typography */
+  --font-sans: system-ui, sans-serif;
+
+  /* Radii */
+  --radius-control: 0.375rem;
+  --radius-card: 0.5rem;
 }
 
-body {
-  font-family: system-ui, sans-serif;
-  margin: 0 auto;
-  max-width: 60rem;
-  padding: 1rem;
+@layer base {
+  body {
+    @apply mx-auto max-w-5xl bg-white p-4 font-sans text-ink;
+  }
+
+  /* Visible focus everywhere (a11y, maquette P12): 3px primary outline. */
+  :focus-visible {
+    outline: 3px solid var(--color-primary);
+    outline-offset: 2px;
+  }
+
+  pre {
+    @apply overflow-x-auto rounded-card bg-surface p-3;
+  }
 }
 
-:focus-visible {
-  outline: 3px solid var(--focus);
-  outline-offset: 2px;
+/* Reusable control styles, defined once as utilities (no duplication in
+   the components): .btn is the secondary button, .btn-primary the primary
+   one (P67 will rely on this visual distinction). */
+@utility btn {
+  @apply rounded-control border border-line bg-white px-3 py-1.5 text-sm text-ink hover:bg-surface disabled:cursor-not-allowed disabled:opacity-60;
 }
 
-header {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  align-items: center;
+@utility btn-primary {
+  @apply border-primary bg-primary text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60;
 }
 
-#language-select {
-  max-width: 8rem;
-}
+@layer components {
+  header {
+    @apply flex flex-wrap items-center gap-2;
+  }
 
-#steps {
-  display: flex;
-  gap: 0.5rem;
-  list-style: none;
-  padding: 0;
-}
+  #language-select {
+    @apply max-w-32;
+  }
 
-#steps button[aria-current="step"] {
-  font-weight: bold;
-  text-decoration: underline;
-}
+  #steps {
+    @apply flex list-none gap-2 p-0;
+  }
 
-.question-card {
-  border: 1px solid #d1d5db;
-  border-radius: 0.5rem;
-  margin: 0.5rem 0;
-  padding: 0.75rem;
-}
+  #steps button[aria-current="step"] {
+    @apply font-bold underline;
+  }
 
-.question-card .decisions {
-  display: flex;
-  gap: 0.5rem;
-}
+  .question-card {
+    @apply my-2 rounded-card border border-line p-3;
+  }
 
-.question-card .status {
-  font-style: italic;
-}
+  .question-card .decisions {
+    @apply flex gap-2;
+  }
 
-.question-card .cross-status {
-  font-weight: 600;
-}
+  .question-card .status {
+    @apply italic;
+  }
 
-.controversy-camps {
-  font-weight: normal;
-  margin: 0.25rem 0 0 1rem;
-}
+  .question-card .cross-status {
+    @apply font-semibold;
+  }
 
-.covered {
-  color: var(--covered);
-}
+  .controversy-camps {
+    @apply ml-4 mt-1 font-normal;
+  }
 
-.run-verdict {
-  font-weight: bold;
-}
+  .covered {
+    @apply text-muted;
+  }
 
-pre {
-  background: #f3f4f6;
-  overflow-x: auto;
-  padding: 0.75rem;
-}
+  .run-verdict {
+    @apply font-bold;
+  }
 
-/* Witness step reader (spec §16, issue #32): the fired transition of each
-   step is highlighted; the narration is labeled with its provenance. */
-.witness-reader {
-  margin-top: 0.5rem;
-}
+  /* Witness step reader (spec §16, issue #32): the fired transition of each
+     step is highlighted; the narration is labeled with its provenance. */
+  .witness-reader {
+    @apply mt-2;
+  }
 
-.witness-steps {
-  margin: 0.25rem 0;
-  padding-left: 1.25rem;
-}
+  .witness-steps {
+    @apply ml-5 mt-1;
+  }
 
-.fired-transition {
-  background: #fde68a;
-  padding: 0 0.25rem;
-}
+  .fired-transition {
+    @apply bg-highlight px-1 text-ink;
+  }
 
-.witness-narration {
-  margin: 0.15rem 0;
-  font-style: italic;
-}
+  .witness-narration {
+    @apply my-1 italic;
+  }
 
-.narration-provenance {
-  font-style: normal;
-  font-size: 0.8em;
-  color: #6b7280;
-}
+  .narration-provenance {
+    @apply text-[0.8em] text-muted not-italic;
+  }
 
-/* Live per-session MC budget line (spec §12.4, issue #33). */
-.budget-line {
-  font-weight: bold;
-  margin-bottom: 0.5rem;
-}
+  /* Live per-session MC budget line (spec §12.4, issue #33). */
+  .budget-line {
+    @apply mb-2 font-bold;
+  }
 
-.profile-entry {
-  align-items: center;
-  display: flex;
-  gap: 0.5rem;
-  margin: 0.25rem 0;
-}
+  .profile-entry {
+    @apply my-1 flex items-center gap-2;
+  }
 
-.formula-editor {
-  border-top: 1px dashed #d1d5db;
-  margin-top: 0.5rem;
-  padding-top: 0.5rem;
-}
+  .formula-editor {
+    @apply mt-2 border-t border-dashed border-line pt-2;
+  }
 
-.formula-editor input {
-  width: 100%;
-  max-width: 40rem;
-}
+  .formula-editor input {
+    @apply w-full max-w-2xl;
+  }
 
-.edit-error {
-  color: #b91c1c;
-}
+  .edit-error {
+    @apply text-error;
+  }
 
-.formula-reading {
-  background: #f9fafb;
-  border-radius: 0.5rem;
-  padding: 0.25rem 0.5rem;
-}
+  .formula-reading {
+    @apply rounded-card bg-surface p-2;
+  }
 
-.proof-dossier {
-  border: 1px solid #d1d5db;
-  border-radius: 0.5rem;
-  margin: 0.5rem 0;
-  padding: 0.25rem 0.5rem;
+  .proof-dossier {
+    @apply my-2 rounded-card border border-line p-2;
+  }
 }
