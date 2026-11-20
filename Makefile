@@ -49,7 +49,7 @@ ui-e2e-deps: ## Install the UI dependencies and the Playwright Chromium browser 
 	cd $(UI_DIR) && { [ -d node_modules ] || npm ci --silent; } && npx playwright install --with-deps chromium --quiet
 
 ui-e2e: ui-e2e-deps ## E2E navigateur de la voie UI (Playwright, marqueur @ui, issue #128): real browser against the real API on the real compose engines. Needs node on PATH (.node-version) and docker.
-	$(UV) run pytest -m ui tests/test_ui_e2e.py
+	$(UV) run pytest -m ui tests/test_ui_e2e.py --no-cov
 
 security: ## Secret scan of the whole history (gitleaks, ADR-0008).
 	gitleaks git --no-banner --redact .

@@ -43,7 +43,7 @@ function mockFetch(
   );
 }
 
-const PROFILE = { proposed: [{ id: "p1", role: "ressource", conf: 0.9 }] };
+const PROFILE = { proposed: { entries: [{ id: "p1", role: "ressource", conf: 0.9 }] } };
 const CONTRACT = {
   questions: [
     {

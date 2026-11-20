@@ -95,7 +95,7 @@ export default function Amorcage({
         {error !== null ? String(error) : null}
         {resumeError !== null ? resumeError : null}
         {profileMissing ? t("amorcage.noProfile") : null}
-        {profile?.proposed.map((entry) => (
+        {profile?.proposed.entries.map((entry) => (
           <div className="profile-entry" key={entry.id}>
             <span>
               {entry.id} — {t("amorcage.roleProposed", { role: entry.role, conf: entry.conf })}
