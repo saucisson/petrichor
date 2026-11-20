@@ -118,6 +118,9 @@ def http_get_bytes(*, url: str, timeout_seconds: int, max_bytes: int, user_agent
                 chunks.append(chunk)
     except QuotaExceededError:
         raise
+    except urllib.error.HTTPError as error:
+        error.close()  # HTTPError is a response object: close it, else ResourceWarning
+        raise SourceUnavailableError(f"GET {url} failed: {error}") from error
     except (urllib.error.URLError, TimeoutError, OSError) as error:
         raise SourceUnavailableError(f"GET {url} failed: {error}") from error
     return b"".join(chunks)
