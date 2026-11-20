@@ -54,7 +54,17 @@
     "editError": "Édition refusée ({{status}}) : {{detail}}",
     "readingTitle": "Re-lecture inverse",
     "readingNone": "Aucune re-lecture disponible pour cette formule.",
-    "readingNotSays": "Ne dit pas : {{notSays}}"
+    "readingNotSays": "Ne dit pas : {{notSays}}",
+    "convergenceHint": "converge avec {{hint}}",
+    "coveredBy": "couverte par la fusion avec {{survivor}} (plus jamais sollicitée)",
+    "fuse": "Arbitrer la fusion (accepter)",
+    "refuseFusion": "Refuser la fusion",
+    "fusionDone": "Fusion arbitrée — journalisée (append-only).",
+    "fusionRefused": "Fusion refusée — aucune fusion automatique.",
+    "fusionError": "Fusion refusée par l'API ({{status}}) : {{detail}}",
+    "convergencesTitle": "Fusions arbitrées (humain uniquement)",
+    "convergencesEmpty": "Aucune fusion arbitrée pour cette session.",
+    "convergenceLine": "{{questionId}} → couverte par {{propositionId}}"
   },
   "verifications": {
     "title": "Vérifications MC",

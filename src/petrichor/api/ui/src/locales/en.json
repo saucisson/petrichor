@@ -54,7 +54,17 @@
     "editError": "Edit refused ({{status}}): {{detail}}",
     "readingTitle": "Inverse reading",
     "readingNone": "No reading available for this formula.",
-    "readingNotSays": "Does not say: {{notSays}}"
+    "readingNotSays": "Does not say: {{notSays}}",
+    "convergenceHint": "converges with {{hint}}",
+    "coveredBy": "covered by the fusion with {{survivor}} (never solicited again)",
+    "fuse": "Arbitrate the fusion (accept)",
+    "refuseFusion": "Refuse the fusion",
+    "fusionDone": "Fusion arbitrated — journaled (append-only).",
+    "fusionRefused": "Fusion refused — no automatic fusion.",
+    "fusionError": "Fusion refused by the API ({{status}}): {{detail}}",
+    "convergencesTitle": "Arbitrated fusions (human only)",
+    "convergencesEmpty": "No arbitrated fusion for this session.",
+    "convergenceLine": "{{questionId}} → covered by {{propositionId}}"
   },
   "verifications": {
     "title": "MC checks",
