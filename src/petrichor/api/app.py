@@ -27,6 +27,7 @@
 The contract document is ``openapi.yaml`` next to this module (ADR-0016).
 """
 
+import hashlib
 import hmac
 import json
 import threading
@@ -35,13 +36,21 @@ from collections.abc import Callable, Iterable
 from http import HTTPStatus
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TypeGuard
-from urllib.parse import parse_qs, unquote
+from urllib.parse import parse_qs, unquote, urlsplit
 from wsgiref.types import StartResponse, WSGIEnvironment
 
 import structlog
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from petrichor.arbitration import ArbitrationDecisionKind, ArbitrationStore
+from petrichor.archive_ingest import (
+    ARCHIVE_CONTENT_TYPES,
+    ArchiveError,
+    NoPnmlError,
+    PnmlCandidate,
+    UnsafeArchiveError,
+    extract_pnml_candidates,
+)
 from petrichor.catalog import (
     CatalogQuery,
     CatalogUnavailableError,
@@ -106,6 +115,18 @@ from petrichor.triage import (
     StaticUndecidableError,
     triage_question,
 )
+from petrichor.url_import import (
+    DownloadFailedError,
+    PrivateNetworkError,
+    UrlImportConfig,
+    UrlNotAllowedError,
+)
+from petrichor.url_import import (
+    QuotaExceededError as UrlQuotaExceededError,
+)
+from petrichor.url_import import (
+    download as download_url,
+)
 from petrichor.witness import (
     WitnessError,
     WitnessId,
@@ -129,6 +150,7 @@ logger = structlog.get_logger(__name__)
 type WSGIApp = Callable[[WSGIEnvironment, StartResponse], Iterable[bytes]]
 
 MODELS_PATH = "/v1/models"
+MODELS_IMPORT_URL_PATH = "/v1/models/import-url"
 CATALOG_MODELS_PATH = "/v1/catalog/models"
 CATALOG_IMPORT_PATH = "/v1/catalog/import"
 MODEL_PATH_PREFIX = "/v1/models/"
@@ -185,6 +207,10 @@ def _parse_pagination(
 
 
 CONTENT_TYPE_PNML = "application/pnml+xml"
+MAX_UPLOAD_BYTES = 100 << 20
+"""Upload quota of POST /v1/models (PNML or archive), same order as the catalog quota."""
+ACCEPTED_UPLOAD_TYPES = frozenset({CONTENT_TYPE_PNML, *ARCHIVE_CONTENT_TYPES})
+"""The media types POST /v1/models accepts (spec §21.3)."""
 CONTENT_TYPE_JSON = "application/json"
 CONTENT_TYPE_PETRI_JSON = "application/petri+json; version=1.0"
 CONTENT_TYPE_PROBLEM_JSON = "application/problem+json"
@@ -350,12 +376,328 @@ def _problem_response(
     )
 
 
+def _read_body(
+    *, environ: WSGIEnvironment, start_response: StartResponse
+) -> bytes | ProblemPayload:
+    """Read the request body under the upload quota; ProblemPayload on 400/413."""
+    try:
+        length = int(environ.get("CONTENT_LENGTH", "") or 0)
+    except ValueError:
+        return _problem(
+            status=HTTPStatus.BAD_REQUEST,
+            reason="invalid_content_length",
+            detail="The Content-Length header is not an integer.",
+        )
+    if length > MAX_UPLOAD_BYTES:
+        return _problem(
+            status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+            reason="quota_exceeded",
+            detail=f"The upload exceeds the quota of {MAX_UPLOAD_BYTES} bytes.",
+        )
+    stream = environ["wsgi.input"]
+    return stream.read(length) if length else b""
+
+
+def _store_pnml_text(
+    *,
+    text: str,
+    provenance: dict[str, str],
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    store: ModelStore,
+) -> Iterable[bytes]:
+    """Import one PNML text into the canonical form and store it (201 new, 200 idempotent)."""
+    try:
+        model = import_pnml(text=text)
+    except (PnmlImportError, InvalidCanonicalModelError) as error:
+        logger.warning("api_model_import_rejected", reason=type(error).__name__, detail=str(error))
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.UNPROCESSABLE_ENTITY, reason="invalid_pnml", detail=str(error)
+            ),
+        )
+    model = model.model_copy(update={"metadata": {**model.metadata, "provenance": provenance}})
+    stored, created = store.save(model=model)
+    if not created:
+        store.replace(model=model)
+    status = HTTPStatus.CREATED if created else HTTPStatus.OK
+    logger.info(
+        "api_model_stored",
+        model_id=stored.id,
+        content_hash=stored.content_hash,
+        created=created,
+        status=status.value,
+        provenance_source=provenance.get("source", "unknown"),
+    )
+    extra_headers = [("Location", f"{MODELS_PATH}/{stored.id}")] if created else []
+    return _respond(
+        start_response=start_response,
+        status=status,
+        content_type=CONTENT_TYPE_PETRI_JSON,
+        body=serialize_model(model=stored).encode("utf-8"),
+        extra_headers=extra_headers,
+    )
+
+
+def _candidates_payload(*, candidates: list[PnmlCandidate]) -> bytes:
+    """The typed 409 body listing the PNML candidates of a multi-PNML source."""
+    return json.dumps(
+        {
+            "reason": "multiple_candidates",
+            "detail": (
+                f"The source contains {len(candidates)} PNML documents;"
+                " re-POST with the candidate query parameter to choose one."
+            ),
+            "candidates": [candidate.model_dump(mode="json") for candidate in candidates],
+        }
+    ).encode("utf-8")
+
+
+def _import_from_candidates(
+    *,
+    candidates: list[PnmlCandidate],
+    candidate_name: str | None,
+    provenance: dict[str, str],
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    store: ModelStore,
+) -> Iterable[bytes]:
+    """The one-PNML-or-candidates rule (spec §21.3): never a silent multi-import."""
+    if candidate_name is not None:
+        chosen = next((c for c in candidates if c.name == candidate_name), None)
+        if chosen is None:
+            return _problem_response(
+                start_response=start_response,
+                environ=environ,
+                payload=_problem(
+                    status=HTTPStatus.NOT_FOUND,
+                    reason="unknown_candidate",
+                    detail=f"No PNML candidate named {candidate_name!r} in the source.",
+                ),
+            )
+    elif len(candidates) == 1:
+        chosen = candidates[0]
+    else:
+        logger.info("api_model_candidates_listed", candidates=len(candidates))
+        return _respond(
+            start_response=start_response,
+            status=HTTPStatus.CONFLICT,
+            content_type=CONTENT_TYPE_JSON,
+            body=_candidates_payload(candidates=candidates),
+        )
+    provenance = {**provenance, "candidate": chosen.name, "sha256": chosen.sha256}
+    return _store_pnml_text(
+        text=chosen.content,
+        provenance=provenance,
+        environ=environ,
+        start_response=start_response,
+        store=store,
+    )
+
+
+def _import_archive(
+    *,
+    body: bytes,
+    content_type: str,
+    candidate_name: str | None,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    store: ModelStore,
+) -> Iterable[bytes]:
+    """Extract the PNML candidates of an uploaded archive, then apply the choice rule."""
+    try:
+        candidates = extract_pnml_candidates(data=body, content_type=content_type)
+    except UnsafeArchiveError as error:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.UNPROCESSABLE_ENTITY,
+                reason="unsafe_archive",
+                detail=str(error),
+            ),
+        )
+    except NoPnmlError as error:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.UNPROCESSABLE_ENTITY, reason="no_pnml", detail=str(error)
+            ),
+        )
+    except ArchiveError as error:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.UNPROCESSABLE_ENTITY,
+                reason="invalid_archive",
+                detail=str(error),
+            ),
+        )
+    provenance = {
+        "source": "upload",
+        "content_type": content_type,
+        "archive_sha256": f"sha256:{hashlib.sha256(body).hexdigest()}",
+    }
+    return _import_from_candidates(
+        candidates=candidates,
+        candidate_name=candidate_name,
+        provenance=provenance,
+        environ=environ,
+        start_response=start_response,
+        store=store,
+    )
+
+
+_EXTENSION_CONTENT_TYPES: dict[str, str] = {
+    ".pnml": CONTENT_TYPE_PNML,
+    ".xml": CONTENT_TYPE_PNML,
+    ".zip": "application/zip",
+    ".tgz": "application/gzip",
+    ".tar.gz": "application/gzip",
+    ".tar": "application/x-tar",
+}
+"""The media types of a downloaded document by URL extension (spec §21.3)."""
+
+
+def _sniff_content_type(*, url: str, data: bytes) -> str:
+    """The media type of a downloaded document, by extension then by magic bytes."""
+    path = urlsplit(url).path.lower()
+    for extension, media_type in _EXTENSION_CONTENT_TYPES.items():
+        if path.endswith(extension):
+            return media_type
+    if data.startswith(b"PK\x03\x04"):
+        return "application/zip"
+    if data.startswith(b"\x1f\x8b"):
+        return "application/gzip"
+    if data.lstrip().startswith(b"<"):
+        return CONTENT_TYPE_PNML
+    return ""
+
+
+class ModelImportUrlBody(BaseModel):
+    """The JSON body of POST /v1/models/import-url."""
+
+    url: str
+    candidate: str | None = None
+
+
+def _post_models_import_url(  # noqa: PLR0911 - one typed error per URL-import failure mode
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    store: ModelStore,
+    url_import: UrlImportConfig,
+) -> Iterable[bytes]:
+    """Import a PNML or an archive from an allowlisted https URL (spec §21.3, ADR-0008)."""
+    body = _read_body(environ=environ, start_response=start_response)
+    if isinstance(body, ProblemPayload):
+        return _problem_response(start_response=start_response, environ=environ, payload=body)
+    try:
+        payload = ModelImportUrlBody.model_validate_json(body)
+    except ValidationError as error:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.UNPROCESSABLE_ENTITY,
+                reason="invalid_body",
+                detail=str(error),
+            ),
+        )
+    try:
+        data = download_url(url=payload.url, config=url_import)
+    except UrlNotAllowedError as error:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.UNPROCESSABLE_ENTITY, reason="url_not_allowed", detail=str(error)
+            ),
+        )
+    except PrivateNetworkError as error:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.UNPROCESSABLE_ENTITY,
+                reason="private_network_rejected",
+                detail=str(error),
+            ),
+        )
+    except UrlQuotaExceededError as error:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                reason="quota_exceeded",
+                detail=str(error),
+            ),
+        )
+    except DownloadFailedError as error:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.BAD_GATEWAY, reason="download_failed", detail=str(error)
+            ),
+        )
+    content_type = _sniff_content_type(url=payload.url, data=data)
+    provenance = {
+        "source": "url",
+        "url": payload.url,
+        "archive_sha256": f"sha256:{hashlib.sha256(data).hexdigest()}",
+    }
+    if content_type == CONTENT_TYPE_PNML:
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError as error:
+            return _problem_response(
+                start_response=start_response,
+                environ=environ,
+                payload=_problem(
+                    status=HTTPStatus.UNPROCESSABLE_ENTITY,
+                    reason="invalid_pnml",
+                    detail=f"The downloaded document is not valid UTF-8: {error}",
+                ),
+            )
+        return _store_pnml_text(
+            text=text,
+            provenance=provenance,
+            environ=environ,
+            start_response=start_response,
+            store=store,
+        )
+    if content_type in ARCHIVE_CONTENT_TYPES:
+        return _import_archive(
+            body=data,
+            content_type=content_type,
+            candidate_name=payload.candidate,
+            environ=environ,
+            start_response=start_response,
+            store=store,
+        )
+    return _problem_response(
+        start_response=start_response,
+        environ=environ,
+        payload=_problem(
+            status=HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+            reason="unsupported_media_type",
+            detail=f"The document at {payload.url} is neither PNML nor a supported archive.",
+        ),
+    )
+
+
 def _post_models(
     *, environ: WSGIEnvironment, start_response: StartResponse, store: ModelStore
 ) -> Iterable[bytes]:
-    """Import a PNML document into the canonical form (201 new, 200 idempotent)."""
+    """Import a PNML document or an archive into the canonical form (201 new, 200 idempotent)."""
     content_type = _media_type(header_value=environ.get("CONTENT_TYPE"))
-    if content_type != CONTENT_TYPE_PNML:
+    if content_type not in ACCEPTED_UPLOAD_TYPES:
         return _problem_response(
             start_response=start_response,
             environ=environ,
@@ -363,24 +705,24 @@ def _post_models(
                 status=HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
                 reason="unsupported_media_type",
                 detail=(
-                    f"POST {MODELS_PATH} expects Content-Type {CONTENT_TYPE_PNML},"
-                    f" got {content_type or 'none'}."
+                    f"POST {MODELS_PATH} expects Content-Type one of"
+                    f" {', '.join(sorted(ACCEPTED_UPLOAD_TYPES))}, got {content_type or 'none'}."
                 ),
             ),
         )
-    try:
-        length = int(environ.get("CONTENT_LENGTH", "") or 0)
-    except ValueError:
-        return _problem_response(
-            start_response=start_response,
+    body = _read_body(environ=environ, start_response=start_response)
+    if isinstance(body, ProblemPayload):
+        return _problem_response(start_response=start_response, environ=environ, payload=body)
+    candidate_name = parse_qs(environ.get("QUERY_STRING", "")).get("candidate", [None])[0]
+    if content_type in ARCHIVE_CONTENT_TYPES:
+        return _import_archive(
+            body=body,
+            content_type=content_type,
+            candidate_name=candidate_name,
             environ=environ,
-            payload=_problem(
-                status=HTTPStatus.BAD_REQUEST,
-                reason="invalid_content_length",
-                detail="The Content-Length header is not an integer.",
-            ),
+            start_response=start_response,
+            store=store,
         )
-    body = environ["wsgi.input"].read(length)
     try:
         text = body.decode("utf-8")
     except UnicodeDecodeError as error:
@@ -393,33 +735,12 @@ def _post_models(
                 detail=f"The body is not valid UTF-8: {error}",
             ),
         )
-    try:
-        model = import_pnml(text=text)
-    except (PnmlImportError, InvalidCanonicalModelError) as error:
-        logger.warning("api_model_import_rejected", reason=type(error).__name__, detail=str(error))
-        return _problem_response(
-            start_response=start_response,
-            environ=environ,
-            payload=_problem(
-                status=HTTPStatus.UNPROCESSABLE_ENTITY, reason="invalid_pnml", detail=str(error)
-            ),
-        )
-    stored, created = store.save(model=model)
-    status = HTTPStatus.CREATED if created else HTTPStatus.OK
-    logger.debug(
-        "api_model_stored",
-        model_id=stored.id,
-        content_hash=stored.content_hash,
-        created=created,
-        status=status.value,
-    )
-    extra_headers = [("Location", f"{MODELS_PATH}/{stored.id}")] if created else []
-    return _respond(
+    return _store_pnml_text(
+        text=text,
+        provenance={"source": "upload", "content_type": content_type},
+        environ=environ,
         start_response=start_response,
-        status=status,
-        content_type=CONTENT_TYPE_PETRI_JSON,
-        body=serialize_model(model=stored).encode("utf-8"),
-        extra_headers=extra_headers,
+        store=store,
     )
 
 
@@ -1259,15 +1580,43 @@ def _get_qualification(
     )
 
 
-def _dispatch_models(
+def _dispatch_models(  # noqa: PLR0911 - one typed response per route/method
     *,
     environ: WSGIEnvironment,
     start_response: StartResponse,
     method: str,
     path: str,
     store: ModelStore,
+    url_import: UrlImportConfig | None,
 ) -> Iterable[bytes] | None:
     """Route the /v1/models resources, or return None when the path is not one."""
+    if path == MODELS_IMPORT_URL_PATH:
+        if method == "POST":
+            if url_import is None:
+                return _problem_response(
+                    start_response=start_response,
+                    environ=environ,
+                    payload=_problem(
+                        status=HTTPStatus.SERVICE_UNAVAILABLE,
+                        reason="url_import_not_configured",
+                        detail="URL import is not configured on this server.",
+                    ),
+                )
+            return _post_models_import_url(
+                environ=environ,
+                start_response=start_response,
+                store=store,
+                url_import=url_import,
+            )
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.METHOD_NOT_ALLOWED,
+                reason="method_not_allowed",
+                detail=f"{method} is not supported on {MODELS_IMPORT_URL_PATH}.",
+            ),
+        )
     if path == MODELS_PATH:
         if method == "POST":
             return _post_models(environ=environ, start_response=start_response, store=store)
@@ -3538,6 +3887,7 @@ def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
     llm_provider: LLMProvider | None = None,
     edit_store: FormulaEditStore | None = None,
     catalog: ModelCatalog | None = None,
+    url_import: UrlImportConfig | None = None,
 ) -> WSGIApp:
     """Build the WSGI application: auth first, then routing and negotiation."""
 
@@ -3563,7 +3913,12 @@ def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
                 ),
             )
         routed = _dispatch_models(
-            environ=environ, start_response=start_response, method=method, path=path, store=store
+            environ=environ,
+            start_response=start_response,
+            method=method,
+            path=path,
+            store=store,
+            url_import=url_import,
         )
         if routed is None:
             routed = _dispatch_catalog(

@@ -56,11 +56,22 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
   /models:
     post:
-      summary: Import a PNML document into the canonical form
+      summary: Import a PNML document or an archive into the canonical form
       description: >-
         201 when the content hash is new, 200 when the same net was already
         imported (idempotent by content hash, spec §13). Invalid or
         unsupported PNML is rejected with 422 - never silently unfolded.
+        Archives (application/zip, application/gzip, application/x-tar) are
+        accepted under the upload quota with protected extraction (spec
+        §21.3): one PNML imports directly, several PNML answer 409 with the
+        typed candidate list and import only on an explicit candidate query
+        parameter - never a silent multi-import.
+      parameters:
+        - name: candidate
+          in: query
+          schema:
+            type: string
+          description: The archive member to import when the source holds several PNML documents.
       requestBody:
         required: true
         content:
@@ -68,7 +79,42 @@ paths:
             schema:
               type: string
               format: xml
+          application/zip:
+            schema:
+              type: string
+              format: binary
+          application/gzip:
+            schema:
+              type: string
+              format: binary
+          application/x-tar:
+            schema:
+              type: string
+              format: binary
       responses:
+        "409":
+          description: >-
+            The source contains several PNML documents; the typed body lists
+            the candidates (name, size, sha256, detected formalism).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CandidateList"
+        "413":
+          description: The upload exceeds the quota (reason quota_exceeded).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: >-
+            Unsafe archive (reason unsafe_archive, refused members listed),
+            no PNML in the archive (no_pnml), corrupt archive or invalid PNML
+            (invalid_archive / invalid_pnml).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
         "201":
           description: Model created; Location header points at the resource.
           headers:
@@ -92,6 +138,76 @@ paths:
           $ref: "#/components/responses/UnsupportedMediaType"
         "422":
           $ref: "#/components/responses/InvalidPnml"
+  /models/import-url:
+    post:
+      summary: Import a PNML or an archive from an allowlisted https URL (spec §21.3, ADR-0008)
+      description: >-
+        The URL must be https and its domain must be in the versioned
+        allowlist (url_import.json); every resolved address must be public
+        (SSRF rejection, ADR-0008) and redirects are re-validated. The
+        download honors a timeout and a size quota, then the same
+        one-PNML-or-candidates rule as POST /v1/models applies. Provenance
+        (source url, sha256) is recorded in the model metadata.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ModelImportUrlRequest"
+      responses:
+        "201":
+          description: Model created; Location header points at /v1/models/{model_id}.
+          headers:
+            Location:
+              schema:
+                type: string
+              description: /v1/models/{model_id}
+          content:
+            application/petri+json; version=1.0:
+              schema:
+                $ref: "#/components/schemas/CanonicalModel"
+        "200":
+          description: The same net was already imported (idempotent by content hash).
+          content:
+            application/petri+json; version=1.0:
+              schema:
+                $ref: "#/components/schemas/CanonicalModel"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Unknown candidate name (reason unknown_candidate).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Several PNML documents in the downloaded source (reason multiple_candidates).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CandidateList"
+        "413":
+          description: The download exceeds the quota (reason quota_exceeded).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: >-
+            URL not allowlisted or not https (url_not_allowed), private/local
+            network refused (private_network_rejected), invalid body
+            (invalid_body), invalid PNML (invalid_pnml), unsafe or empty
+            archive (unsafe_archive / no_pnml / invalid_archive).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "502":
+          description: The download failed (reason download_failed).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /models/{model_id}:
     get:
       summary: Read a model in its canonical form
@@ -1182,6 +1298,46 @@ components:
       in: header
       name: X-API-Key
   schemas:
+    PnmlCandidate:
+      type: object
+      required: [name, size_bytes, sha256, content, formalism]
+      properties:
+        name:
+          type: string
+          description: The archive member path of the PNML document.
+        size_bytes:
+          type: integer
+        sha256:
+          type: string
+        content:
+          type: string
+        formalism:
+          type: string
+          enum: [pt, symmetric]
+    CandidateList:
+      type: object
+      required: [reason, detail, candidates]
+      properties:
+        reason:
+          type: string
+          enum: [multiple_candidates]
+        detail:
+          type: string
+        candidates:
+          type: array
+          items:
+            $ref: "#/components/schemas/PnmlCandidate"
+    ModelImportUrlRequest:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          description: An https URL whose domain is in the versioned allowlist.
+        candidate:
+          type: string
+          nullable: true
+          description: The archive member to import when the source holds several PNML documents.
     CatalogEntry:
       type: object
       required: [name, family, source, url]
