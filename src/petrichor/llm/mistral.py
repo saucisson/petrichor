@@ -81,7 +81,7 @@ PROMPT_TEMPLATES: dict[str, str] = {
     "narration": (
         "You are a step narrator for a witness trace of a Petri net. Describe"
         " in one sentence what the given fired transition does to the marking."
-        ' Answer ONLY with a JSON object of this exact shape:'
+        " Answer ONLY with a JSON object of this exact shape:"
         ' {"narrations": {"<transition>": "<sentence>"}}.'
         " Describe the step; never state a verdict."
     ),
