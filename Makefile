@@ -34,8 +34,9 @@ typecheck: ## Run the reference type checker (mypy strict, ADR-0006).
 imports: ## Verify the onion layer contract (import-linter, ADR-0002).
 	$(UV) run lint-imports
 
-test: ## Run the full test suite with the coverage floor (ADR-0007). The @ui browser e2e is excluded here: it runs in its own CI job and via `make ui-e2e` (issue #128).
-	$(UV) run pytest -m "not ui"
+test: ## Run the test suite with the coverage floor (ADR-0007): CPU-bound tests in parallel (xdist --dist loadfile), compose @engine tests sequential after (fixed host ports, ADR-0002), the floor on the combined coverage. Per the owner's CI decision (2026-11-20) the engines run here, in the local gate where docker stays warm; the CI merge gate excludes them. The @ui browser e2e is excluded here: run `make ui-e2e` (issue #128), also local only.
+	$(UV) run pytest -m "not ui and not engine" -n auto --dist loadfile --cov-fail-under=0
+	$(UV) run pytest -m "engine" --cov-append
 
 check: lint typecheck imports test ui-gates ## Full quality gate: run before reporting work.
 
@@ -48,7 +49,7 @@ ui-build: ## Build the UI v2 into src/petrichor/api/static (served under /ui/, A
 ui-e2e-deps: ## Install the UI dependencies and the Playwright Chromium browser (for the @ui e2e, issue #128). Needs node on PATH (.node-version).
 	cd $(UI_DIR) && { [ -d node_modules ] || npm ci --silent; } && npx playwright install --with-deps chromium
 
-ui-e2e: ui-e2e-deps ## E2E navigateur de la voie UI (Playwright, marqueur @ui, issue #128): real browser against the real API on the real compose engines. Needs node on PATH (.node-version) and docker.
+ui-e2e: ui-e2e-deps ## E2E navigateur de la voie UI (Playwright, marqueur @ui, issue #128): real browser against the real API on the real compose engines. Local gate only (owner's CI decision, 2026-11-20). Needs node on PATH (.node-version) and docker.
 	$(UV) run pytest -m ui tests/test_ui_e2e.py --no-cov
 
 security: ## Secret scan of the whole history (gitleaks, ADR-0008).
