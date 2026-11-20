@@ -96,7 +96,7 @@ describe("amorçage import zone (issue #163)", () => {
     fireEvent.change(screen.getByLabelText("Fichier PNML"), { target: { files: [file] } });
     fireEvent.click(screen.getByRole("button", { name: "Importer le modèle et créer la session" }));
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "Extension refusée : seuls .pnml et .xml sont acceptés.",
+      "Extension refusée : seuls .pnml, .xml, .zip, .tgz, .tar.gz et .tar sont acceptés.",
     );
     expect(calls.find((call) => call.url === "/v1/models")).toBeUndefined();
   });
@@ -131,7 +131,9 @@ describe("amorçage import zone (issue #163)", () => {
     fireEvent.change(screen.getByLabelText("Fichier PNML"), { target: { files: [file] } });
     fireEvent.click(screen.getByRole("button", { name: "Importer le modèle et créer la session" }));
     await waitFor(() =>
-      expect(screen.getByRole("alert")).toHaveTextContent("Import du modèle refusé : 422"),
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "PNML invalide : balise <net> manquante.",
+      ),
     );
   });
 });
