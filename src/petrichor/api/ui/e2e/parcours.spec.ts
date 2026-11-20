@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 const API_KEY = process.env.PETRICHOR_UI_API_KEY ?? "test-key";
 const PNML_FIXTURE =
   process.env.PETRICHOR_PNML_FIXTURE ??
-  fileURLToPath(new URL("../../../../tests/fixtures/philosophes3.pnml", import.meta.url));
+  fileURLToPath(new URL("../../../../tests/fixtures/philosophes3-maquette.pnml", import.meta.url));
 
 test("parcours complet des 4 étapes + arbitrage + langue + édition + dossier + convergence", async ({
   page,
@@ -26,14 +26,26 @@ test("parcours complet des 4 étapes + arbitrage + langue + édition + dossier +
   await page.locator("#pnml-file").setInputFiles(PNML_FIXTURE);
   await page.locator("#import-model").click();
   await expect(page.locator("#session-id")).not.toHaveValue("");
+  // The harness proposes the semantic profile server-side as soon as the
+  // session appears; the UI reads the profile on mount only, so reload until
+  // the proposed entries show up (the proposal races the import).
+  await expect
+    .poll(
+      async () => {
+        const count = await page.locator(".profile-entry").count();
+        if (count === 0) await page.reload();
+        return count;
+      },
+      { timeout: 90_000, intervals: [1_000, 2_000, 5_000] },
+    )
+    .toBeGreaterThan(0);
 
   // Arbitrage du profil sémantique proposé (par le harnais côté serveur).
-  await expect(page.locator(".profile-entry").first()).toBeVisible({ timeout: 60_000 });
-  const acceptButtons = page.locator(".profile-entry button", { hasText: "Accepter" });
-  const profileCount = await acceptButtons.count();
+  const entries = page.locator(".profile-entry");
+  const profileCount = await entries.count();
   expect(profileCount).toBeGreaterThan(0);
   for (let index = 0; index < profileCount; index += 1) {
-    await page.locator(".profile-entry button", { hasText: "Accepter" }).first().click();
+    await entries.nth(index).getByRole("button", { name: "Accepter" }).click();
   }
 
   // Étape 2 - questions: arbitrage de chaque carte.
@@ -49,8 +61,9 @@ test("parcours complet des 4 étapes + arbitrage + langue + édition + dossier +
   // Édition de formule (P37) sur la première carte + re-lecture provenance: llm.
   await cards.first().getByRole("button", { name: "Éditer la formule" }).click();
   const formulaInput = page.getByLabel("Nouvelle formule");
-  const original = await formulaInput.inputValue();
-  await formulaInput.fill(original.replace("AG", "AF"));
+  // A formula with a scripted reading in the golden corpus, so the inverse
+  // reading comes back non-degraded and labeled provenance: llm.
+  await formulaInput.fill("EF (eat_1)");
   await cards.first().getByRole("button", { name: "Enregistrer" }).click();
   await expect(page.getByText(/Formule mise à jour/)).toBeVisible({ timeout: 60_000 });
   // La re-lecture inverse est affichée, étiquetée provenance: llm (texte serveur verbatim).
@@ -70,7 +83,22 @@ test("parcours complet des 4 étapes + arbitrage + langue + édition + dossier +
   await page.locator("nav button[data-step='verifications']").click();
   await expect(page.locator("#run-list li").first()).toBeVisible({ timeout: 120_000 });
   await expect(page.locator(".budget-line")).toContainText("Budget MC");
-  await expect(page.locator(".run-verdict").first()).not.toHaveText("—");
+  // The runs are posted by the harness on the real engine: wait for a real
+  // verdict (a slow run is a slow verdict, never a watchdog error - P39).
+  // The step reads the runs on mount only, so reload until the verdict lands.
+  await expect
+    .poll(
+      async () => {
+        const verdict = await page.locator(".run-verdict").first().textContent().catch(() => null);
+        if (verdict === null || verdict === "—") {
+          await page.reload();
+          await page.locator("nav button[data-step='verifications']").click();
+        }
+        return verdict;
+      },
+      { timeout: 240_000, intervals: [2_000, 5_000] },
+    )
+    .not.toBe("—");
   // Témoin pas à pas (P32) quand le run en produit un.
   const witness = page.locator(".witness-reader .witness-title");
   if (await witness.count()) {

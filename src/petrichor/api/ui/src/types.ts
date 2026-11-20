@@ -7,8 +7,14 @@ export interface ProfileEntry {
   conf: number;
 }
 
+// The API serves the full ProfileState (spec §14): proposed is a
+// SemanticProfile object with its entries, not a bare array.
+export interface SemanticProfile {
+  entries: ProfileEntry[];
+}
+
 export interface Profile {
-  proposed: ProfileEntry[];
+  proposed: SemanticProfile;
 }
 
 export type CrossStatus = "verified_by_n" | "controversial" | string;

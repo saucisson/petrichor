@@ -84,7 +84,7 @@ jobs:
         run: make ui-e2e-deps
 
       - name: UI e2e parcours (@ui marker, real compose engines)
-        run: uv run pytest -m ui tests/test_ui_e2e.py
+        run: uv run pytest -m ui tests/test_ui_e2e.py --no-cov
 
   security:
     name: security gates
