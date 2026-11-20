@@ -46,7 +46,7 @@ l'humain) :
 | Secret            | Valeur                          |
 | ----------------- | ------------------------------- |
 | `SSH_PRIVATE_KEY` | clé privée SSH autorisée pour `deploy` |
-| `VPS_HOST`        | `145.239.197.11`                |
+| `VPS_HOST`        | `145.239.197.11` (secret ou variable de dépôt — non sensible) |
 
 La variable optionnelle `VPS_USER` (défaut `deploy`) peut surcharger
 l'utilisateur SSH.
