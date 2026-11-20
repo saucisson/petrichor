@@ -96,12 +96,26 @@ def select_llm_provider(*, settings: ApiSettings) -> LLMProvider:
     return DeterministicMockProvider()
 
 
+class ConfigurationError(RuntimeError):
+    """A typed startup error for invalid environment configuration (ADR-0102)."""
+
+
+def _parse_port(*, raw_value: str) -> int:
+    """Parse PETRICHOR_PORT, raising a typed error on a non-integer value."""
+    try:
+        return int(raw_value)
+    except ValueError as error:
+        raise ConfigurationError(
+            f"{PORT_ENVIRONMENT_VARIABLE}={raw_value!r} is not a valid port number."
+        ) from error
+
+
 def main() -> None:
     """Entry point: configure, build, serve."""
     configure_logging()
     logger = structlog.get_logger(__name__)
     host = os.environ.get(HOST_ENVIRONMENT_VARIABLE, DEFAULT_HOST)
-    port = int(os.environ.get(PORT_ENVIRONMENT_VARIABLE, str(DEFAULT_PORT)))
+    port = _parse_port(raw_value=os.environ.get(PORT_ENVIRONMENT_VARIABLE, str(DEFAULT_PORT)))
     settings = ApiSettings()
     session_store = SessionStore(directory=Path(DEFAULT_SESSIONS_DIRECTORY))
     arbitrator = ProfileArbitrator()
