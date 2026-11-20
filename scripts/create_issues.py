@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 BACKLOG_PATH = Path("docs/backlog.md")
-EXPECTED_ISSUE_COUNT = 62
+EXPECTED_ISSUE_COUNT = 68
 MODE_DRY_RUN = "dry-run"
 MODE_APPLY = "apply"
 EN_DASH = "\u2013"

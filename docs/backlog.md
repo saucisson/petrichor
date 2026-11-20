@@ -1,8 +1,8 @@
-# Petrichor — Backlog complet (vagues 1–8)
+# Petrichor — Backlog complet (vagues 1–9)
 
-Corps de toutes les issues, prêts à peupler GitHub via le script idempotent (§19.2 : labels → milestones → issues, `--dry-run` d'abord). Conventions : **1 issue = 1 PR** d'une session ; chaque corps cite ses sections de spécification (le document « Petrichor — Conception complète », v1.3) ; critères d'acceptation vérifiables par commande ou test ; hors-périmètre explicite ; dépendances notées `blocked-by`.
+Corps de toutes les issues, prêts à peupler GitHub via le script idempotent (§19.2 : labels → milestones → issues, `--dry-run` d'abord). Conventions : **1 issue = 1 PR** d'une session ; chaque corps cite ses sections de spécification (le document « Petrichor — Conception complète », v1.4) ; critères d'acceptation vérifiables par commande ou test ; hors-périmètre explicite ; dépendances notées `blocked-by`.
 
-**Milestones** : `P0 — socle` · `P1 — MVP élicitation` · `Outillage — moteurs & transformations` · `P2 — chaîne MC` · `P3 — pilote` · `P4 — études & publication` · `UI v2 — refonte frontend` · `Outillage — fiabilité de la revue`.
+**Milestones** : `P0 — socle` · `P1 — MVP élicitation` · `Outillage — moteurs & transformations` · `P2 — chaîne MC` · `P3 — pilote` · `P4 — études & publication` · `UI v2 — refonte frontend` · `Outillage — fiabilité de la revue` · `UI v3 — clarté & catalogue`.
 
 **Labels** : `area:api` `area:ui` `area:llm` `area:engine` `area:static` `area:docs` `area:study` `area:i18n` `area:outillage` · `kind:feat` `kind:test` `kind:chore` `kind:spike`.
 
@@ -72,8 +72,14 @@ Corps de toutes les issues, prêts à peupler GitHub via le script idempotent (�
 | P61 | Relances bornées, causes typées et escalade humaine | P60 |
 | P62 | Mesure : fiabilité de la revue dans le day-report | P61 |
 | P63 | Spike : réviser ADR-0010, la place des ADRs dans le bundle | P58 |
+| P66 | UI v3 : adoption d'un framework CSS (ADR) et socle de design | — |
+| P67 | UI v3 : chrome de l'application et guidage des 4 étapes | P66 |
+| P68 | UI v3 : étape Amorçage — import par fichier clair | P66 |
+| P69 | Catalogue de modèles : port serveur, recherche et import par nom (ADR) | — |
+| P70 | Ingestion serveur : archives (locales ou à distance) et import par URL | P69 |
+| P71 | Amorçage : recherche, étiquettes, import par nom, par URL et par archive dans l'UI | P67, P69, P70 |
 
-*Note : P51 est déjà pris par l'issue #93 (WORKLOG v2, ADR-0022) — les vagues 7 et 8 commencent à P52.*
+*Note : P51 est déjà pris par l'issue #93 (WORKLOG v2, ADR-0022) — les vagues 7 et 8 commencent à P52. P65 est déjà pris par l'issue #160 (déploiement continu sur VPS) — la vague 9 commence à P66.*
 
 ---
 
@@ -921,6 +927,102 @@ Corps de toutes les issues, prêts à peupler GitHub via le script idempotent (�
 - [ ] L'implémentation éventuelle est un PR séparé, issu de la décision — explicitement hors périmètre ici.
 
 **Hors périmètre.** Toute modification de `collect_decisions()` dans cette issue.
+
+---
+
+## Vague 9 — Milestone `UI v3 — clarté & catalogue`
+
+*Origine : constat humain du 2026-11-20 (vague 9) — UI v2 illisible (pas de charte, en-tête confus, navigation sans guidage) et import de modèles limité au fichier local. Décisions actées : refonte visuelle via framework CSS (ADR) ; import par nom depuis des dépôts de modèles (MCC et miroirs) côté serveur. Spec v1.4 §9 et §21 ; constat de session `docs/spikes/2026-11-20-catalogues-mcc.md` (annexe A). Guide des dépendances : P66 seul ; P67 et P68 bloqués par P66 ; P69 seul ; P70 bloqué par P69 ; P71 bloqué par P67, P69 et P70.*
+
+### P66 · UI v3 : adoption d'un framework CSS (ADR) et socle de design
+
+**Labels** `kind:feat` `area:ui` · **Dép.** —
+
+**Contexte.** Constat humain du 2026-11-20 (vague 9) : l'UI v2 est fonctionnelle mais sans charte ; `styles.css` (~150 lignes de CSS utilitaire minimal) ne porte ni hiérarchie, ni états, ni identité. Décision humaine actée : adopter un framework CSS via un ADR, pressenti Tailwind ; l'ADR doit le motiver face aux alternatives (CSS maison « design system », CSS modules, autres frameworks) sous les contraintes du socle : build Vite (ADR-0101), aucune dépendance runtime lourde, a11y (maquette P12). Spec v1.4 §9.
+
+**Critères d'acceptation.**
+- [ ] ADR (numérotation suivante libre dans `docs/decisions/`) qui acte le framework choisi, motivé face aux alternatives ; contraintes et version épinglée (`package.json` + lockfile) ; conforme à ADR-0002 (styles : couche présentation, hors domaine).
+- [ ] Intégration complète au build Vite (purge du CSS mort), `styles.css` remplacé par les tokens et utilitaires du framework ; plus aucun style ad hoc dupliqué dans les composants.
+- [ ] Socle de design documenté : palette, espacements, typographie, rayons, états (focus visible, disabled, hover, error) sous forme de tokens nommés ; contraste AA minimum partout (a11y).
+- [ ] Refactor **à parité stricte** des 4 étapes : aucun changement de comportement ni de chaîne ; tous les tests existants passent (vitest, e2e `@ui`).
+- [ ] `make check` vert (lint, typecheck, tests front et back).
+
+**Hors périmètre.** Nouveaux comportements (P67, P68, P70) ; i18n des contenus serveur (P53 inchangé).
+
+### P67 · UI v3 : chrome de l'application et guidage des 4 étapes
+
+**Labels** `kind:feat` `area:ui` `area:i18n` · **Dép.** P66
+
+**Contexte.** Constat humain du 2026-11-20 : en-tête confus (clé API, session, langue sans structure), stepper sans guidage (tout est cliquable, même sans session), pas de distinction bouton primaire/secondaire, messages en texte nu. Un nouvel utilisateur ne sait pas quoi faire. Spec v1.4 §9.
+
+**Critères d'acceptation.**
+- [ ] En-tête restructuré en groupes visibles : connexion (clé API), session (identifiant + reprise), langue ; actions primaires et secondaires visuellement distinctes.
+- [ ] Stepper guidé : sans session active, les étapes Questions, Vérifications et Synthèse sont **désactivées** avec la raison affichée (« créez ou reprenez une session en Amorçage ») ; l'étape courante reste signalée (`aria-current="step"`), focus visible conservé partout.
+- [ ] Messages typés et cohérents : erreurs serveur affichées telles quelles (jamais traduites, spec §9), états de chargement, confirmations ; remplacement des textes nus de `#profile`.
+- [ ] Toutes les nouvelles chaînes du chrome extraites dans `fr.json` et `en.json` (100 %) ; jamais les contenus serveur.
+- [ ] Tests composants mis à jour (rôle de chaque région, états désactivés, `aria-current`) ; captures avant/après dans le PR.
+
+**Hors périmètre.** Le contenu de l'étape Amorçage (P68, P71) ; contre-vérification affichée (P31).
+
+### P68 · UI v3 : étape Amorçage — import par fichier clair
+
+**Labels** `kind:feat` `area:ui` `area:i18n` · **Dép.** P66
+
+**Contexte.** Constat humain du 2026-11-20 : l'import est un `input` file et un bouton, sans retour (pas de nom de fichier affiché, pas d'indicateur d'envoi, erreurs brutes). C'est la porte d'entrée du produit. Spec v1.4 §9.
+
+**Critères d'acceptation.**
+- [ ] Zone d'import explicite (sélection par clic et dépôt), nom et taille du fichier affichés avant l'envoi ; extension `.pnml/.xml` validée.
+- [ ] Retours pendant et après : indicateur d'envoi, confirmation de l'import (id du modèle ; import idempotent signalé si le modèle était déjà connu), erreurs serveur affichées verbatim.
+- [ ] Création de session et arbitrage du profil sémantique inchangés fonctionnellement (parité stricte avec P52–P53).
+- [ ] Chaînes fr/en du chrome à 100 % ; tests composants.
+
+**Hors périmètre.** Import par nom, par URL et depuis une archive (P70, P71) ; le PNML local seul reste dans ce périmètre.
+
+### P69 · Catalogue de modèles : port serveur, recherche et import par nom (ADR)
+
+**Labels** `kind:feat` `area:api` · **Dép.** —
+
+**Contexte.** Décision humaine du 2026-11-20 (vague 9) : importer par nom les modèles du Model Checking Contest et d'autres dépôts adaptés, **côté serveur** — un port `ModelCatalog` du domaine derrière l'architecture oignon (ADR-0002), adaptateurs dans l'infrastructure. La note d'inspection `docs/spikes/2026-11-20-catalogues-mcc.md` (annexe A) documente les sources et leurs voies d'accès machine : dépôt officiel `pnrepository.lip6.fr` (endpoints `metadata.json` / `<Famille>/pnml.json`, archives permanentes par famille), site officiel `mcc.lip6.fr` par édition (`INPUTS-<année>.tar.gz`, une archive par instance), miroirs `yanntm.github.io/pnmcc-models-<année>` (`.tgz` par instance, PNML réparés). P22 (qualification MCC), P27 (dépliage) et P43 (study-d) consommeront ce socle. Spec v1.4 §21.
+
+**Critères d'acceptation.**
+- [ ] ADR (numérotation suivante libre) : port `ModelCatalog` (recherche par nom, listing, récupération du PNML d'une instance) + trois types de sources en configuration versionnée (`metadata`, `edition`, `static-index` — annexe A § 6) avec le MCC officiel en tête ; l'ajout d'une autre source ne demande aucun changement de code ; toute nouvelle dépendance (p. ex. client HTTP) motivée et épinglée — ou `urllib` stdlib assumée ; les points « À VÉRIFIER » de l'annexe A sont confirmés par requêtes réelles **avant** l'écriture de l'ADR (champs de `metadata.json`, agencement interne des archives par famille, layout des éditions ≤ 2019).
+- [ ] API REST conforme à ADR-0016, `openapi.yaml` tenu à jour : listing paginé avec **recherche par nom** (instance et famille) et **facettes/étiquettes** : famille, formalisme (PT/COL), édition, source, taille (bucket dérivé) ; tris stables ; la facette formalisme alimente l'avertissement COL (symmetric non déplié, P27 inchangé) et la proposition des jumeaux `-PT-` quand ils existent.
+- [ ] Import par nom **idempotent** réutilisant le hachage de contenu de P03 (même modèle = même id, même sémantique que `POST /models`) ; une instance standard MCC = un `model.pnml` unique ; erreurs typées : nom inconnu au catalogue, source indisponible, PNML invalide après extraction.
+- [ ] **Téléchargement en arrière-plan au lancement** : tâche asynchrone, cache disque borné par configuration (répertoire, quota, TTL), empreinte sha256 par archive, User-Agent explicite ; échec réseau ou format inattendu → dégradation explicite (« catalogue indisponible »), jamais de crash au démarrage, aucun téléchargement ne bloque une requête.
+- [ ] Les instances dépassant le quota (ex. > 100 Mo compressé, annexe A § 1) sont refusées avec une erreur explicite — le disque reste borné.
+- [ ] Provenance persistée dans la section `annotations` du modèle canonique (hors hachage) : `catalog`, `source`, `edition`, `name`, `url`, `sha256`.
+- [ ] Tests avec fixtures (json de métadonnées, tgz d'instance) et HTTP mocké : succès, idempotence, échec réseau, échec d'extraction, PNML invalide, quota dépassé ; journal structurel de chaque étape (ADR-0005).
+
+**Hors périmètre.** Les études elles-mêmes (P22, P43 consommeront) ; l'ingestion générique d'archives/URLs (P70) ; l'UI (P71) ; dépliage des nets colorés (P27 inchangé) ; import massif parallèle.
+
+### P70 · Ingestion serveur : archives (locales ou à distance) et import par URL
+
+**Labels** `kind:feat` `area:api` · **Dép.** P69
+
+**Contexte.** Décision humaine du 2026-11-20 : l'utilisateur doit pouvoir simplement choisir un fichier local — PNML ou archive contenant des PNML — ou coller l'URL d'un PNML ou d'une archive. Les archives MCC contiennent souvent des dizaines d'instances (annexe A) : jamais d'import multiple silencieux. Spec v1.4 §21.3.
+
+**Critères d'acceptation.**
+- [ ] `POST /v1/models` accepte, en plus de `application/pnml+xml`, les types d'archive (`application/zip`, `application/gzip`, `application/x-tar`, donc `.zip`/`.tgz`/`.tar.gz`) dans la limite du quota ; extraction protégée (zip-slip : chemins absolus et `..` refusés, fichiers refusés listés dans l'erreur).
+- [ ] **Règle « un PNML ou candidats »** : une source contenant exactement un PNML → import direct ; plusieurs PNML → réponse typée listant les candidats (nom, taille, empreinte, formalisme détecté), puis import sur choix explicite ; aucun PNML → erreur typée. Aucun chemin de code n'importe plusieurs modèles en silence (test de garde).
+- [ ] Import par URL : allowlist de domaines en configuration versionnée (défaut : `pnrepository.lip6.fr`, `mcc.lip6.fr`, `yanntm.github.io`, `raw.githubusercontent.com`), schéma https uniquement, timeout et quota de taille conformes, rejet des réseaux privés et locaux (SSRF) — reflet du protocole de sécurité (ADR-0008) ; même règle « un PNML ou candidats » après téléchargement.
+- [ ] `openapi.yaml` mis à jour ; tests avec fixtures : archive mono-PNML, multi-PNML (choix explicite), archive corrompue, URL hors allowlist, réseau privé refusé, quota dépassé.
+
+**Hors périmètre.** Import massif ; résolution automatique d'ambiguïté ; imports parallèles.
+
+### P71 · Amorçage : recherche, étiquettes, import par nom, par URL et par archive dans l'UI
+
+**Labels** `kind:feat` `area:ui` `area:i18n` · **Dép.** P67, P69, P70
+
+**Contexte.** Décision humaine du 2026-11-20 : il faut un champ de recherche et/ou des étiquettes pour trouver un modèle existant, et trois voies d'import : par nom depuis le catalogue, par fichier local (PNML ou archive), par URL collée (PNML ou archive). Spec v1.4 §9 et §21.
+
+**Critères d'acceptation.**
+- [ ] Champ de recherche + facettes (famille, formalisme PT/COL, édition, source, taille) sur l'endpoint listing ; autocomplétion côté serveur ; métadonnées et provenance affichées ; le formalisme COL porte l'avertissement « symmetric non déplié » avec proposition des jumeaux `-PT-` quand ils existent.
+- [ ] Les trois voies visibles dans l'Amorçage : catalogue (par nom), fichier (PNML ou archive), URL collée ; le comportement « candidats » de P70 est exposé comme un choix explicite (liste des instances trouvées, sélection) ; erreurs serveur affichées verbatim.
+- [ ] Les trois voies partagent la même confirmation (id du modèle, nom, source, empreinte) ; le chemin import → création de session reste celui de P68 ; chaînes fr/en du chrome à 100 %.
+- [ ] E2E `@ui` étendu (au sens de P57) : import par nom, import par URL, archive multi-PNML → choix, sur endpoints mockés ; aucun verdict calculé côté client.
+- [ ] Tests composants sur endpoints mockés : succès, nom inconnu, URL refusée (allowlist), archive multi-candidats, catalogue indisponible.
+
+**Hors périmètre.** Préférences de modèles persistées ; import multi-modèles ; recherche floue avancée.
 
 ---
 
