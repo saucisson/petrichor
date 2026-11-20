@@ -4,7 +4,8 @@
 # path and the manual path are identical.
 #
 # Required repository secrets (set by the human, never committed):
-#   SSH_PRIVATE_KEY - private key of the `ubuntu` user on the VPS
+#   SSH_PRIVATE_KEY - private key authorized for the `deploy` user on the VPS
+#                     (public key in /home/deploy/.ssh/authorized_keys)
 #   VPS_HOST        - 145.239.197.11 (vps-89091363.vps.ovh.net)
 name: deploy
 
@@ -39,7 +40,7 @@ jobs:
       - name: Run the deployment on the VPS
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
-          VPS_USER: ${{ vars.VPS_USER || 'ubuntu' }}
+          VPS_USER: ${{ vars.VPS_USER || 'deploy' }}
         run: |
           ssh -i "$HOME/.ssh/id_rsa" -o BatchMode=yes -o StrictHostKeyChecking=yes \
             "${VPS_USER}@${VPS_HOST}" '/srv/petrichor/deploy/deploy.sh'

@@ -9,10 +9,13 @@ pas.
 ## Prérequis sur le VPS (une fois)
 
 ```console
-# Le dépôt est public : clone HTTPS. L'utilisateur `ubuntu` a besoin du
-# groupe docker (sinon préfixer les commandes docker par sudo).
-sudo usermod -aG docker ubuntu
-git clone https://github.com/saucisson/petrichor.git /srv/petrichor
+# Le dépôt est public : clone HTTPS. Convention VPS : l'utilisateur dédié
+# `deploy` (même utilisateur que layered-data) possède /srv/petrichor et
+# appartient au groupe docker ; sa clé publique est dans
+# /home/deploy/.ssh/authorized_keys.
+sudo usermod -aG docker deploy
+sudo git clone https://github.com/saucisson/petrichor.git /srv/petrichor
+sudo chown -R deploy:deploy /srv/petrichor
 cd /srv/petrichor && git checkout daily
 # .env est git-ignored : ne jamais commiter la clé (ADR-0008)
 umask 077 && printf 'PETRICHOR_API_KEY=%s\n' "$(openssl rand -hex 32)" > /srv/petrichor/.env
@@ -25,9 +28,9 @@ sudo nginx -t && sudo systemctl reload nginx
 ## Déploiement manuel (hors CI)
 
 ```console
-ssh ubuntu@145.239.197.11 'cd /srv/petrichor && ./deploy/deploy.sh'
+ssh deploy@145.239.197.11 'cd /srv/petrichor && ./deploy/deploy.sh'
 # autre branche (déploiement manuel hors CI) :
-ssh ubuntu@145.239.197.11 'cd /srv/petrichor && DEPLOY_REF=feat/160-deploy-vps ./deploy/deploy.sh'
+ssh deploy@145.239.197.11 'cd /srv/petrichor && DEPLOY_REF=feat/160-deploy-vps ./deploy/deploy.sh'
 ```
 
 Le script met le clone à jour sur `origin/$DEPLOY_REF` (`daily` par défaut),
@@ -42,10 +45,10 @@ l'humain) :
 
 | Secret            | Valeur                          |
 | ----------------- | ------------------------------- |
-| `SSH_PRIVATE_KEY` | clé privée SSH de `ubuntu`      |
+| `SSH_PRIVATE_KEY` | clé privée SSH autorisée pour `deploy` |
 | `VPS_HOST`        | `145.239.197.11`                |
 
-La variable optionnelle `VPS_USER` (défaut `ubuntu`) peut surcharger
+La variable optionnelle `VPS_USER` (défaut `deploy`) peut surcharger
 l'utilisateur SSH.
 
 ## Vérification
