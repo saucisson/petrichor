@@ -207,6 +207,8 @@ def test_path_is_excluded_matches_every_machine_pattern() -> None:
     assert review.path_is_excluded(path="src/petrichor/study/pilote_v1/model.pnml")
     assert review.path_is_excluded(path="src/petrichor/api/ui/node_modules/react/package.json")
     assert review.path_is_excluded(path="node_modules/left-pad/index.js")
+    assert review.path_is_excluded(path="src/petrichor/api/static/assets/index-abc123.js")
+    assert review.path_is_excluded(path="src/petrichor/api/ui/package-lock.json")
     assert not review.path_is_excluded(path="scripts/review.py")
     assert not review.path_is_excluded(path="tests/fixtures/philosophes3.pnml")
     assert not review.path_is_excluded(path="docs/studies/pilote/v1/audit/frictions.md")

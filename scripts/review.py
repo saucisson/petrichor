@@ -96,6 +96,12 @@ MACHINE_ARTIFACT_EXCLUSIONS: tuple[tuple[str, str], ...] = (
     # merged by accident reached 64 MB of diff and made the review refuse
     # the bundle, P59) - controlled by the frontend gates.
     ("**/node_modules/**", "make ui-gates"),
+    # Machine-generated frontend artifacts (constat PR #148: the built SPA
+    # assets and the npm lockfile put ~400 KB of unreviewable minified/JSON
+    # diff in the bundle and the P59 guard refused the review) - the build is
+    # reproducible and controlled by the frontend gates.
+    ("src/petrichor/api/static/assets/**", "make ui-build && make ui-gates"),
+    ("**/package-lock.json", "npm ci (CI ui-gates)"),
 )
 EXCLUDED_DIGEST_SECTION_HEADER = "### Machine artifacts excluded from the diff (digests)"
 DIFF_FILE_HEADER_PATTERN = re.compile(r"^diff --git a/(?P<old>.+?) b/(?P<new>.+)$", re.MULTILINE)
