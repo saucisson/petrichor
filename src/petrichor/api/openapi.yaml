@@ -120,6 +120,143 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
+  /catalog/models:
+    get:
+      summary: Search the MCC model catalog (spec §21.2, ADR-0105)
+      description: >-
+        Paginated listing of the known MCC instances with free-text search on
+        name/family, facet filters (family, formalism, edition, source, size),
+        a closed sort set (name, family, edition, size - size is semantic,
+        small to huge) and limit/offset pagination. 503 catalog_unavailable
+        when every configured source failed to refresh.
+      parameters:
+        - name: search
+          in: query
+          schema:
+            type: string
+          description: Free-text search on name and family.
+        - name: family
+          in: query
+          schema:
+            type: string
+        - name: formalism
+          in: query
+          schema:
+            type: string
+            enum: [PT, COL]
+        - name: edition
+          in: query
+          schema:
+            type: string
+        - name: source
+          in: query
+          schema:
+            type: string
+        - name: size
+          in: query
+          schema:
+            type: string
+            enum: [small, medium, large, huge]
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [name, family, edition, size]
+            default: name
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        "200":
+          description: One page of catalog entries with facet counts.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CatalogPage"
+        "400":
+          description: Invalid sort or pagination parameter (reason invalid_sort / invalid_pagination).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          description: Every catalog source failed (reason catalog_unavailable).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /catalog/import:
+    post:
+      summary: Import one catalog instance by name into the canonical form (spec §21.2)
+      description: >-
+        Fetches the PNML of the named instance from its source (with a bounded
+        disk cache and a download quota), imports it into the canonical
+        petri+json form and records the provenance (catalog, source, edition,
+        name, url, sha256) in the model metadata. 201 when the content hash is
+        new, 200 when the same net was already imported (idempotent by content
+        hash, like POST /v1/models).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CatalogImportRequest"
+      responses:
+        "201":
+          description: Model created; Location header points at /v1/models/{model_id}.
+          headers:
+            Location:
+              schema:
+                type: string
+              description: /v1/models/{model_id}
+          content:
+            application/petri+json; version=1.0:
+              schema:
+                $ref: "#/components/schemas/CanonicalModel"
+        "200":
+          description: The same net was already imported (idempotent by content hash).
+          content:
+            application/petri+json; version=1.0:
+              schema:
+                $ref: "#/components/schemas/CanonicalModel"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Unknown catalog instance name (reason unknown_model).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "413":
+          description: The archive exceeds the configured download quota (reason quota_exceeded).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Invalid body (reason invalid_body) or invalid PNML (reason invalid_pnml).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Catalog or source unavailable (reason catalog_unavailable / source_unavailable).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
   /checks/{family}:
     post:
       summary: Accept a check question asynchronously (one endpoint per family)
@@ -1045,6 +1182,84 @@ components:
       in: header
       name: X-API-Key
   schemas:
+    CatalogEntry:
+      type: object
+      required: [name, family, source, url]
+      properties:
+        name:
+          type: string
+          description: The instance name, e.g. Philosophers-PT-010.
+        family:
+          type: string
+          description: The model family, e.g. Philosophers.
+        formalism:
+          type: string
+          enum: [PT, COL]
+          nullable: true
+        edition:
+          type: string
+          nullable: true
+          description: The MCC edition year when the source provides it.
+        source:
+          type: string
+          description: The configured source id that listed this entry.
+        size_bucket:
+          type: string
+          enum: [small, medium, large, huge]
+          nullable: true
+          description: Compressed-size bucket of the archive, when known.
+        url:
+          type: string
+          description: The URL the PNML archive is fetched from.
+        sha256:
+          type: string
+          nullable: true
+    CatalogFacets:
+      type: object
+      properties:
+        family:
+          type: object
+          additionalProperties:
+            type: integer
+        formalism:
+          type: object
+          additionalProperties:
+            type: integer
+        edition:
+          type: object
+          additionalProperties:
+            type: integer
+        source:
+          type: object
+          additionalProperties:
+            type: integer
+        size:
+          type: object
+          additionalProperties:
+            type: integer
+    CatalogPage:
+      type: object
+      required: [items, total, limit, offset, facets]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/CatalogEntry"
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+        facets:
+          $ref: "#/components/schemas/CatalogFacets"
+    CatalogImportRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          description: The catalog instance name to import, as listed by GET /v1/catalog/models.
     Session:
       type: object
       required: [session_id, model_id, created_at, updated_at, run_ids, budget_seconds]

@@ -20,6 +20,11 @@ import structlog
 from petrichor.api import create_app
 from petrichor.api.settings import ApiSettings
 from petrichor.arbitration import ArbitrationStore
+from petrichor.catalog_sources import (
+    DEFAULT_CONFIG_PATH,
+    CatalogService,
+    load_catalog_config,
+)
 from petrichor.convergence import ConvergenceStore
 from petrichor.llm.mistral import MistralProvider
 from petrichor.llm.provider import DeterministicMockProvider, LLMProvider
@@ -41,6 +46,7 @@ DEFAULT_ARBITRATIONS_DIRECTORY = ".petrichor/arbitrations"
 DEFAULT_CONVERGENCES_DIRECTORY = ".petrichor/convergences"
 DEFAULT_WITNESSES_DIRECTORY = ".petrichor/witnesses"
 DEFAULT_FORMULA_EDITS_DIRECTORY = ".petrichor/formula_edits"
+DEFAULT_CATALOG_CACHE_DIRECTORY = ".petrichor/catalog-cache"
 
 
 def configure_logging() -> None:
@@ -63,6 +69,7 @@ def build_server(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
     witness_store: WitnessStore,
     llm_provider: LLMProvider,
     edit_store: FormulaEditStore,
+    catalog: CatalogService | None = None,
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
 ) -> WSGIServer:
@@ -79,6 +86,7 @@ def build_server(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
         witness_store=witness_store,
         llm_provider=llm_provider,
         edit_store=edit_store,
+        catalog=catalog,
     )
     return make_server(host, port, app)
 
@@ -123,6 +131,11 @@ def main() -> None:
     convergence_store = ConvergenceStore(directory=Path(DEFAULT_CONVERGENCES_DIRECTORY))
     witness_store = WitnessStore(directory=Path(DEFAULT_WITNESSES_DIRECTORY))
     edit_store = FormulaEditStore(directory=Path(DEFAULT_FORMULA_EDITS_DIRECTORY))
+    catalog_config = load_catalog_config(path=DEFAULT_CONFIG_PATH)
+    catalog = CatalogService(
+        config=catalog_config, cache_directory=Path(DEFAULT_CATALOG_CACHE_DIRECTORY)
+    )
+    catalog.start_background_refresh()
     server = build_server(
         settings=settings,
         store=ModelStore(),
@@ -134,6 +147,7 @@ def main() -> None:
         witness_store=witness_store,
         llm_provider=select_llm_provider(settings=settings),
         edit_store=edit_store,
+        catalog=catalog,
         host=host,
         port=port,
     )

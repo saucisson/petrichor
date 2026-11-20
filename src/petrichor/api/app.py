@@ -42,6 +42,16 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from petrichor.arbitration import ArbitrationDecisionKind, ArbitrationStore
+from petrichor.catalog import (
+    CatalogQuery,
+    CatalogUnavailableError,
+    InvalidCatalogPnmlError,
+    ModelCatalog,
+    QuotaExceededError,
+    SourceUnavailableError,
+    UnknownModelError,
+    parse_sort,
+)
 from petrichor.checks import (
     FAIRNESS_CAPABLE_TOOLS,
     FAMILY_PATTERNS,
@@ -119,6 +129,8 @@ logger = structlog.get_logger(__name__)
 type WSGIApp = Callable[[WSGIEnvironment, StartResponse], Iterable[bytes]]
 
 MODELS_PATH = "/v1/models"
+CATALOG_MODELS_PATH = "/v1/catalog/models"
+CATALOG_IMPORT_PATH = "/v1/catalog/import"
 MODEL_PATH_PREFIX = "/v1/models/"
 CHECKS_PATH_PREFIX = "/v1/checks/"
 RUNS_PATH_PREFIX = "/v1/runs/"
@@ -1283,6 +1295,234 @@ def _dispatch_models(
             payload=_problem(
                 status=HTTPStatus.METHOD_NOT_ALLOWED if method != "GET" else HTTPStatus.NOT_FOUND,
                 reason="method_not_allowed" if method != "GET" else "model_not_found",
+                detail=f"No resource at {path}.",
+            ),
+        )
+    return None
+
+
+class CatalogImportBody(BaseModel):
+    """The body of ``POST /v1/catalog/import``: the instance name to import."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1)
+
+
+def _catalog_query_from_environ(*, environ: WSGIEnvironment) -> CatalogQuery | ProblemPayload:
+    """Build the listing query from the query string (search, facets, sort, pagination)."""
+    pagination = _parse_pagination(environ=environ, default_limit=20, max_limit=100)
+    if isinstance(pagination, ProblemPayload):
+        return pagination
+    limit, offset = pagination
+    params: dict[str, str] = {}
+    for pair in environ.get("QUERY_STRING", "").split("&"):
+        if "=" in pair:
+            key, value = pair.split("=", maxsplit=1)
+            params[key] = value
+    facets = {
+        key: value
+        for key, value in params.items()
+        if key in ("family", "formalism", "edition", "source", "size")
+    }
+    sort = parse_sort(value=params.get("sort", "name"))
+    if sort is None:
+        return _problem(
+            status=HTTPStatus.BAD_REQUEST,
+            reason="invalid_sort",
+            detail="The sort parameter must be one of name, family, edition, size.",
+        )
+    return CatalogQuery(
+        search=params.get("search", ""),
+        facets=facets,
+        sort=sort,
+        limit=limit,
+        offset=offset,
+    )
+
+
+def _get_catalog_models(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    catalog: ModelCatalog,
+) -> Iterable[bytes]:
+    """Paginated catalog listing with name search and facets (spec §21.2, ADR-0016)."""
+    query = _catalog_query_from_environ(environ=environ)
+    if isinstance(query, ProblemPayload):
+        return _problem_response(start_response=start_response, environ=environ, payload=query)
+    try:
+        page = catalog.search(query=query)
+    except CatalogUnavailableError as error:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+                reason="catalog_unavailable",
+                detail=str(error),
+            ),
+        )
+    logger.debug("api_catalog_listed", total=page.total, limit=page.limit, offset=page.offset)
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.OK,
+        content_type=CONTENT_TYPE_JSON,
+        body=page.model_dump_json().encode("utf-8"),
+    )
+
+
+def _post_catalog_import(  # noqa: PLR0911 - one typed error per catalog failure mode
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    catalog: ModelCatalog,
+    store: ModelStore,
+) -> Iterable[bytes]:
+    """Import one catalog instance by name, idempotent on the content hash (spec §21.2)."""
+    try:
+        length = int(environ.get("CONTENT_LENGTH", "") or 0)
+    except ValueError:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.BAD_REQUEST,
+                reason="invalid_content_length",
+                detail="The Content-Length header is not an integer.",
+            ),
+        )
+    try:
+        body = CatalogImportBody.model_validate_json(environ["wsgi.input"].read(length))
+    except ValidationError as error:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.UNPROCESSABLE_ENTITY,
+                reason="invalid_body",
+                detail=str(error),
+            ),
+        )
+    try:
+        fetched = catalog.fetch(name=body.name)
+    except UnknownModelError as error:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND, reason="unknown_model", detail=str(error)
+            ),
+        )
+    except CatalogUnavailableError as error:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+                reason="catalog_unavailable",
+                detail=str(error),
+            ),
+        )
+    except SourceUnavailableError as error:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+                reason="source_unavailable",
+                detail=str(error),
+            ),
+        )
+    except QuotaExceededError as error:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                reason="quota_exceeded",
+                detail=str(error),
+            ),
+        )
+    except InvalidCatalogPnmlError as error:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.UNPROCESSABLE_ENTITY,
+                reason="invalid_pnml",
+                detail=str(error),
+            ),
+        )
+    try:
+        model = import_pnml(text=fetched.pnml_text)
+    except (PnmlImportError, InvalidCanonicalModelError) as error:
+        logger.warning("api_catalog_import_rejected", name=body.name, detail=str(error))
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.UNPROCESSABLE_ENTITY, reason="invalid_pnml", detail=str(error)
+            ),
+        )
+    # Provenance in the model-level annotations section (metadata, hors hachage).
+    provenance = {
+        "catalog": "mcc",
+        "source": fetched.entry.source,
+        "edition": fetched.entry.edition,
+        "name": fetched.name,
+        "url": fetched.url,
+        "sha256": fetched.sha256,
+    }
+    model = model.model_copy(update={"metadata": {**model.metadata, "provenance": provenance}})
+    stored, created = store.save(model=model)
+    if not created:
+        store.replace(model=model)
+    status = HTTPStatus.CREATED if created else HTTPStatus.OK
+    logger.info(
+        "api_catalog_imported",
+        name=body.name,
+        model_id=stored.id,
+        content_hash=stored.content_hash,
+        created=created,
+        sha256=fetched.sha256,
+    )
+    extra_headers = [("Location", f"{MODELS_PATH}/{stored.id}")] if created else []
+    return _respond(
+        start_response=start_response,
+        status=status,
+        content_type=CONTENT_TYPE_PETRI_JSON,
+        body=serialize_model(model=stored).encode("utf-8"),
+        extra_headers=extra_headers,
+    )
+
+
+def _dispatch_catalog(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    method: str,
+    path: str,
+    catalog: ModelCatalog | None,
+    store: ModelStore,
+) -> Iterable[bytes] | None:
+    """Route the /v1/catalog resources, or return None when the path is not one."""
+    if catalog is None:
+        return None
+    if path == CATALOG_MODELS_PATH and method == "GET":
+        return _get_catalog_models(environ=environ, start_response=start_response, catalog=catalog)
+    if path == CATALOG_IMPORT_PATH and method == "POST":
+        return _post_catalog_import(
+            environ=environ, start_response=start_response, catalog=catalog, store=store
+        )
+    if path.startswith("/v1/catalog/"):
+        known = path in (CATALOG_MODELS_PATH, CATALOG_IMPORT_PATH)
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.METHOD_NOT_ALLOWED if known else HTTPStatus.NOT_FOUND,
+                reason="method_not_allowed" if known else "not_found",
                 detail=f"No resource at {path}.",
             ),
         )
@@ -3298,6 +3538,7 @@ def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
     witness_store: WitnessStore | None = None,
     llm_provider: LLMProvider | None = None,
     edit_store: FormulaEditStore | None = None,
+    catalog: ModelCatalog | None = None,
 ) -> WSGIApp:
     """Build the WSGI application: auth first, then routing and negotiation."""
 
@@ -3325,6 +3566,15 @@ def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
         routed = _dispatch_models(
             environ=environ, start_response=start_response, method=method, path=path, store=store
         )
+        if routed is None:
+            routed = _dispatch_catalog(
+                environ=environ,
+                start_response=start_response,
+                method=method,
+                path=path,
+                catalog=catalog,
+                store=store,
+            )
         if routed is None:
             routed = _dispatch_qualification(
                 environ=environ,
