@@ -322,7 +322,7 @@ class CatalogService:
         for source in self._sources:
             try:
                 source_entries = source.index_entries()
-            except SourceUnavailableError as error:
+            except Exception as error:  # noqa: BLE001 - a source must never kill the refresh thread
                 logger.warning(
                     "catalog_source_unavailable", source=source.config.name, error=str(error)
                 )
