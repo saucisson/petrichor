@@ -4,7 +4,7 @@
 
 **Identité.** Le nom **Petrichor** désigne l'odeur de la terre sèche au premier contact de la pluie : ce qui devient perceptible juste avant de se révéler — exactement le produit, des propriétés invisibles rendues sensibles avant d'être prouvées. Le mot contient « Petri ». Tagline : *« L'IA propose, l'ingénieur arbitre, les outils tranchent. »* Aucun outil de vérification formelle ne porte ce nom.
 
-Document de référence v1.3 · Base : architecture API v2 actée + maquette d'élicitation Philosophes-3 (toutes ses fonctions sont reprises ci-dessous comme exigences frontend) + spécifications détaillées (format canonique, moteur d'élicitation, contrat LLM, témoins, capacité des outils MCC, protocole d'implémentation). Voir le changelog en fin de document.
+Document de référence v1.4 · Base : architecture API v2 actée + maquette d'élicitation Philosophes-3 (toutes ses fonctions sont reprises ci-dessous comme exigences frontend) + spécifications détaillées (format canonique, moteur d'élicitation, contrat LLM, témoins, capacité des outils MCC, protocole d'implémentation). Voir le changelog en fin de document.
 
 ---
 
@@ -237,6 +237,13 @@ La maquette d'élicitation devient la **spécification UI de référence**. L'ap
 3. **Complétude** : P34 (convergence asymétrique), P37 (formule éditable) et P38 (dossiers de preuve cliquables) deviennent utilisables au clic ; la friction F5 « UI non observé » (`docs/studies/pilote/v1/audit/frictions.md`) est fermée par une e2e UI en CI + un **addendum** d'audit (l'audit commité n'est jamais réécrit, culture append-only).
 4. **Serveur source de vérité** : aucun verdict n'est calculé côté client (§19.4 inchangé) ; le build frontend est servi sous `/ui/` sans écart d'URL.
 5. **Calendrier** : la vague 7 est un prérequis de P48 (study-a, sujets humains) ; elle peut courir en parallèle de P43/P45–P47.
+
+**v1.4 (2026-11-20) — décisions actées (vague 9, issues P66–P71).** Origine : constat humain du 2026-11-20 (vague 9) — l'UI v2 est fonctionnellement complète mais visuellement pauvre (pas de charte, en-tête confus, navigation sans guidage, pas de bandeaux de messages) ; décision humaine actée : refonte visuelle via un framework CSS motivé par ADR (pressenti : Tailwind), versions épinglées.
+
+1. **Charte graphique** : un framework CSS (choix acté par ADR, alternatives motivées : design system maison, CSS modules, autres frameworks) remplace le `styles.css` utilitaire ; build Vite avec purge du CSS mort (ADR-0101) ; aucune dépendance runtime lourde ; socle de design documenté (palette, espacements, typographie, rayons, états focus/disabled/hover/error) sous forme de tokens nommés ; contraste AA minimum partout (a11y, maquette P12).
+2. **Chrome et guidage** : en-tête restructuré en groupes visibles (connexion clé API, session, langue) ; stepper guidé — sans session active, les étapes Questions/Vérifications/Synthèse sont désactivées avec la raison affichée, étape courante signalée (`aria-current="step"`) ; boutons primaires/secondaires distincts ; messages typés (erreurs serveur affichées verbatim, jamais traduites — règle v1.3 inchangée ; chargements, confirmations).
+3. **Parité stricte** : la refonte ne change aucun comportement ni aucune chaîne ; i18n fr/en du chrome à 100 % (jamais les contenus serveur) ; tous les tests existants (vitest, e2e `@ui`) passent.
+4. **Voies d'import** : l'étape Amorçage accepte le fichier local (PNML ou archive zip/tgz/tar.gz), l'URL collée (PNML ou archive), et le nom depuis le catalogue de modèles (§21) — voir §21 pour le port serveur, la recherche et les règles communes.
 
 ---
 
@@ -686,7 +693,37 @@ Descriptifs + IC 95 % (Wilson pour proportions, bootstrap pour coûts) ; compara
 
 ---
 
+## 21. Catalogue de modèles et voies d'import (v1.4 — vague 9)
+
+Origine : constat humain du 2026-11-20 (vague 9) — l'import ne passait que par fichier local ; décision humaine actée : importer par nom des modèles de dépôts adaptés (MCC et miroirs), côté serveur. Constat de session fondateur : `docs/spikes/2026-11-20-catalogues-mcc.md` (annexe A, sources et voies d'accès machine inspectées).
+
+### 21.1 Port `ModelCatalog` (architecture oignon, ADR-0002)
+
+- Port du domaine derrière lequel vivent les adaptateurs d'infrastructure : recherche par nom, listing paginé, récupération du PNML d'une instance. Aucun code métier ne dépend d'une source concrète.
+- **Sources en configuration versionnée** (l'ajout d'un dépôt ne demande aucun changement de code) ; trois types, MCC officiel en tête :
+  1. `metadata` — dépôt officiel `pnrepository.lip6.fr` (`models/all/metadata.json`, `models/<Famille>/pnml.json`, archives permanentes `archive/<Famille>-pnml.tar.gz`) ;
+  2. `edition` — site officiel `mcc.lip6.fr` par édition (`archives/INPUTS-<année>.tar.gz`, une archive `.tgz` par instance) ;
+  3. `static-index` — miroirs GitHub Pages `yanntm.github.io/pnmcc-models-<année>` (`.tgz` par instance, PNML réparés).
+- **Téléchargement en arrière-plan au lancement** : tâche asynchrone, cache disque borné par configuration (répertoire, quota, TTL), empreinte sha256 par archive, User-Agent explicite. Échec réseau ou format inattendu → dégradation explicite (« catalogue indisponible »), jamais de crash au démarrage, aucun téléchargement ne bloque une requête. Instances hors quota (ex. > 100 Mo compressé) refusées avec erreur explicite.
+
+### 21.2 API REST (ADR-0016, `openapi.yaml` tenu à jour)
+
+- Listing paginé du catalogue avec **recherche par nom** (instance et famille) et **facettes** : famille, formalisme (`PT`/`COL`), édition, source, taille (bucket dérivé) ; tris stables. La facette formalisme alimente l'avertissement COL (symmetric non déplié, §18.3 inchangé) et propose les jumeaux `-PT-` quand ils existent.
+- **Import par nom idempotent** : réutilise le hachage de contenu de `POST /v1/models` (même modèle = même id) ; erreurs typées : nom inconnu, source indisponible, PNML invalide après extraction.
+- **Provenance persistée** dans `annotations` du modèle canonique (hors hachage) : `catalog`, `source`, `edition`, `name`, `url`, `sha256`.
+
+### 21.3 Toutes les voies d'import
+
+- **Fichier local** : PNML, ou archive (`zip`/`tgz`/`tar.gz`) contenant des PNML, dans la limite du quota.
+- **URL collée** : PNML ou archive ; allowlist de domaines en configuration versionnée (défaut : `pnrepository.lip6.fr`, `mcc.lip6.fr`, `yanntm.github.io`, `raw.githubusercontent.com`), schéma https uniquement, timeout et quota de taille, rejet des réseaux privés/locaux (SSRF, ADR-0008).
+- **Nom depuis le catalogue** (§21.2).
+- **Règle « un PNML ou candidats »** pour toute archive (locale ou distante) : exactement un PNML → import direct ; plusieurs → réponse typée listant les candidats (nom, taille, empreinte, formalisme détecté) puis import sur choix explicite ; zéro → erreur typée. **Jamais d'import multiple silencieux.**
+- **Extraction protégée** : zip-slip refusé (chemins absolus et `..`), fichiers refusés listés dans l'erreur.
+
+---
+
 ## Changelog
 
+- **v1.4 — 2026-11-20** : vague 9 « UI v3 — clarté & catalogue » (issues P66–P71), origine constat humain du 2026-11-20. §9 : refonte visuelle du chrome via framework CSS acté par ADR (Tailwind pressenti), socle de design tokenisé, contraste AA, stepper guidé, messages typés, parité stricte. §21 (nouveau) : port `ModelCatalog` côté serveur, trois types de sources en configuration versionnée (MCC officiel, éditions, miroirs), recherche + facettes, import par nom idempotent, téléchargement en arrière-plan avec cache borné, provenance en `annotations`, et toutes les voies d'import (fichier, URL, catalogue) avec la règle « un PNML ou candidats ». Fondement : `docs/spikes/2026-11-20-catalogues-mcc.md`.
 - **v1.3 — 2026-11-19** : §9 acté en v1.3 — framework React 18+ / TypeScript strict / Vite (supersède le vanilla JS de P18), i18n fr (défaut) / en du chrome d'UI uniquement, complétude côté client de P34/P37/P38, fermeture de la friction F5 par e2e navigateur en CI + addendum d'audit (append-only). Décisions détaillées en §9 « v1.3 », vague 7 du backlog (P52–P57, prérequis de P48).
 - **v1.2** : architecture API v2 actée + maquette d'élicitation Philosophes-3 comme spécification UI de référence (base du document).
