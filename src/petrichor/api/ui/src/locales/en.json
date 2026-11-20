@@ -45,7 +45,16 @@
       "controversial": "Controversial clause — escalated to the engineer, never decided here.",
       "notVerified": "Not verified.",
       "proofLine": "{{tool}} : verdict {{verdict}}"
-    }
+    },
+    "edit": "Edit formula",
+    "editLabel": "New formula",
+    "editSave": "Save",
+    "editCancel": "Cancel",
+    "editDone": "Formula updated — journaled (append-only).",
+    "editError": "Edit refused ({{status}}): {{detail}}",
+    "readingTitle": "Inverse reading",
+    "readingNone": "No reading available for this formula.",
+    "readingNotSays": "Does not say: {{notSays}}"
   },
   "verifications": {
     "title": "MC checks",

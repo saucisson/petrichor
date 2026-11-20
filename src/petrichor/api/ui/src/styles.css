@@ -116,3 +116,24 @@ pre {
   gap: 0.5rem;
   margin: 0.25rem 0;
 }
+
+.formula-editor {
+  border-top: 1px dashed #d1d5db;
+  margin-top: 0.5rem;
+  padding-top: 0.5rem;
+}
+
+.formula-editor input {
+  width: 100%;
+  max-width: 40rem;
+}
+
+.edit-error {
+  color: #b91c1c;
+}
+
+.formula-reading {
+  background: #f9fafb;
+  border-radius: 0.5rem;
+  padding: 0.25rem 0.5rem;
+}
