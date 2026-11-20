@@ -6,13 +6,13 @@
 # Required repository secrets (set by the human, never committed):
 #   SSH_PRIVATE_KEY - private key authorized for the `deploy` user on the VPS
 #                     (public key in /home/deploy/.ssh/authorized_keys)
-#   VPS_HOST        - 145.239.197.11 (vps-89091363.vps.ovh.net)
+#   VPS_HOST        - 145.239.197.11 (vps-89091363.vps.ovh.net); secret OR repository variable (not sensitive)
 name: deploy
 
 on:
   push:
     branches: [daily]
-  # Manual re-run (e.g. after the SSH_PRIVATE_KEY / VPS_HOST secrets are set).
+  # Manual re-run (e.g. after SSH_PRIVATE_KEY is set and VPS_HOST is configured).
   workflow_dispatch:
 
 permissions:
@@ -30,7 +30,7 @@ jobs:
       - name: Install the SSH private key
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_HOST: ${{ secrets.VPS_HOST || vars.VPS_HOST }}
         run: |
           install -d -m 700 "$HOME/.ssh"
           printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_rsa"
@@ -39,7 +39,7 @@ jobs:
 
       - name: Run the deployment on the VPS
         env:
-          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_HOST: ${{ secrets.VPS_HOST || vars.VPS_HOST }}
           VPS_USER: ${{ vars.VPS_USER || 'deploy' }}
         run: |
           ssh -i "$HOME/.ssh/id_rsa" -o BatchMode=yes -o StrictHostKeyChecking=yes \
