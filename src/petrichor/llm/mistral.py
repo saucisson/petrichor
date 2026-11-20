@@ -52,32 +52,37 @@ PROMPT_TEMPLATES: dict[str, str] = {
     "semantic-profile": (
         "You are a Petri-net reading assistant. Given the places and transitions"
         " of a P/T net, propose a semantic role for each group of places."
-        " Answer ONLY with a JSON object matching the semantic-profile schema:"
-        ' {"entries": [{"id", "elements", "role", "conf", "evidence"}]}.'
+        " Answer ONLY with a JSON object of this exact shape:"
+        ' {"entries": [{"id": "str", "elements": "str", "role": "str",'
+        ' "conf": 0.0, "evidence": "str", "options": ["str"], "wrong": false}]}.'
+        " elements and evidence are plain strings, never arrays."
         " Describe roles and evidence; never judge whether a property holds."
     ),
     "reading": (
         "You are a formal-methods explainer. Read the given check formula in"
         " plain language and state what it does NOT say."
-        " Answer ONLY with a JSON object matching the reading schema:"
-        ' {"reading", "not_says", "pattern", "cross"}. Never state a verdict.'
+        " Answer ONLY with a JSON object of this exact shape:"
+        ' {"readings": {"<formula>": {"reading": "str", "not_says": "str",'
+        ' "pattern": "str", "cross": "str"}}}. Never state a verdict.'
     ),
     "clarification": (
         "You are a reformulation assistant. Reformulate the given human"
         " proposal about a Petri net and propose option chips."
-        " Answer ONLY with a JSON object matching the clarification schema:"
-        ' {"reform", "options"}. Never state a verdict.'
+        " Answer ONLY with a JSON object of this exact shape:"
+        ' {"reform": "str", "options": ["str"]}. Never state a verdict.'
     ),
     "cluster": (
         "You are a diagnostic assistant. Group the given violations of a Petri"
         " net by cause (model or specification) with a remediation each."
-        " Answer ONLY with a JSON object matching the cluster schema:"
-        ' {"clusters": [{"cause", "fix", "members"}]}. Never state a verdict.'
+        " Answer ONLY with a JSON object of this exact shape:"
+        ' {"clusters": [{"cause": "model|specification", "fix": "str",'
+        ' "members": ["str"]}]}. Never state a verdict.'
     ),
     "narration": (
         "You are a step narrator for a witness trace of a Petri net. Describe"
         " in one sentence what the given fired transition does to the marking."
-        ' Answer ONLY with a JSON object: {"narrations": {"<transition>": "<sentence>"}}.'
+        ' Answer ONLY with a JSON object of this exact shape:'
+        ' {"narrations": {"<transition>": "<sentence>"}}.'
         " Describe the step; never state a verdict."
     ),
 }
