@@ -46,7 +46,7 @@ ui-build: ## Build the UI v2 into src/petrichor/api/static (served under /ui/, A
 	cd $(UI_DIR) && npm run build
 
 ui-e2e-deps: ## Install the UI dependencies and the Playwright Chromium browser (for the @ui e2e, issue #128). Needs node on PATH (.node-version).
-	cd $(UI_DIR) && { [ -d node_modules ] || npm ci --silent; } && npx playwright install --with-deps chromium --quiet
+	cd $(UI_DIR) && { [ -d node_modules ] || npm ci --silent; } && npx playwright install --with-deps chromium
 
 ui-e2e: ui-e2e-deps ## E2E navigateur de la voie UI (Playwright, marqueur @ui, issue #128): real browser against the real API on the real compose engines. Needs node on PATH (.node-version) and docker.
 	$(UV) run pytest -m ui tests/test_ui_e2e.py --no-cov
