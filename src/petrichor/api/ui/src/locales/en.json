@@ -74,6 +74,21 @@
     "intro": "The session contract, exportable as Markdown.",
     "export": "Download contract (Markdown)",
     "unavailable": "Contract unavailable ({{status}}).",
-    "journalTitle": "Arbitration journal"
+    "journalTitle": "Arbitration journal",
+    "dossiers": {
+      "title": "Proof dossiers",
+      "empty": "No proof dossier for this session.",
+      "campsTitle": "Camps (exported as-is)",
+      "proof": {
+        "run": "run {{runId}}",
+        "tool": "tool {{tool}}",
+        "verdict": "verdict {{verdict}}",
+        "technique": "technique {{technique}}",
+        "cost": "cost {{cost}} s",
+        "witness": "witness {{witnessId}}",
+        "replay": "Replay the witness step by step",
+        "closeReplay": "Close the witness"
+      }
+    }
   }
 }
