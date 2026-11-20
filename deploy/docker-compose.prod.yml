@@ -1,0 +1,14 @@
+# Production override for the VPS deployment (ADR-0103): the base
+# docker-compose.yml keeps `restart: "no"` for local runs; on the server the
+# services must come back after a reboot or a crash. Everything else
+# (loopback-only published ports, healthchecks, non-root read-only
+# containers) is inherited unchanged from the base file.
+services:
+  api:
+    restart: unless-stopped
+  dummy:
+    restart: unless-stopped
+  verifypn:
+    restart: unless-stopped
+  its-tools:
+    restart: unless-stopped
