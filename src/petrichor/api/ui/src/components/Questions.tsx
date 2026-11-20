@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ApiClient } from "../api";
-import type { Contract, FormulaEditResponse, FormulaReading, Question } from "../types";
+import type {
+  Contract,
+  ConvergenceList,
+  FormulaEditResponse,
+  FormulaReading,
+  Question,
+} from "../types";
 
 const CONTRACT_ACCEPT = "application/contract+json; version=1.0";
 const DECISIONS: { id: string; labelKey: "refuse" | "accept" | "verifyFirst" }[] = [
@@ -153,6 +159,9 @@ export default function Questions({ hidden, client, sessionId, reloadToken }: Qu
   const { t } = useTranslation();
   const [contract, setContract] = useState<Contract | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [convergences, setConvergences] = useState<ConvergenceList | null>(null);
+  const [fusionMessage, setFusionMessage] = useState<string | null>(null);
+  const [refusedIds, setRefusedIds] = useState<Set<string>>(new Set());
 
   const loadQuestions = useCallback(async () => {
     if (!sessionId) return;
@@ -161,6 +170,11 @@ export default function Questions({ hidden, client, sessionId, reloadToken }: Qu
     });
     if (response.status !== 200) return;
     setContract((await response.json()) as Contract);
+    // P34: the arbitrated fusions of the session (human-only, append-only).
+    const fusions = await client.request("/v1/sessions/" + sessionId + "/convergences");
+    if (fusions.status === 200) {
+      setConvergences((await fusions.json()) as ConvergenceList);
+    }
   }, [client, sessionId]);
 
   useEffect(() => {
@@ -175,6 +189,39 @@ export default function Questions({ hidden, client, sessionId, reloadToken }: Qu
       decision,
     });
     await loadQuestions();
+  };
+
+  /* P34 (issue #34): the human fusion arbitration - accept posts the fusion
+     to the API (the covered question is never solicited again, the revision
+     propagates to the surviving card and the journal), refuse is a local
+     dismissal: automatic fusion is forbidden, so refusing never calls the
+     API. The history stays append-only. */
+  const fuse = async (question: Question) => {
+    setFusionMessage(null);
+    const hint = question.convergence_hint;
+    if (hint === undefined || hint === null) return;
+    const response = await client.request("/v1/sessions/" + sessionId + "/convergences", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question_id: question.question_id, proposition_id: hint }),
+    });
+    if (response.status !== 200 && response.status !== 201) {
+      let detail = "";
+      try {
+        detail = ((await response.json()) as { detail?: string }).detail ?? "";
+      } catch {
+        detail = await response.text();
+      }
+      setFusionMessage(t("questions.fusionError", { status: response.status, detail }));
+      return;
+    }
+    setFusionMessage(t("questions.fusionDone"));
+    await loadQuestions();
+  };
+
+  const refuseFusion = (questionId: string) => {
+    setRefusedIds((previous) => new Set(previous).add(questionId));
+    setFusionMessage(t("questions.fusionRefused"));
   };
 
   return (
@@ -193,6 +240,24 @@ export default function Questions({ hidden, client, sessionId, reloadToken }: Qu
             </p>
             <p className="status">{t("questions.status", { status: question.status })}</p>
             <CrossStatus question={question} />
+            {question.covered_by !== undefined && question.covered_by !== null ? (
+              <p className="convergence covered">
+                {t("questions.coveredBy", { survivor: question.covered_by })}
+              </p>
+            ) : null}
+            {question.convergence_hint !== undefined &&
+            question.convergence_hint !== null &&
+            !refusedIds.has(question.question_id) ? (
+              <div className="convergence hint">
+                <p>{t("questions.convergenceHint", { hint: question.convergence_hint })}</p>
+                <button type="button" onClick={() => void fuse(question)}>
+                  {t("questions.fuse")}
+                </button>
+                <button type="button" onClick={() => refuseFusion(question.question_id)}>
+                  {t("questions.refuseFusion")}
+                </button>
+              </div>
+            ) : null}
             <div className="decisions">
               {DECISIONS.map((decision) => (
                 <button
@@ -223,6 +288,24 @@ export default function Questions({ hidden, client, sessionId, reloadToken }: Qu
           </li>
         ))}
       </ul>
+      {fusionMessage !== null ? <p className="fusion-message">{fusionMessage}</p> : null}
+      <section className="convergences-history" aria-labelledby="h-convergences">
+        <h3 id="h-convergences">{t("questions.convergencesTitle")}</h3>
+        {convergences !== null && convergences.convergences.length > 0 ? (
+          <ul>
+            {convergences.convergences.map((record) => (
+              <li key={record.question_id + "->" + record.proposition_id}>
+                {t("questions.convergenceLine", {
+                  questionId: record.question_id,
+                  propositionId: record.proposition_id,
+                })}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p>{t("questions.convergencesEmpty")}</p>
+        )}
+      </section>
     </section>
   );
 }

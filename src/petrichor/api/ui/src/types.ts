@@ -28,6 +28,25 @@ export interface Question {
   cross_status: CrossStatus;
   verified_by?: number;
   proofs: Proof[];
+  // P34 (issue #34): the earlier generated question this one converges with,
+  // and the surviving question of the human fusion covering this one.
+  convergence_hint?: string | null;
+  covered_by?: string | null;
+}
+
+// P34: one human fusion record (POST/GET /v1/sessions/{sid}/convergences).
+export interface ConvergenceRecord {
+  session_id: string;
+  question_id: string;
+  proposition_id: string;
+  timestamp: number;
+}
+
+export interface ConvergenceList {
+  convergences: ConvergenceRecord[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 export interface JournalEntry {
