@@ -7,11 +7,14 @@ degradation when every source fails. Archive ingestion: zip/tgz extraction
 with zip-slip refusal.
 """
 
+import gc
 import gzip
 import io
 import json
 import tarfile
 import urllib.error
+import urllib.request
+import warnings
 import zipfile
 from pathlib import Path
 
@@ -464,3 +467,23 @@ class TestNarrationAndRobustness:
         monkeypatch.setattr(catalog_sources, "http_get_bytes", lambda **kwargs: b"corrupt-bytes")
         with pytest.raises(InvalidCatalogPnmlError):
             service.fetch(name="Philosophers-PT-010")
+
+
+def test_http_error_response_is_closed_no_resource_warning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A 404 must not leak an unclosed HTTPError response (ResourceWarning)."""
+
+    def fake_urlopen(request: urllib.request.Request, timeout: float) -> object:
+        raise urllib.error.HTTPError(
+            url=request.full_url, code=404, msg="Not Found", hdrs=None, fp=io.BytesIO(b"")
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", ResourceWarning)
+        with pytest.raises(SourceUnavailableError):
+            catalog_sources.http_get_bytes(
+                url="https://x.test/", timeout_seconds=1, max_bytes=10, user_agent="test"
+            )
+        gc.collect()
