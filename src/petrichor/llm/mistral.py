@@ -25,6 +25,7 @@ budget, which counts only tool seconds (spec §12.4).
 """
 
 import json
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, TypeVar
 
 import httpx
@@ -34,6 +35,7 @@ from pydantic import BaseModel, SecretStr, ValidationError
 from petrichor.llm.digest import AcceptedRole, net_digest
 from petrichor.llm.provider import (
     MAX_LLM_ATTEMPTS,
+    CallState,
     FormulaText,
     HumanMessage,
     LLMDegradationError,
@@ -191,10 +193,15 @@ class MistralProvider(LLMProvider):
         self._total_tokens = 0
         self._by_usage_model: dict[tuple[str, str], dict[str, int]] = {}
         self._archive: list[dict[str, object]] = []
+        self._call_states: list[CallState] = []
 
     def routing_fingerprint(self) -> dict[str, str]:
         """The exact pinned version per usage (replay P46, P74/ADR-0108)."""
         return {usage: route.version for usage, route in sorted(self._routing.items())}
+
+    def call_states(self) -> tuple[CallState, ...]:
+        """The observable state of every call (P75: usage, model, start, end, error)."""
+        return tuple(self._call_states)
 
     def archived_calls(self) -> tuple[dict[str, object], ...]:
         """Archived request/response pairs with their (model, version) fingerprint (P72, P46)."""
@@ -233,6 +240,10 @@ class MistralProvider(LLMProvider):
         usage, and the archive carries its exact (model, version).
         """
         route = route or route_for(self._routing, usage=usage)
+        # P75: the call state is observable while the request is in flight.
+        started_at = datetime.now(UTC)
+        self._call_states.append(CallState(usage=usage, model=route.model, started_at=started_at))
+        state_index = len(self._call_states) - 1
         prompt = PROMPT_TEMPLATES[usage]
         user_content = json.dumps(
             {"digest": digest, "data": data, "language": self._language},
@@ -304,7 +315,11 @@ class MistralProvider(LLMProvider):
                     attempt=attempt,
                     total_tokens=total_tokens,
                 )
-                return output_type.model_validate(json.loads(content))
+                result = output_type.model_validate(json.loads(content))
+                self._call_states[state_index] = self._call_states[state_index].model_copy(
+                    update={"ended_at": datetime.now(UTC)}
+                )
+                return result
             except (
                 httpx.HTTPError,
                 KeyError,
@@ -321,6 +336,9 @@ class MistralProvider(LLMProvider):
                 )
                 continue
         logger.error("llm_degraded", provider="mistral", usage=usage, attempts=MAX_LLM_ATTEMPTS)
+        self._call_states[state_index] = self._call_states[state_index].model_copy(
+            update={"ended_at": datetime.now(UTC), "error": "degraded"}
+        )
         raise LLMDegradationError(
             f"Mistral provider: no valid answer for usage {usage!r}"
             f" after {MAX_LLM_ATTEMPTS} attempts."

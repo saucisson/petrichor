@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ApiClient } from "../api";
-import Busy from "./Busy";
+import LlmBusy from "./LlmBusy";
 import VerdictBadge from "./VerdictBadge";
 import type { Budget, Run, Session, Witness } from "../types";
 
@@ -167,7 +167,8 @@ export default function Verifications({ hidden, client, sessionId, reloadToken }
       <p>{t("verifications.intro")}</p>
       {loading ? (
         <p className="message message-info">
-          <Busy label={t("verifications.loading")} />
+          {/* P75: the label comes from the LLM layer while a real call runs. */}
+          <LlmBusy client={client} active={loading} fallbackLabel={t("verifications.loading")} />
         </p>
       ) : null}
       {loadError !== null ? (

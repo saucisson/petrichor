@@ -39,6 +39,7 @@
     "sessionCreated": "Session créée : {{id}}.",
     "importRefused": "Import du modèle refusé : {{status}}",
     "noProfile": "Aucun profil proposé pour cette session.",
+    "loadingProfile": "Chargement du profil sémantique…",
     "roleProposed": "rôle proposé : {{role}} (conf {{conf}})",
     "accept": "Accepter",
     "refuse": "Refuser",
@@ -198,5 +199,12 @@
   "common": {
     "verdictAria": "verdict : {{verdict}}",
     "elapsed": "depuis {{seconds}} s"
+  },
+  "llm": {
+    "semantic-profile": "Profil sémantique du réseau…",
+    "reading": "Lecture de la grille…",
+    "clarification": "Clarification de la proposition…",
+    "cluster": "Tri des clauses violées…",
+    "narration": "Narration du témoin…"
   }
 }

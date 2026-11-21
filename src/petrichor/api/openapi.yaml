@@ -611,6 +611,56 @@ paths:
                 $ref: "#/components/schemas/Problem"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+  /llm/calls:
+    get:
+      summary: The observable state of every LLM call (P75)
+      description: >-
+        Polled by the UI while a real LLM call may be in flight, to show the
+        active waiting indicator (animated hourglass, usage, elapsed) — never
+        a frozen screen without information. The deterministic mock is
+        instantaneous: no call is ever in progress with it.
+      responses:
+        "200":
+          description: The call states of the configured provider.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [calls]
+                properties:
+                  calls:
+                    type: array
+                    items:
+                      type: object
+                      required: [usage, model, started_at, ended_at, error, in_progress]
+                      properties:
+                        usage:
+                          type: string
+                          enum: [semantic-profile, reading, clarification, cluster, narration]
+                        model:
+                          type: string
+                        started_at:
+                          type: string
+                          format: date-time
+                        ended_at:
+                          type: string
+                          format: date-time
+                          nullable: true
+                        error:
+                          type: string
+                          nullable: true
+                        in_progress:
+                          type: boolean
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          description: No LLM provider is wired.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
   /qualification:
     get:
       summary: Qualification status per adapter and family
