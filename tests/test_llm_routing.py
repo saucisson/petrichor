@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 import httpx
 import pytest
+import structlog
 from pydantic import SecretStr, ValidationError
 from tests.test_llm_mistral import USAGE_SAMPLES, fake_client, mistral_response
 
@@ -151,7 +152,8 @@ class TestProviderRouting:
             )
 
         provider = MistralProvider(api_key=SecretStr("sk-test"), http_client=fake_client(handler))
-        corpus = provider.narrate(model=PHILOSOPHES3_MODEL, transitions=("takeL_1",))
+        with structlog.testing.capture_logs() as logs:
+            corpus = provider.narrate(model=PHILOSOPHES3_MODEL, transitions=("takeL_1",))
         assert "takeL_1" in corpus.narrations
         # The primary model was tried (bounded re-requests), then the pinned fallback.
         assert "ministral-14b-2512" in seen
@@ -159,6 +161,9 @@ class TestProviderRouting:
         archive = provider.archived_calls()
         assert archive[-1]["model"] == "mistral-small-2603"
         assert archive[-1]["version"] == "mistral-small-2603"
+        # ADR-0005: the fallback event is part of the narration contract, pinned.
+        events = [event["event"] for event in logs]
+        assert "llm_narration_fallback" in events
 
     def test_provider_rejects_an_incomplete_routing(self) -> None:
         routing: dict[LlmUsage, ModelRoute] = dict(USAGE_MODEL_ROUTING)
