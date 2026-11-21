@@ -2325,7 +2325,12 @@ def _post_question_formula(  # noqa: PLR0913 - one keyword per routed dependency
             "new_formula": payload.formula,
         },
     )
-    reading = _read_formula(llm_provider=llm_provider, model=model, formula=payload.formula)
+    reading = _read_formula(
+        llm_provider=llm_provider,
+        model=model,
+        formula=payload.formula,
+        grid=tuple(FormulaText(q.formula) for q in generated),
+    )
     logger.debug(
         "api_question_formula_edited",
         session_id=session_id,
@@ -2347,18 +2352,27 @@ def _post_question_formula(  # noqa: PLR0913 - one keyword per routed dependency
 
 
 def _read_formula(
-    *, llm_provider: LLMProvider | None, model: CanonicalModel, formula: str
+    *,
+    llm_provider: LLMProvider | None,
+    model: CanonicalModel,
+    formula: str,
+    grid: tuple[FormulaText, ...] = (),
 ) -> dict[str, JsonValue] | None:
     """The inverse reading of a formula (formule → langage), an LLM proposition (spec §9).
 
-    Degrades explicitly (None with a note) when no reading is available -
-    never a fabricated reading.
+    P72: the provider reads the WHOLE frozen grid in one call (document
+    granularity); ``grid`` is that document. Degrades explicitly (None with
+    a note) when no reading is available - never a fabricated reading.
     """
     if llm_provider is None:
         return None
+    document_formulas = grid if grid else (FormulaText(formula),)
     try:
-        reading = llm_provider.reading(model_hash=model.content_hash, formula=FormulaText(formula))
-    except LLMDegradationError:
+        document = llm_provider.reading(
+            model_hash=model.content_hash, formulas=document_formulas
+        )
+        reading = document.readings[FormulaText(formula)]
+    except (LLMDegradationError, KeyError):
         logger.warning("api_formula_reading_degraded", formula=formula)
         return {"degraded": True, "note": "Aucune lecture scriptée pour cette formule."}
     return {**reading.model_dump(mode="json"), "provenance": "llm", "degraded": False}

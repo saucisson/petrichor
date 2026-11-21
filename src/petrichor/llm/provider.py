@@ -23,7 +23,6 @@ from petrichor.llm.schemas import (
     FormulaReadings,
     LlmUsage,
     NarrationCorpus,
-    Reading,
     SemanticProfile,
 )
 
@@ -63,8 +62,14 @@ class LLMProvider(ABC):
         """Extract the semantic profile of a model."""
 
     @abstractmethod
-    def reading(self, *, model_hash: ContentHash, formula: FormulaText) -> Reading:
-        """Read one catalogue formula in natural language."""
+    def reading(
+        self, *, model_hash: ContentHash, formulas: tuple[FormulaText, ...]
+    ) -> FormulaReadings:
+        """Read the whole frozen question grid in ONE call (P72, spec §15).
+
+        The document is the grid: one HTTP call per document, never one call
+        per formula. The returned document maps each formula to its reading.
+        """
 
     @abstractmethod
     def clarification(self, *, model_hash: ContentHash, text: HumanMessage) -> Clarification:
@@ -75,19 +80,22 @@ class LLMProvider(ABC):
         """Cluster the violations of a model with their causes and remediations."""
 
     @abstractmethod
-    def narrate_transition(self, *, model_hash: ContentHash, transition: str) -> str:
-        """Narrate one fired transition of a witness step (spec §16, issue #32).
+    def narrate(self, *, model_hash: ContentHash, transitions: tuple[str, ...]) -> NarrationCorpus:
+        """Narrate the COMPLETE witness in ONE call (P72, spec §16, issue #32).
 
-        The narration is a proposition, never a verdict; an unscripted
-        transition degrades explicitly (``LLMDegradationError``).
+        The document is the witness: one HTTP call per document, stored once
+        (P32), never one call per transition. The returned corpus maps each
+        fired transition to its sentence; a transition absent from the
+        corpus simply gets no narration - never an invented one.
         """
 
     @abstractmethod
     def usage_totals(self) -> dict[str, object]:
-        """The accumulated LLM cost of the provider.
+        """The accumulated LLM cost of the provider, per (usage, model) couple.
 
         Displayed apart from the tool-time budget, which counts only tool
-        seconds (spec §12.4, issue #36).
+        seconds (spec §12.4, issue #36; P72: the breakdown is per couple
+        (usage, model) so the routing of P74 is observable).
         """
 
 
@@ -98,12 +106,17 @@ class DeterministicMockProvider(LLMProvider):
         """Bind the provider to a golden corpus root (defaults to the shipped corpus)."""
         self._golden_root = golden_root
         self._calls = 0
+        self._calls_by_usage: dict[str, int] = {}
 
     def usage_totals(self) -> dict[str, object]:
-        """The mock costs no tokens; only the call count is tracked (spec §12.4)."""
+        """The mock costs no tokens; the call count is tracked per usage (spec §12.4, P72)."""
         return {
             "provider": "mock",
             "calls": self._calls,
+            "by_usage_model": {
+                f"{usage}|mock": {"calls": count, "total_tokens": 0}
+                for usage, count in sorted(self._calls_by_usage.items())
+            },
             "prompt_tokens": 0,
             "completion_tokens": 0,
             "total_tokens": 0,
@@ -115,13 +128,15 @@ class DeterministicMockProvider(LLMProvider):
             usage="semantic-profile", model_hash=model_hash, output_type=SemanticProfile
         )
 
-    def reading(self, *, model_hash: ContentHash, formula: FormulaText) -> Reading:
-        """Serve the scripted reading of one formula; unknown formulas degrade."""
-        document = self._load(usage="reading", model_hash=model_hash, output_type=FormulaReadings)
-        if formula not in document.readings:
-            logger.warning("llm_reading_not_scripted", model_hash=model_hash, formula=formula)
-            raise LLMDegradationError(f"No scripted reading for formula {formula!r}.")
-        return document.readings[formula]
+    def reading(
+        self, *, model_hash: ContentHash, formulas: tuple[FormulaText, ...]
+    ) -> FormulaReadings:
+        """Serve the scripted reading document of the whole grid (P72: one load per document).
+
+        The document is served verbatim; a formula absent from it gets no
+        reading from the caller - the mock never invents one.
+        """
+        return self._load(usage="reading", model_hash=model_hash, output_type=FormulaReadings)
 
     def clarification(self, *, model_hash: ContentHash, text: HumanMessage) -> Clarification:
         """Serve the scripted clarification; the initial corpus scripts none."""
@@ -132,22 +147,20 @@ class DeterministicMockProvider(LLMProvider):
         document = self._load(usage="cluster", model_hash=model_hash, output_type=ClusterList)
         return document.clusters
 
-    def narrate_transition(self, *, model_hash: ContentHash, transition: str) -> str:
-        """Serve the scripted narration of one transition; unscripted degrades (spec §16)."""
-        document = self._load(usage="narration", model_hash=model_hash, output_type=NarrationCorpus)
-        sentence = document.narrations.get(transition)
-        if sentence is None:
-            logger.warning(
-                "llm_narration_not_scripted", model_hash=model_hash, transition=transition
-            )
-            raise LLMDegradationError(f"No scripted narration for transition {transition!r}.")
-        return sentence
+    def narrate(self, *, model_hash: ContentHash, transitions: tuple[str, ...]) -> NarrationCorpus:
+        """Serve the scripted narration document of the whole witness (P72: one load per document).
+
+        The corpus is served verbatim; a transition absent from it gets no
+        narration from the caller - the mock never invents a sentence.
+        """
+        return self._load(usage="narration", model_hash=model_hash, output_type=NarrationCorpus)
 
     def _load(
         self, *, usage: LlmUsage, model_hash: ContentHash, output_type: type[OutputType]
     ) -> OutputType:
         """Load and validate one golden file, with a bounded re-request on failure."""
         self._calls += 1
+        self._calls_by_usage[usage] = self._calls_by_usage.get(usage, 0) + 1
         path = self._golden_root / model_hash / f"{usage}.json"
         for attempt in range(1, MAX_LLM_ATTEMPTS + 1):
             try:
