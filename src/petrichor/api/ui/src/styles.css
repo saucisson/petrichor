@@ -1,5 +1,31 @@
 @import "tailwindcss";
 
+/* P81: the dark variant follows data-theme on <html>, not the media query -
+   the user's persisted choice wins over the system preference. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* P81: dark mode overrides of the @theme tokens. Every text/background pair
+   keeps WCAG AA >= 4.5:1 (ratios in comments): ink #f1f5f9 on card #1e293b
+   13.4:1, muted #cbd5e1 on card 9.9:1, primary #60a5fa on card 5.8:1,
+   error #f87171 on card 5.3:1, warning #fbbf24 on card 8.8:1. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --color-ink: #f1f5f9; /* slate-100: 13.4:1 on card */
+  --color-muted: #cbd5e1; /* slate-300: 9.9:1 on card */
+  --color-line: #475569; /* slate-600 borders */
+  --color-surface: #334155; /* slate-700 subtle panels */
+  --color-card: #1e293b; /* slate-800 cards on the dark page */
+  --color-page: #0f172a; /* slate-900 page */
+  --color-primary: #60a5fa; /* blue-400: 5.8:1 on card */
+  --color-primary-hover: #93c5fd; /* blue-300: 9.7:1 on card */
+  --color-error: #f87171; /* red-400: 5.3:1 on card */
+  --color-warning: #fbbf24; /* amber-400: 8.8:1 on card */
+  --color-highlight: #78350f; /* amber-900: 8.3:1 with light ink */
+  --color-banner-error-bg: #450a0a; /* red-950: 5.8:1 with error text */
+  --color-banner-warning-bg: #451a03; /* amber-950: 9.0:1 with warning text */
+  --shadow-soft: 0 1px 3px rgb(0 0 0 / 0.5), 0 1px 2px rgb(0 0 0 / 0.4);
+}
+
 /* UI v3 design socle (ADR-0104, issue #161, spec §9 v1.4): every visual
    decision is a named token in @theme below or a Tailwind utility applied
    in the components - no ad hoc style is duplicated in the TSX. All palette
@@ -207,41 +233,41 @@
   }
 
   .badge-family {
-    @apply border-indigo-200 bg-indigo-50 text-indigo-900;
+    @apply border-indigo-200 bg-indigo-50 text-indigo-900 dark:border-indigo-800 dark:bg-indigo-950 dark:text-indigo-200;
   }
 
   .badge-triage {
-    @apply border-violet-200 bg-violet-50 text-violet-900;
+    @apply border-violet-200 bg-violet-50 text-violet-900 dark:border-violet-800 dark:bg-violet-950 dark:text-violet-200;
   }
 
   .badge-status {
-    @apply border-sky-200 bg-sky-50 text-sky-900;
+    @apply border-sky-200 bg-sky-50 text-sky-900 dark:border-sky-800 dark:bg-sky-950 dark:text-sky-200;
   }
 
   .badge-kind {
-    @apply border-teal-200 bg-teal-50 text-teal-900;
+    @apply border-teal-200 bg-teal-50 text-teal-900 dark:border-teal-800 dark:bg-teal-950 dark:text-teal-200;
   }
 
   .badge-verified {
-    @apply border-green-300 bg-green-100 text-green-900;
+    @apply border-green-300 bg-green-100 text-green-900 dark:border-green-800 dark:bg-green-950 dark:text-green-200;
   }
 
   .badge-controversial {
-    @apply border-amber-300 bg-amber-100 text-amber-900;
+    @apply border-amber-300 bg-amber-100 text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200;
   }
 
   .run-status.st-done {
-    @apply border-green-300 bg-green-100 text-green-900;
+    @apply border-green-300 bg-green-100 text-green-900 dark:border-green-800 dark:bg-green-950 dark:text-green-200;
   }
 
   .run-status.st-running {
-    @apply border-blue-300 bg-blue-100 text-blue-900;
+    @apply border-blue-300 bg-blue-100 text-blue-900 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-200;
     animation: p78-pulse 1.2s ease-in-out infinite;
   }
 
   .run-status.st-pending,
   .run-status.st-queued {
-    @apply border-gray-300 bg-gray-100 text-gray-700;
+    @apply border-gray-300 bg-gray-100 text-gray-700 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300;
   }
 
   @keyframes p78-pulse {
@@ -460,7 +486,7 @@
   }
 
   .journal-event {
-    @apply border-purple-200 bg-purple-50 text-purple-900;
+    @apply border-purple-200 bg-purple-50 text-purple-900 dark:border-purple-800 dark:bg-purple-950 dark:text-purple-200;
   }
 
   .journal-detail {
