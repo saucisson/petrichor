@@ -10,7 +10,8 @@
     "apiKeyAria": "Clé API",
     "sessionLabel": "Session",
     "sessionAria": "Identifiant de session (reprise)",
-    "resume": "Reprendre la session"
+    "resume": "Reprendre la session",
+    "themeToggle": "Basculer en mode sombre / clair"
   },
   "nav": {
     "aria": "Étapes",
