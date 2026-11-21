@@ -12,15 +12,21 @@ from typing import TYPE_CHECKING
 
 import httpx
 import pytest
+import structlog.testing
 from pydantic import BaseModel, SecretStr, ValidationError
 
+from petrichor.api.app import create_app
+from petrichor.api.settings import ApiSettings
 from petrichor.llm import FormulaText, schemas
+from petrichor.llm.mistral import PROMPT_TEMPLATES, MistralProvider
+from petrichor.llm.provider import DeterministicMockProvider, LLMDegradationError
+from petrichor.main import select_llm_provider
+from petrichor.model_store import ModelStore
 from petrichor.pnml_import import import_pnml
+from petrichor.run_store import RunStore
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-from petrichor.llm.mistral import PROMPT_TEMPLATES, MistralProvider
-from petrichor.llm.provider import LLMDegradationError
 
 TEST_API_KEY = "test-key"
 AUTH_HEADERS = {"X-API-Key": TEST_API_KEY}
@@ -205,6 +211,7 @@ FORBIDDEN_VERDICT_WORDS = (
     "false",
     "correct",
     "incorrect",
+    "verdict",
 )
 """The verdict vocabulary forbidden in the real prompts (annexe B §B.3, P73)."""
 
@@ -323,10 +330,19 @@ class TestPromptGuard:
         }
         for usage, template in PROMPT_TEMPLATES.items():
             # The guard sentence itself names the forbidden words; strip it first.
-            # "violated clause(s)" is the annexe B input noun phrase (the given
-            # data), not a verdict the model is asked to produce.
+            # Sanctioned verbatim annexe B phrases only: the input noun phrase
+            # "violated clause(s)" (the given data), the input description
+            # "per-tool verdicts", and the reading instruction "a verdict or a
+            # question status" (what the model must NOT invent).
             body = template.split("Never use the words", maxsplit=1)[0].lower()
-            body = body.replace("violated clauses", "").replace("violated clause", "")
+            for phrase in (
+                "violated clauses",
+                "violated clause",
+                "per-tool verdicts",
+                "a verdict or a question status",
+                "a new verdict of your own",
+            ):
+                body = body.replace(phrase, "")
             for word in FORBIDDEN_VERDICT_WORDS:
                 assert word not in body, f"prompt {usage!r} carries the verdict word {word!r}"
             assert "never use the words" in template.lower(), (
@@ -367,3 +383,139 @@ class TestPromptGuard:
                     ]
                 }
             )
+
+
+# The JSON shape of each usage, mapped to the pydantic schema that validates
+# the real output. The schema itself travels in the strict
+# `response_format.json_schema` of the request (asserted in the call tests).
+USAGE_SCHEMAS: dict[str, type[BaseModel]] = {
+    "semantic-profile": schemas.SemanticProfilePublic,
+    "reading": schemas.FormulaReadings,
+    "clarification": schemas.Clarification,
+    "cluster": schemas.ClusterList,
+    "narration": schemas.NarrationCorpus,
+}
+
+USAGE_SAMPLES: dict[str, dict[str, object]] = {
+    "semantic-profile": {
+        "entries": [
+            {
+                "id": "p1",
+                "elements": "M1",
+                "role": "ressource",
+                "conf": 0.9,
+                "evidence": "place M1 is consumed by takeL",
+                "options": ["jeton"],
+            }
+        ]
+    },
+    "reading": {
+        "readings": {
+            "AG(philo0 thinking)": {
+                "reading": "toujours vrai",
+                "not_says": "vivacite",
+                "pattern": "safety",
+                "cross": "q2",
+            }
+        }
+    },
+    "clarification": {"reform": "verifier que ...", "options": ["lecture A", "lecture B"]},
+    "cluster": {"clusters": [{"cause": "model", "fix": "ajouter une place", "members": ["c1"]}]},
+    "narration": {"narrations": {"takeL_1": "Le philosophe 1 prend la fourchette."}},
+}
+
+
+class TestPromptSchemaParity:
+    def test_every_usage_sample_validates_against_its_pydantic_schema(self) -> None:
+        """Issue #176 guard, P73 form: the JSON shape of each usage validates against
+        the usage's pydantic schema; the schema itself travels in the strict
+        `response_format.json_schema` of the request (asserted in the call tests),
+        so prompt/schema drift fails validation, not a string match."""
+        assert set(USAGE_SCHEMAS) == set(PROMPT_TEMPLATES)
+        for usage, schema in USAGE_SCHEMAS.items():
+            schema.model_validate(USAGE_SAMPLES[usage])
+
+    def test_real_provider_uses_the_public_profile_schema(self) -> None:
+        """P73: the real provider validates `semantic-profile` against the schema
+        WITHOUT the mock-only `wrong` field."""
+        assert USAGE_SCHEMAS["semantic-profile"] is schemas.SemanticProfilePublic
+
+
+class TestProviderSelection:
+    def test_mock_is_the_default(self) -> None:
+        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+        assert isinstance(select_llm_provider(settings=settings), DeterministicMockProvider)
+
+    def test_mistral_without_key_fails_at_startup(self) -> None:
+        settings = ApiSettings(
+            api_key=SecretStr(TEST_API_KEY), llm_provider="mistral", mistral_api_key=None
+        )
+        with pytest.raises(SystemExit):
+            select_llm_provider(settings=settings)
+
+    def test_mistral_with_key_is_selected(self) -> None:
+        settings = ApiSettings(
+            api_key=SecretStr(TEST_API_KEY),
+            llm_provider="mistral",
+            mistral_api_key=SecretStr("sk-test"),
+        )
+        provider = select_llm_provider(settings=settings)
+        assert isinstance(provider, MistralProvider)
+        provider.close()
+
+
+class TestLlmUsageEndpoint:
+    def test_llm_usage_is_exposed_apart_from_the_tool_budget(self) -> None:
+        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+        app = create_app(
+            settings=settings,
+            store=ModelStore(),
+            run_store=RunStore(),
+            runner=None,
+            llm_provider=DeterministicMockProvider(),
+        )
+        client = httpx.Client(transport=httpx.WSGITransport(app=app), base_url="http://testserver")
+        response = client.get("/v1/llm/usage", headers=AUTH_HEADERS)
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["llm"]["provider"] == "mock"
+        assert "NOT part of the MC tool-time budget" in payload["budget_note"]
+
+    def test_llm_usage_without_provider_is_503(self) -> None:
+        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+        app = create_app(settings=settings, store=ModelStore(), run_store=RunStore(), runner=None)
+        client = httpx.Client(transport=httpx.WSGITransport(app=app), base_url="http://testserver")
+        response = client.get("/v1/llm/usage", headers=AUTH_HEADERS)
+        assert response.status_code == 503
+        assert response.json()["extensions"]["reason"] == "llm_not_configured"
+
+
+class TestLlmLogNarration:
+    """The LLM layer's log events are part of the narration contract (ADR-0005)."""
+
+    def test_mistral_failure_and_degradation_events_are_pinned(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json=mistral_response("not json"))
+
+        provider = MistralProvider(api_key=SecretStr("sk-test"), http_client=fake_client(handler))
+        with structlog.testing.capture_logs() as logs, pytest.raises(LLMDegradationError):
+            provider.narrate(model=PHILOSOPHES3_MODEL, transitions=("takeL_1",))
+        events = [event["event"] for event in logs]
+        assert events.count("llm_mistral_call_failed") == 2
+        assert "llm_degraded" in events
+
+    def test_llm_usage_endpoint_event_is_pinned(self) -> None:
+        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+        app = create_app(
+            settings=settings,
+            store=ModelStore(),
+            run_store=RunStore(),
+            runner=None,
+            llm_provider=DeterministicMockProvider(),
+        )
+        client = httpx.Client(transport=httpx.WSGITransport(app=app), base_url="http://testserver")
+        with structlog.testing.capture_logs() as logs:
+            response = client.get("/v1/llm/usage", headers=AUTH_HEADERS)
+            assert response.status_code == 200
+        events = [event["event"] for event in logs]
+        assert "api_llm_usage_read" in events

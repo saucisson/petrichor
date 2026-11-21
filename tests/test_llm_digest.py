@@ -72,7 +72,7 @@ def make_model(place_count: int = 2) -> CanonicalModel:
         ),
     )
     return CanonicalModel(
-        id=ModelId("mdl_test"),
+        id=ModelId("model_test"),
         formalism="pt",
         content_hash=ContentHash("sha256:" + "0" * 64),
         parent=None,
@@ -154,6 +154,16 @@ class TestPlacesOnlyLevel:
         assert eat["confidence"] == 0.9
         think = next(place for place in digest["places"] if place["name"] == "think_1")
         assert think["role"] is None
+
+    def test_places_only_over_the_token_ceiling_degrades_to_counters(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        full = net_digest(PHILOSOPHES3_MODEL, "places-only", formulas=("EF (eat_1)",))
+        monkeypatch.setattr("petrichor.llm.digest.DIGEST_TOKEN_CEILING", estimate_tokens(full) - 1)
+        digest = net_digest(PHILOSOPHES3_MODEL, "places-only", formulas=("EF (eat_1)",))
+        assert digest["degraded"] == "grouped-summary"
+        assert digest["cited_place_count"] == 1
+        assert "places" not in digest, "no silent truncation: the full list is replaced, not cut"
 
 
 class TestTraceLevel:

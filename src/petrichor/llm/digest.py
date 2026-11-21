@@ -275,7 +275,26 @@ def net_digest(
             return summary
         return digest
     if level == "places-only":
-        return _places_only_digest(model, formulas=formulas, roles=accepted_roles)
+        places_digest = _places_only_digest(model, formulas=formulas, roles=accepted_roles)
+        if estimate_tokens(places_digest) > DIGEST_TOKEN_CEILING:
+            cited = places_digest["places"]
+            cited_places = cited if isinstance(cited, list) else []
+            places_summary: dict[str, JsonValue] = {
+                "level": "places-only",
+                "degraded": "grouped-summary",
+                "cited_place_count": len(cited_places),
+                "role_count": sum(
+                    1
+                    for place in cited_places
+                    if isinstance(place, dict) and place.get("role") is not None
+                ),
+            }
+            if estimate_tokens(places_summary) > DIGEST_TOKEN_CEILING:
+                raise DigestError(
+                    "Places-only digest exceeds the token ceiling even as a grouped summary."
+                )
+            return places_summary
+        return places_digest
     digest = _trace_digest(model, trace=trace, roles=accepted_roles)
     if estimate_tokens(digest) > DIGEST_TOKEN_CEILING:
         raise DigestError("Trace digest exceeds the token ceiling.")
