@@ -57,3 +57,44 @@ l'utilisateur SSH.
 curl -sS -o /dev/null -w '%{http_code}\n' https://petrichor.linard.fr/ui/
 curl -sS -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8080/ui/   # depuis le VPS
 ```
+
+## Authentification (PT-1 à PT-3, issues #182-#184)
+
+L'API exige un credential sur toute route `/v1/` (les assets statiques
+`/ui/` restent publics) : un **Bearer JWT OIDC** émis par l'IdP Zitadel
+(`https://auth.linard.fr`), validé localement (signature RS256 via JWKS,
+`iss`/`aud`/`exp`/`nbf`, tolérance 60 s — aucune URL d'endpoint en dur,
+le discovery est lu depuis `$AUTH_ISSUER/.well-known/openid-configuration`),
+ou l'ancien header **`X-API-Key`** (toujours accepté, retiré après la
+bascule production). Refus = `401` problem+json uniforme, la raison exacte
+étant journalisée (`api_request_unauthorized`).
+
+Variables d'environnement (documentées dans `.env.example`, `.env` ignoré,
+aucun secret commité) :
+
+| Variable                 | Rôle                                                              |
+| ------------------------ | ----------------------------------------------------------------- |
+| `AUTH_ISSUER`            | Émetteur OIDC (requis, aucun défaut en dur dans le code)          |
+| `AUTH_CLIENT_ID`         | Client OIDC de l'app ; audience acceptée par défaut               |
+| `AUTH_CLIENT_SECRET`     | Secret du client (confidentiel uniquement)                        |
+| `AUTH_ALLOWED_AUDIENCES` | Audiences acceptées (CSV), défaut = `AUTH_CLIENT_ID`              |
+| `AUTH_DISABLED`          | `1` = mode dev local L3 (voir ci-dessous)                         |
+| `PETRICHOR_ENV`          | `production` interdit toute combinaison avec `AUTH_DISABLED=1`   |
+
+**Par défaut l'auth est active** (drapeau absent = actif). En développement
+local sans IdP : `AUTH_DISABLED=1` court-circuite la validation côté
+middleware — jamais combiné avec `PETRICHOR_ENV=production` (erreur fatale
+au démarrage). Les tests automatisés (niveau L1) n'utilisent aucun réseau :
+clés RSA générées en fixture, discovery/JWKS servis par un transport mocké.
+
+Exemples d'appel (depuis le VPS, avec un PAT Zitadel d'un service user) :
+
+```console
+# Bearer JWT (CLI/CI) :
+curl -sS https://petrichor.linard.fr/v1/llm/usage \
+  -H "Authorization: Bearer $ZITADEL_PAT"
+# Legacy, tant qu'il n'est pas retiré :
+curl -sS https://petrichor.linard.fr/v1/llm/usage -H "X-API-Key: $PETRICHOR_API_KEY"
+# Sans credential -> 401 problem+json :
+curl -sS -i https://petrichor.linard.fr/v1/llm/usage
+```
