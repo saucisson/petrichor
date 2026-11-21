@@ -104,7 +104,7 @@ describe("dossiers de preuve cliquables (issue #126)", () => {
     await waitFor(() => expect(screen.getByText(/AG\(philo0 thinking\)/)).toBeInTheDocument());
     expect(screen.getByRole("link", { name: /run r1/ })).toHaveAttribute("href", "/v1/runs/r1");
     expect(screen.getByText(/outil lola 2\.0/)).toBeInTheDocument();
-    expect(screen.getByText(/verdict true/)).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "verdict : true" })).toBeInTheDocument();
     expect(screen.getByText(/coût 1\.250 s/)).toBeInTheDocument();
     expect(screen.getByText(/témoin w1/)).toBeInTheDocument();
     // Controversial camps rendered as-is, without smoothing.
@@ -116,6 +116,9 @@ describe("dossiers de preuve cliquables (issue #126)", () => {
     expect(screen.getByText(/La transition t1 s'est tirée\./)).toBeInTheDocument();
     expect(screen.getByText("(provenance : llm)")).toBeInTheDocument();
     // The Markdown export is unchanged.
+    // P79: rendered by default; the raw source is one toggle away.
+    expect(screen.getByRole("heading", { name: "Contrat" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Markdown" }));
     expect(screen.getByText(/# Contrat/)).toBeInTheDocument();
   });
 });

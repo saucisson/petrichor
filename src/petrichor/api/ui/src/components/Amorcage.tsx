@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ApiClient } from "../api";
+import Busy from "./Busy";
 import type {
   CandidateList,
   CatalogEntry,
@@ -721,8 +722,8 @@ export default function Amorcage({
           </p>
         ) : null}
         {importing ? (
-          <p className="message message-info" role="status">
-            {t("amorcage.importing")}
+          <p className="message message-info">
+            <Busy label={t("amorcage.importing")} />
           </p>
         ) : null}
         {importedModel !== null ? (

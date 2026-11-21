@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ApiClient } from "../api";
+import Busy from "./Busy";
 import VerdictBadge from "./VerdictBadge";
 import type { Budget, Run, Session, Witness } from "../types";
 
@@ -165,8 +166,8 @@ export default function Verifications({ hidden, client, sessionId, reloadToken }
       <h2 id="h-verifications">{t("verifications.title")}</h2>
       <p>{t("verifications.intro")}</p>
       {loading ? (
-        <p className="message message-info" role="status">
-          {t("verifications.loading")}
+        <p className="message message-info">
+          <Busy label={t("verifications.loading")} />
         </p>
       ) : null}
       {loadError !== null ? (

@@ -179,7 +179,6 @@
       "proof": {
         "run": "run {{runId}}",
         "tool": "tool {{tool}}",
-        "verdict": "verdict {{verdict}}",
         "technique": "technique {{technique}}",
         "cost": "cost {{cost}} s",
         "witness": "witness {{witnessId}}",
@@ -188,9 +187,15 @@
       }
     },
     "loading": "Loading contract…",
-    "journalEmpty": "No entries in the arbitration journal."
+    "journalEmpty": "No entries in the arbitration journal.",
+    "view": {
+      "aria": "Contract view",
+      "preview": "Preview",
+      "source": "Markdown"
+    }
   },
   "common": {
-    "verdictAria": "verdict: {{verdict}}"
+    "verdictAria": "verdict: {{verdict}}",
+    "elapsed": "{{seconds}} s elapsed"
   }
 }
