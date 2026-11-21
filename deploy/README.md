@@ -17,8 +17,17 @@ sudo usermod -aG docker deploy
 sudo git clone https://github.com/saucisson/petrichor.git /srv/petrichor
 sudo chown -R deploy:deploy /srv/petrichor
 cd /srv/petrichor && git checkout daily
-# .env est git-ignored : ne jamais commiter la clé (ADR-0008)
+# .env est git-ignored : ne jamais commiter de secret (ADR-0008)
 umask 077 && printf 'PETRICHOR_API_KEY=%s\n' "$(openssl rand -hex 32)" > /srv/petrichor/.env
+# Authentification OIDC (Zitadel, auth.linard.fr) — client "petrichor" créé
+# côté IdP ; sans AUTH_ISSUER l'API retombe sur X-API-Key seul (protégé,
+# jamais ouvert) et logue auth_bearer_not_configured :
+cat >> /srv/petrichor/.env <<'ENVEOF'
+PETRICHOR_ENV=production
+AUTH_ISSUER=https://auth.linard.fr
+AUTH_CLIENT_ID=<client_id_du_client_petrichor_dans_zitadel>
+AUTH_CLIENT_SECRET=<secret_du_client>
+ENVEOF
 # Site nginx (même pattern que sites-enabled/layered-data) + certificat :
 sudo cp deploy/nginx/petrichor.linard.fr.conf /etc/nginx/sites-enabled/petrichor
 sudo certbot --nginx -d petrichor.linard.fr -n --agree-tos -m admin@linard.fr

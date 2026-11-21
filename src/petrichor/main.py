@@ -52,14 +52,27 @@ PRODUCTION_ENVIRONMENT = "production"
 """Production indicator: AUTH_DISABLED=1 must never combine with it (L3 guard)."""
 
 
-def build_token_verifier(*, environment: dict[str, str] | None = None) -> TokenVerifier:
+def build_token_verifier(*, environment: dict[str, str] | None = None) -> TokenVerifier | None:
     """Build the PT-1 verifier from the environment, with the L3 guard (PT-2).
 
     ``AUTH_DISABLED=1`` is the local-dev bypass only: combining it with
     ``PETRICHOR_ENV=production`` is a fatal configuration error, never a
     silent open server.
+
+    When ``AUTH_ISSUER`` is absent or empty, the Bearer layer is simply not
+    wired (``None``): the API stays fully protected by the mandatory legacy
+    ``X-API-Key`` — a missing optional auth layer must never take the site
+    down (502 on petrichor.linard.fr, 2026-11-21). A structured warning
+    narrates the fallback.
     """
     env = os.environ if environment is None else environment
+    if not env.get("AUTH_ISSUER", "").strip():
+        structlog.get_logger(__name__).warning(
+            "auth_bearer_not_configured",
+            detail="AUTH_ISSUER is unset: Bearer JWT validation is off, "
+            "the legacy X-API-Key still gates every /v1/ route.",
+        )
+        return None
     auth_settings = AuthSettings.model_validate(env)
     if auth_settings.auth_disabled and env.get(ENVIRONMENT_VARIABLE) == PRODUCTION_ENVIRONMENT:
         raise ConfigurationError(
