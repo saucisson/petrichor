@@ -39,6 +39,7 @@
     "title": "Setup",
     "intro": "Import a PNML model, create a session, arbitrate the proposed semantic profile.",
     "noProfile": "No profile proposed for this session.",
+    "loadingProfile": "Loading the semantic profile…",
     "roleProposed": "proposed role: {{role}} (conf {{conf}})",
     "accept": "Accept",
     "refuse": "Refuse",
@@ -198,5 +199,12 @@
   "common": {
     "verdictAria": "verdict: {{verdict}}",
     "elapsed": "{{seconds}} s elapsed"
+  },
+  "llm": {
+    "semantic-profile": "Reading the net's semantic profile…",
+    "reading": "Reading the question grid…",
+    "clarification": "Clarifying the proposal…",
+    "cluster": "Triaging the violated clauses…",
+    "narration": "Narrating the witness…"
   }
 }

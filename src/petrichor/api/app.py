@@ -161,6 +161,7 @@ WITNESS_SUFFIX = "/witness"
 WITNESSES_PATH = "/v1/witnesses"
 WITNESSES_PATH_PREFIX = "/v1/witnesses/"
 LLM_USAGE_PATH = "/v1/llm/usage"
+LLM_CALLS_PATH = "/v1/llm/calls"
 QUALIFICATION_PATH = "/v1/qualification"
 SESSIONS_PATH = "/v1/sessions"
 SESSION_PATH_PREFIX = "/v1/sessions/"
@@ -1918,6 +1919,50 @@ def _get_llm_usage(
         sort_keys=True,
         separators=(",", ":"),
     )
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.OK,
+        content_type=CONTENT_TYPE_JSON,
+        body=body.encode("utf-8"),
+    )
+
+
+def _get_llm_calls(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    llm_provider: LLMProvider | None,
+) -> Iterable[bytes]:
+    """The observable state of every LLM call (P75: usage, model, start, end, error).
+
+    The UI polls this while a real call may be in flight, to show the active
+    waiting indicator (animated hourglass, usage, elapsed) - never a frozen
+    screen without information. The mock is instantaneous: no call is ever
+    in progress with it.
+    """
+    if llm_provider is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+                reason="llm_not_configured",
+                detail="No LLM provider is wired into this server.",
+            ),
+        )
+    calls = [
+        {
+            "usage": state.usage,
+            "model": state.model,
+            "started_at": state.started_at.isoformat(),
+            "ended_at": state.ended_at.isoformat() if state.ended_at else None,
+            "error": state.error,
+            "in_progress": state.in_progress,
+        }
+        for state in llm_provider.call_states()
+    ]
+    logger.debug("api_llm_calls_read", calls=len(calls))
+    body = json.dumps({"calls": calls}, sort_keys=True, separators=(",", ":"))
     return _respond(
         start_response=start_response,
         status=HTTPStatus.OK,
@@ -3959,8 +4004,9 @@ def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
                 path=path,
                 qualification=qualification,
             )
-        if routed is None and path == LLM_USAGE_PATH and method == "GET":
-            routed = _get_llm_usage(
+        if routed is None and method == "GET" and path in (LLM_USAGE_PATH, LLM_CALLS_PATH):
+            handler = _get_llm_usage if path == LLM_USAGE_PATH else _get_llm_calls
+            routed = handler(
                 environ=environ, start_response=start_response, llm_provider=llm_provider
             )
         if routed is None:

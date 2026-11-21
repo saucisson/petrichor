@@ -1,6 +1,15 @@
 // API payload types (spec §19.4): the server is the source of truth - these
 // are read-only views of its responses, never verdicts computed client-side.
 
+export interface LlmCallState {
+  usage: string;
+  model: string;
+  started_at: string;
+  ended_at: string | null;
+  error: string | null;
+  in_progress: boolean;
+}
+
 export interface ProfileEntry {
   id: string;
   role: string;

@@ -10,11 +10,12 @@ invents an answer (spec §15).
 
 import json
 from abc import ABC, abstractmethod
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, NewType, TypeVar
 
 import structlog
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from petrichor.llm.schemas import (
     Clarification,
@@ -53,6 +54,27 @@ class LLMError(Exception):
 
 class LLMDegradationError(LLMError):
     """Explicit degradation: no valid scripted answer after the bounded re-requests."""
+
+
+class CallState(BaseModel):
+    """The observable state of one LLM call (P75): usage, model, start, end, error.
+
+    Consumed by the UI for the active waiting indicator; ``in_progress``
+    is true between ``started_at`` and ``ended_at``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    usage: LlmUsage
+    model: str
+    started_at: datetime
+    ended_at: datetime | None = None
+    error: str | None = None
+
+    @property
+    def in_progress(self) -> bool:
+        """Whether the call is still running (no end, no error recorded yet)."""
+        return self.ended_at is None and self.error is None
 
 
 class LLMProvider(ABC):
@@ -103,6 +125,16 @@ class LLMProvider(ABC):
         (usage, model) so the routing of P74 is observable).
         """
 
+    @abstractmethod
+    def call_states(self) -> tuple[CallState, ...]:
+        """The observable state of every call made so far (P75: usage, start, end, error).
+
+        The UI consumes the in-progress entries for its active waiting
+        indicator; the mock stays instantaneous, so its entries are always
+        finished - the in-progress state is exercised with a test provider
+        of simulated latency.
+        """
+
 
 class DeterministicMockProvider(LLMProvider):
     """Serves the golden files verbatim; never invents an answer (spec §15)."""
@@ -112,6 +144,11 @@ class DeterministicMockProvider(LLMProvider):
         self._golden_root = golden_root
         self._calls = 0
         self._calls_by_usage: dict[str, int] = {}
+        self._call_states: list[CallState] = []
+
+    def call_states(self) -> tuple[CallState, ...]:
+        """The mock is instantaneous: every recorded call is already finished (P75)."""
+        return tuple(self._call_states)
 
     def usage_totals(self) -> dict[str, object]:
         """The mock costs no tokens; the call count is tracked per usage (spec §12.4, P72)."""
@@ -174,6 +211,8 @@ class DeterministicMockProvider(LLMProvider):
         """Load and validate one golden file, with a bounded re-request on failure."""
         self._calls += 1
         self._calls_by_usage[usage] = self._calls_by_usage.get(usage, 0) + 1
+        # P75: record the call state (the mock is instantaneous: start == end).
+        started_at = datetime.now(UTC)
         path = self._golden_root / model_hash / f"{usage}.json"
         for attempt in range(1, MAX_LLM_ATTEMPTS + 1):
             try:
@@ -189,8 +228,25 @@ class DeterministicMockProvider(LLMProvider):
                 )
                 continue
             logger.debug("llm_golden_served", usage=usage, model_hash=model_hash, attempt=attempt)
+            self._call_states.append(
+                CallState(
+                    usage=usage,
+                    model="mock",
+                    started_at=started_at,
+                    ended_at=datetime.now(UTC),
+                )
+            )
             return output
         logger.error("llm_degraded", usage=usage, model_hash=model_hash, attempts=MAX_LLM_ATTEMPTS)
+        self._call_states.append(
+            CallState(
+                usage=usage,
+                model="mock",
+                started_at=started_at,
+                ended_at=datetime.now(UTC),
+                error="degraded",
+            )
+        )
         raise LLMDegradationError(
             f"No valid golden file for usage {usage!r} of model {model_hash}"
             f" after {MAX_LLM_ATTEMPTS} attempts."

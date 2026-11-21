@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ApiClient } from "../api";
 import Busy from "./Busy";
+import LlmBusy from "./LlmBusy";
 import type {
   CandidateList,
   CatalogEntry,
@@ -90,6 +91,7 @@ export default function Amorcage({
   const { t } = useTranslation();
   const [profile, setProfile] = useState<Profile | null>(null);
   const [profileMissing, setProfileMissing] = useState(false);
+  const [profileLoading, setProfileLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const [createdId, setCreatedId] = useState<string | null>(null);
@@ -125,7 +127,7 @@ export default function Amorcage({
   const [candidates, setCandidates] = useState<CandidateList | null>(null);
   const [pendingImport, setPendingImport] = useState<PendingImport | null>(null);
 
-  const loadProfile = useCallback(async () => {
+  const _loadProfile = useCallback(async () => {
     if (!sessionId) return;
     const response = await client.request("/v1/sessions/" + sessionId + "/profile");
     if (response.status === 404) {
@@ -136,6 +138,16 @@ export default function Amorcage({
     setProfileMissing(false);
     setProfile((await response.json()) as Profile);
   }, [client, sessionId]);
+
+  const loadProfile = useCallback(async () => {
+    if (!sessionId) return;
+    setProfileLoading(true);
+    try {
+      await _loadProfile();
+    } finally {
+      setProfileLoading(false);
+    }
+  }, [_loadProfile, sessionId]);
 
   useEffect(() => {
     void loadProfile().catch((loadError: unknown) =>
@@ -741,6 +753,12 @@ export default function Amorcage({
         {createdId !== null ? (
           <p className="message message-ok" role="status">
             {t("amorcage.sessionCreated", { id: createdId })}
+          </p>
+        ) : null}
+        {profileLoading ? (
+          <p className="message message-info">
+            {/* P75: the label comes from the LLM layer while a real call runs. */}
+            <LlmBusy client={client} active={profileLoading} fallbackLabel={t("amorcage.loadingProfile")} />
           </p>
         ) : null}
         {profileMissing ? <p className="message message-info">{t("amorcage.noProfile")}</p> : null}

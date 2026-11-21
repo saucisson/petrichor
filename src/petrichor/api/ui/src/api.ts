@@ -2,7 +2,7 @@
 // views are rebuilt from the responses: no verdict is ever invented here
 // (spec §9, §19.4).
 
-import type { CandidateList, CatalogPage, ImportedModel } from "./types";
+import type { CandidateList, CatalogPage, ImportedModel, LlmCallState } from "./types";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -29,6 +29,13 @@ export class ApiClient {
       throw new ApiError(401, "Clé API invalide (401).");
     }
     return response;
+  }
+
+  /* P75: the observable LLM call states, polled by the UI for the active
+     waiting indicator while a real call may be in flight. */
+  async getLlmCalls(): Promise<LlmCallState[]> {
+    const payload = await this.getJson<{ calls: LlmCallState[] }>("/v1/llm/calls");
+    return payload.calls;
   }
 
   async getJson<T>(path: string, accept?: string): Promise<T> {

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { readProblemDetail, type ApiClient } from "../api";
-import Busy from "./Busy";
+import LlmBusy from "./LlmBusy";
 import VerdictBadge from "./VerdictBadge";
 import type {
   Contract,
@@ -276,7 +276,8 @@ export default function Questions({ hidden, client, sessionId, reloadToken }: Qu
       <p>{t("questions.intro")}</p>
       {loading ? (
         <p className="message message-info">
-          <Busy label={t("questions.loading")} />
+          {/* P75: the label comes from the LLM layer while a real call runs. */}
+          <LlmBusy client={client} active={loading} fallbackLabel={t("questions.loading")} />
         </p>
       ) : null}
       {loadError !== null ? (
