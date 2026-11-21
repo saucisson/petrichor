@@ -65,7 +65,24 @@ export default function App() {
   return (
     <>
       <header>
-        <h1>{t("app.title")}</h1>
+        <h1>
+          {/* P80: inline monochrome SVG pictogram (currentColor), no emoji. */}
+          <svg
+            aria-hidden="true"
+            width="22"
+            height="22"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
+            <circle cx="6" cy="6" r="3" />
+            <circle cx="18" cy="6" r="3" />
+            <circle cx="12" cy="18" r="3" />
+            <path d="M8.5 7.5 10.5 15.5M15.5 7.5 13.5 15.5M9 6h6" />
+          </svg>
+          {t("app.title")}
+        </h1>
         <div className="header-group">
           <span className="header-group-label">{t("header.groupConnection")}</span>
           <label htmlFor="api-key">{t("header.apiKeyLabel")}</label>

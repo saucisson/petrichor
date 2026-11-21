@@ -6,16 +6,26 @@
    entries are picked for WCAG AA contrast (>= 4.5:1) on their background. */
 
 @theme {
-  /* Palette */
-  --color-primary: #1d4ed8; /* blue-700: 8.6:1 on white */
-  --color-primary-hover: #1e40af; /* blue-800: 10.4:1 on white */
-  --color-ink: #111827; /* gray-900: 17.7:1 on white */
-  --color-muted: #4b5563; /* gray-600: 7.5:1 on white */
+  /* Palette - every entry is picked for WCAG AA contrast (>= 4.5:1) on its
+     background; P81 dark mode overrides these tokens, never hardcoded hex. */
+  --color-primary: #1d4ed8; /* blue-700: 6.7:1 with white */
+  --color-primary-hover: #1e40af; /* blue-800: 8.6:1 with white */
+  --color-ink: #111827; /* gray-900: 17.7:1 on card */
+  --color-muted: #4b5563; /* gray-600: 7.5:1 on card */
   --color-line: #d1d5db; /* gray-300 borders */
-  --color-surface: #f9fafb; /* gray-50 panels */
-  --color-error: #b91c1c; /* red-700: 5.9:1 on white */
-  --color-warning: #b45309; /* amber-700: 4.8:1 on white */
+  --color-surface: #f9fafb; /* gray-50 subtle panels */
+  --color-card: #ffffff; /* white cards on the pastel page */
+  --color-page: #eef2ff; /* indigo-50 pastel page background */
+  --color-error: #b91c1c; /* red-700: 6.5:1 with white, 5.3:1 on red-100 */
+  --color-warning: #b45309; /* amber-700: 4.8:1 on card */
   --color-highlight: #fde68a; /* amber-200: 12.6:1 with ink text */
+  --color-header-a: #4338ca; /* indigo-700: 7.9:1 with white */
+  --color-header-b: #6d28d9; /* violet-700: 7.1:1 with white */
+  --color-header-c: #0e7490; /* cyan-700: 5.4:1 with white */
+  --color-accent-a: #1d4ed8; /* blue-700 gradient start for primary buttons */
+  --color-accent-b: #6d28d9; /* violet-700 gradient end: 7.1:1 with white */
+  --color-banner-error-bg: #fee2e2; /* red-100: 5.3:1 with error text */
+  --color-banner-warning-bg: #fef3c7; /* amber-100: 8.2:1 with amber-900 */
 
   /* Typography */
   --font-sans: system-ui, sans-serif;
@@ -23,11 +33,14 @@
   /* Radii */
   --radius-control: 0.375rem;
   --radius-card: 0.5rem;
+
+  /* Soft shadow for cards on the pastel page */
+  --shadow-soft: 0 1px 3px rgb(17 24 39 / 0.12), 0 1px 2px rgb(17 24 39 / 0.08);
 }
 
 @layer base {
   body {
-    @apply mx-auto max-w-5xl bg-white p-4 font-sans text-ink;
+    @apply mx-auto max-w-5xl bg-page p-4 font-sans text-ink;
   }
 
   /* Visible focus everywhere (a11y, maquette P12): 3px primary outline. */
@@ -45,16 +58,28 @@
    the components): .btn is the secondary button, .btn-primary the primary
    one (P67 will rely on this visual distinction). */
 @utility btn {
-  @apply rounded-control border border-line bg-white px-3 py-1.5 text-sm text-ink hover:bg-surface disabled:cursor-not-allowed disabled:opacity-60;
+  @apply rounded-control border border-line bg-card px-3 py-1.5 text-sm text-ink shadow-soft hover:bg-surface disabled:cursor-not-allowed disabled:opacity-60;
 }
 
+/* P80: primary buttons in the indigo->violet gradient; white text keeps
+   >= 6.7:1 contrast on both gradient stops (WCAG AA). */
 @utility btn-primary {
-  @apply border-primary bg-primary text-white hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-60;
+  @apply border-transparent bg-gradient-to-r from-accent-a to-accent-b text-white shadow-soft hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60;
 }
 
 @layer components {
+  /* P80: header band in the indigo -> violet -> cyan gradient; white text
+     keeps >= 5.4:1 on every stop (WCAG AA). */
   header {
-    @apply flex flex-wrap items-center gap-2;
+    @apply flex flex-wrap items-center gap-2 rounded-card bg-gradient-to-r from-header-a via-header-b to-header-c p-3 text-white shadow-soft;
+  }
+
+  header h1 {
+    @apply flex items-center gap-2 text-white;
+  }
+
+  header .header-group {
+    @apply border-line bg-card text-ink;
   }
 
   /* Header groups (issue #162): connection / session / language, each with
@@ -80,7 +105,7 @@
   }
 
   .message-error {
-    @apply font-semibold text-error;
+    @apply rounded-control border border-error bg-banner-error-bg px-2 py-1 font-semibold text-error;
   }
 
   .message-info {
@@ -91,9 +116,10 @@
     @apply font-semibold text-primary;
   }
 
-  /* P76: referenced by the COL warning and other caution messages. */
+  /* P76/P80: referenced by the COL warning and other caution messages -
+     amber banner, amber-900 text on amber-100 (8.2:1, WCAG AA). */
   .message-warning {
-    @apply font-semibold text-warning;
+    @apply rounded-control border border-warning bg-banner-warning-bg px-2 py-1 font-semibold text-warning;
   }
 
   #language-select {
@@ -109,7 +135,7 @@
   }
 
   .question-card {
-    @apply my-2 rounded-card border border-line p-3;
+    @apply my-2 rounded-card border border-line bg-card p-3 shadow-soft;
   }
 
   .question-card .decisions {
@@ -165,11 +191,11 @@
 
   /* P78: budget encart, run rows with status badges, folded witnesses. */
   .budget-card {
-    @apply rounded-card border border-line bg-surface px-3 py-2;
+    @apply rounded-card border border-line bg-card px-3 py-2 shadow-soft;
   }
 
   .run-row {
-    @apply my-2 flex flex-wrap items-center gap-2 rounded-card border border-line p-3;
+    @apply my-2 flex flex-wrap items-center gap-2 rounded-card border border-line bg-card p-3 shadow-soft;
   }
 
   .run-row .run-id {
@@ -235,11 +261,11 @@
   }
 
   .verdict.v-true {
-    @apply bg-green-600 text-white;
+    @apply bg-green-700 text-white; /* 5.0:1 with white */
   }
 
   .verdict.v-false {
-    @apply bg-red-600 text-white;
+    @apply bg-red-700 text-white; /* 6.5:1 with white */
   }
 
   .verdict.v-other,
@@ -262,7 +288,7 @@
   }
 
   .filter-bar {
-    @apply my-2 flex flex-wrap items-center gap-2 rounded-card border border-line bg-surface p-2;
+    @apply my-2 flex flex-wrap items-center gap-2 rounded-card border border-line bg-card p-2 shadow-soft;
   }
 
   .filter-bar label {
@@ -316,7 +342,7 @@
   }
 
   .proof-dossier {
-    @apply my-2 rounded-card border border-line p-2;
+    @apply my-2 rounded-card border border-line bg-card p-2 shadow-soft;
   }
 }
 
@@ -335,7 +361,7 @@
   }
 
   .wizard-card {
-    @apply flex w-64 flex-col gap-1 rounded-card border border-line bg-surface p-3 text-left hover:border-primary;
+    @apply flex w-64 flex-col gap-1 rounded-card border border-line bg-card p-3 text-left shadow-soft hover:border-primary;
   }
 
   .wizard-card strong {
@@ -357,6 +383,10 @@
 
   .catalog-table thead th {
     @apply bg-surface;
+  }
+
+  .catalog-table {
+    @apply rounded-card border border-line bg-card shadow-soft;
   }
 
   .catalog-sort {
