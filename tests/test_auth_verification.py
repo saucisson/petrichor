@@ -9,9 +9,17 @@ import time
 import httpx
 import pytest
 import structlog
+from hypothesis import HealthCheck, given
+from hypothesis import settings as hypothesis_settings
+from hypothesis import strategies as st
 from joserfc import jwk, jwt
 
-from petrichor.auth import AuthSettings, TokenRejectedError, TokenVerifier
+from petrichor.auth import (
+    CLOCK_LEEWAY_SECONDS,
+    AuthSettings,
+    TokenRejectedError,
+    TokenVerifier,
+)
 
 ISSUER = "https://auth.test"
 CLIENT_ID = "petrichor-test"
@@ -114,31 +122,37 @@ class TestValidToken:
 
 
 class TestRejectedTokens:
-    def test_expired_token_is_rejected_with_the_reason(
+    def test_expired_token_is_rejected_with_the_exact_reason(
         self, idp: FakeIdp, settings: AuthSettings
     ) -> None:
         verifier = make_verifier(idp, settings)
         token = idp.sign(idp.valid_claims(exp=int(time.time()) - 3600))
-        with pytest.raises(TokenRejectedError, match="invalid_claims"):
+        with pytest.raises(TokenRejectedError, match="expired"):
             verifier.verify_access_token(token=token)
 
-    def test_wrong_audience_is_rejected(self, idp: FakeIdp, settings: AuthSettings) -> None:
+    def test_wrong_audience_is_rejected_with_the_exact_reason(
+        self, idp: FakeIdp, settings: AuthSettings
+    ) -> None:
         verifier = make_verifier(idp, settings)
         token = idp.sign(idp.valid_claims(aud="another-app"))
-        with pytest.raises(TokenRejectedError, match="invalid_claims"):
+        with pytest.raises(TokenRejectedError, match="invalid_audience"):
             verifier.verify_access_token(token=token)
 
-    def test_wrong_issuer_is_rejected(self, idp: FakeIdp, settings: AuthSettings) -> None:
+    def test_wrong_issuer_is_rejected_with_the_exact_reason(
+        self, idp: FakeIdp, settings: AuthSettings
+    ) -> None:
         verifier = make_verifier(idp, settings)
         token = idp.sign(idp.valid_claims(iss="https://evil.test"))
-        with pytest.raises(TokenRejectedError, match="invalid_claims"):
+        with pytest.raises(TokenRejectedError, match="invalid_issuer"):
             verifier.verify_access_token(token=token)
 
-    def test_bad_signature_is_rejected(self, idp: FakeIdp, settings: AuthSettings) -> None:
+    def test_bad_signature_is_rejected_with_the_exact_reason(
+        self, idp: FakeIdp, settings: AuthSettings
+    ) -> None:
         other_key = jwk.generate_key("RSA", 2048)
         verifier = make_verifier(idp, settings)
         token = idp.sign(idp.valid_claims(), key=other_key)
-        with pytest.raises(TokenRejectedError, match="bad_signature_or_key"):
+        with pytest.raises(TokenRejectedError, match="bad_signature"):
             verifier.verify_access_token(token=token)
 
     def test_unknown_kid_triggers_one_jwks_refresh_then_rejects(
@@ -146,9 +160,15 @@ class TestRejectedTokens:
     ) -> None:
         verifier = make_verifier(idp, settings)
         token = idp.sign(idp.valid_claims(), kid="unknown-kid")
-        with pytest.raises(TokenRejectedError, match="unknown_kid"):
+        with (
+            structlog.testing.capture_logs() as logs,
+            pytest.raises(TokenRejectedError, match="unknown_kid"),
+        ):
             verifier.verify_access_token(token=token)
         assert idp.jwks_fetches == 2  # initial fetch + one refresh
+        events = [event["event"] for event in logs]
+        assert "auth_jwks_refresh_on_unknown_kid" in events
+        assert "auth_token_rejected" in events
 
     def test_malformed_token_is_rejected(self, idp: FakeIdp, settings: AuthSettings) -> None:
         verifier = make_verifier(idp, settings)
@@ -176,8 +196,28 @@ class TestInfrastructureFailures:
         verifier = TokenVerifier(
             settings=settings, http_client=httpx.Client(transport=httpx.MockTransport(handler))
         )
-        with pytest.raises(TokenRejectedError, match="discovery_unavailable"):
+        with (
+            structlog.testing.capture_logs() as logs,
+            pytest.raises(TokenRejectedError, match="discovery_unavailable"),
+        ):
             verifier.verify_access_token(token=idp.sign(idp.valid_claims()))
+        assert "auth_discovery_failed" in [event["event"] for event in logs]
+
+    def test_discovery_returning_a_non_object_is_a_typed_rejection(
+        self, idp: FakeIdp, settings: AuthSettings
+    ) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json=["not", "an", "object"])
+
+        verifier = TokenVerifier(
+            settings=settings, http_client=httpx.Client(transport=httpx.MockTransport(handler))
+        )
+        with (
+            structlog.testing.capture_logs() as logs,
+            pytest.raises(TokenRejectedError, match="discovery_unavailable"),
+        ):
+            verifier.verify_access_token(token=idp.sign(idp.valid_claims()))
+        assert "auth_discovery_failed" in [event["event"] for event in logs]
 
     def test_discovery_without_jwks_uri_is_a_typed_rejection(
         self, idp: FakeIdp, settings: AuthSettings
@@ -188,8 +228,12 @@ class TestInfrastructureFailures:
         verifier = TokenVerifier(
             settings=settings, http_client=httpx.Client(transport=httpx.MockTransport(handler))
         )
-        with pytest.raises(TokenRejectedError, match="discovery_without_jwks_uri"):
+        with (
+            structlog.testing.capture_logs() as logs,
+            pytest.raises(TokenRejectedError, match="discovery_without_jwks_uri"),
+        ):
             verifier.verify_access_token(token=idp.sign(idp.valid_claims()))
+        assert "auth_discovery_failed" in [event["event"] for event in logs]
 
     def test_jwks_unavailable_is_a_typed_rejection(
         self, idp: FakeIdp, settings: AuthSettings
@@ -204,8 +248,12 @@ class TestInfrastructureFailures:
         verifier = TokenVerifier(
             settings=settings, http_client=httpx.Client(transport=httpx.MockTransport(handler))
         )
-        with pytest.raises(TokenRejectedError, match="jwks_unavailable"):
+        with (
+            structlog.testing.capture_logs() as logs,
+            pytest.raises(TokenRejectedError, match="jwks_unavailable"),
+        ):
             verifier.verify_access_token(token=idp.sign(idp.valid_claims()))
+        assert "auth_jwks_failed" in [event["event"] for event in logs]
 
     def test_token_without_sub_is_rejected(self, idp: FakeIdp, settings: AuthSettings) -> None:
         verifier = make_verifier(idp, settings)
@@ -214,9 +262,17 @@ class TestInfrastructureFailures:
         with pytest.raises(TokenRejectedError, match="missing_claims"):
             verifier.verify_access_token(token=idp.sign(claims))
 
-    def test_close_releases_an_owned_client(self, idp: FakeIdp, settings: AuthSettings) -> None:
-        verifier = TokenVerifier(settings=settings)  # owns its client
+    def test_close_releases_only_an_owned_client(self, settings: AuthSettings) -> None:
+        owned = TokenVerifier(settings=settings)  # owns its client
+        owned_client = owned._client
+        owned.close()
+        assert owned_client.is_closed
+
+        injected = httpx.Client(transport=httpx.MockTransport(lambda request: httpx.Response(200)))
+        verifier = TokenVerifier(settings=settings, http_client=injected)
         verifier.close()
+        assert not injected.is_closed
+        injected.close()
 
 
 class TestDisabledMode:
@@ -233,3 +289,43 @@ class TestDisabledMode:
         settings = AuthSettings.model_validate({"AUTH_ISSUER": ISSUER, "AUTH_CLIENT_ID": CLIENT_ID})
         assert settings.auth_disabled is False
         assert settings.allowed_audiences() == (CLIENT_ID,)
+
+
+@pytest.mark.property
+@given(
+    exp_offset=st.one_of(
+        st.integers(min_value=-3600, max_value=-2 * CLOCK_LEEWAY_SECONDS),
+        st.integers(min_value=2 * CLOCK_LEEWAY_SECONDS, max_value=3600),
+    ),
+    iss=st.sampled_from([ISSUER, "https://evil.test"]),
+    aud=st.sampled_from([CLIENT_ID, "another-app"]),
+)
+@hypothesis_settings(
+    max_examples=24,
+    deadline=None,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
+def test_signed_token_invariants(
+    idp: FakeIdp, settings: AuthSettings, exp_offset: int, iss: str, aud: str
+) -> None:
+    """Any IdP-signed token with matching iss/aud and a non-expired exp is accepted;
+    any other is rejected with its exact reason (ADR-0012 property tier)."""
+    verifier = make_verifier(idp, settings)
+    token = idp.sign(idp.valid_claims(iss=iss, aud=aud, exp=int(time.time()) + exp_offset))
+    if iss == ISSUER and aud == CLIENT_ID and exp_offset > 0:
+        claims = verifier.verify_access_token(token=token)
+        assert claims.iss == ISSUER
+        assert claims.aud == [CLIENT_ID]
+    else:
+        with pytest.raises(TokenRejectedError) as excinfo:
+            verifier.verify_access_token(token=token)
+        # The claims registry validates iss, then aud, then exp: the first
+        # failing claim determines the exact reason.
+        expected = (
+            "invalid_issuer"
+            if iss != ISSUER
+            else "invalid_audience"
+            if aud != CLIENT_ID
+            else "expired"
+        )
+        assert excinfo.value.reason == expected
