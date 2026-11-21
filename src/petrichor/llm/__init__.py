@@ -6,6 +6,13 @@ mock serves the Philosophes-3 corpus verbatim and degrades explicitly —
 it never invents an answer, and never emits a verdict (spec §8).
 """
 
+from petrichor.llm.digest import (
+    DIGEST_TOKEN_CEILING,
+    TRACE_MAX_STEPS,
+    AcceptedRole,
+    DigestError,
+    net_digest,
+)
 from petrichor.llm.provider import (
     DEFAULT_GOLDEN_ROOT,
     MAX_LLM_ATTEMPTS,
@@ -24,19 +31,25 @@ from petrichor.llm.schemas import (
     FormulaReadings,
     LlmUsage,
     ProfileEntry,
+    ProfileEntryPublic,
     Reading,
     SemanticProfile,
+    SemanticProfilePublic,
 )
 from petrichor.llm.session import SessionRequest, run_session
 
 __all__ = [
     "DEFAULT_GOLDEN_ROOT",
+    "DIGEST_TOKEN_CEILING",
     "MAX_LLM_ATTEMPTS",
+    "TRACE_MAX_STEPS",
+    "AcceptedRole",
     "Clarification",
     "Cluster",
     "ClusterCause",
     "ClusterList",
     "DeterministicMockProvider",
+    "DigestError",
     "FormulaReadings",
     "FormulaText",
     "HumanMessage",
@@ -45,8 +58,11 @@ __all__ = [
     "LLMProvider",
     "LlmUsage",
     "ProfileEntry",
+    "ProfileEntryPublic",
     "Reading",
     "SemanticProfile",
+    "SemanticProfilePublic",
     "SessionRequest",
+    "net_digest",
     "run_session",
 ]

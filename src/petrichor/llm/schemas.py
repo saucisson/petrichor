@@ -19,8 +19,13 @@ type ClusterCause = Literal["model", "specification"]
 """The closed set of cluster causes (spec §15)."""
 
 
-class ProfileEntry(BaseModel):
-    """One semantic-profile entry: a role hypothesis, its evidence and its smells."""
+class ProfileEntryPublic(BaseModel):
+    """One semantic-profile entry as the REAL provider must emit it (P73, annexe B §B.5).
+
+    The ``wrong`` field is an annotation of the mock corpus only; the real
+    provider's schema excludes it (``extra="forbid"``), so a real answer
+    carrying it fails validation and degrades explicitly.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -30,14 +35,25 @@ class ProfileEntry(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0, validation_alias="conf", serialization_alias="conf")
     evidence: str
     options: tuple[str, ...] = ()
+
+
+class ProfileEntry(ProfileEntryPublic):
+    """One semantic-profile entry of the mock corpus, with its smell."""
+
     wrong: bool = False
     """A smell: the maquette's corpus deliberately carries one false role."""
 
 
-class SemanticProfile(BaseModel):
-    """The `semantic-profile` output: roles + confidences + evidence + smells."""
+class SemanticProfilePublic(BaseModel):
+    """The `semantic-profile` output of the REAL provider: no mock-only field (P73)."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
+
+    entries: tuple[ProfileEntryPublic, ...]
+
+
+class SemanticProfile(SemanticProfilePublic):
+    """The `semantic-profile` output of the mock: entries may carry the `wrong` smell."""
 
     entries: tuple[ProfileEntry, ...]
 

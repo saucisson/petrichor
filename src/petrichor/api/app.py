@@ -1504,7 +1504,7 @@ def _get_run_witness(
                 update={
                     "narrations": narrate_steps(
                         provider=llm_provider,
-                        model_hash=model.content_hash,
+                        model=model,
                         steps=document.steps,
                     )
                 }
@@ -2368,7 +2368,7 @@ def _read_formula(
         return None
     document_formulas = grid if grid else (FormulaText(formula),)
     try:
-        document = llm_provider.reading(model_hash=model.content_hash, formulas=document_formulas)
+        document = llm_provider.reading(model=model, formulas=document_formulas)
         reading = document.readings[FormulaText(formula)]
     except LLMDegradationError, KeyError:
         logger.warning("api_formula_reading_degraded", formula=formula)

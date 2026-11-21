@@ -1,15 +1,23 @@
 """The real Mistral LLM provider, beside the deterministic mock (spec §8, §15; issue #36).
 
 ``MistralProvider`` implements the unique `LLMProvider` interface over the
-Mistral chat API: one prompt template per usage, JSON output validated
-against the usage's pydantic schema, a bounded re-request on failure
-(``MAX_LLM_ATTEMPTS``) and then an explicit degradation - the provider never
-invents an answer and never emits a verdict (spec §19.4: the prompt
-templates carry no verdict vocabulary, pinned by a guard test).
+Mistral chat API. P73 (annexe B of the 2026-11-20/21 directive): every call
+sends TWO messages — a system prompt per usage, verbatim from annexe B §B.3,
+in English and free of verdict vocabulary (guard test) — and a canonical
+JSON payload ``{"digest": ..., "data": ..., "language": ...}`` carrying the
+bounded canonical digest of the net (``petrichor.llm.digest.net_digest``),
+the usage data and the session language. Output is strict ``json_schema``
+derived from the usage's pydantic schema, validated, with a bounded
+re-request on failure (``MAX_LLM_ATTEMPTS``) and then an explicit
+degradation — the provider never invents an answer and never emits a
+verdict (spec §19.4).
 
-Token usage is accumulated per call and exposed via ``usage_totals``: the
-LLM cost is displayed apart from the tool-time budget, which counts only
-tool seconds (spec §12.4).
+The real provider's `semantic-profile` schema excludes the mock-only
+``wrong`` field (annexe B §B.5): an answer carrying it fails validation.
+
+Token usage is accumulated per (usage, model) couple and exposed via
+``usage_totals``: the LLM cost is displayed apart from the tool-time
+budget, which counts only tool seconds (spec §12.4).
 """
 
 import json
@@ -19,6 +27,7 @@ import httpx
 import structlog
 from pydantic import BaseModel, SecretStr, ValidationError
 
+from petrichor.llm.digest import AcceptedRole, net_digest
 from petrichor.llm.provider import (
     MAX_LLM_ATTEMPTS,
     FormulaText,
@@ -33,17 +42,20 @@ from petrichor.llm.schemas import (
     ClusterList,
     FormulaReadings,
     NarrationCorpus,
-    SemanticProfile,
+    SemanticProfilePublic,
 )
 
 if TYPE_CHECKING:
-    from petrichor.petri_canonical import ContentHash
+    from petrichor.petri_canonical import CanonicalModel, JsonValue
 
 logger = structlog.get_logger(__name__)
 
 MISTRAL_API_URL = "https://api.mistral.ai/v1/chat/completions"
 DEFAULT_MISTRAL_MODEL = "mistral-small-latest"
 """The default Mistral model of the real provider (configurable, spec §8)."""
+
+DEFAULT_SESSION_LANGUAGE = "fr"
+"""The default session language of the payloads (annexe B §B.1: ``language: "fr"``)."""
 
 MAX_TOKENS_PER_USAGE: dict[str, int] = {
     "semantic-profile": 2000,
@@ -58,43 +70,83 @@ OutputType = TypeVar("OutputType", bound=BaseModel)
 
 PROMPT_TEMPLATES: dict[str, str] = {
     "semantic-profile": (
-        "You are a Petri-net reading assistant. Given the places and transitions"
-        " of a P/T net, propose a semantic role for each group of places."
-        " Answer ONLY with a JSON object of this exact shape:"
-        ' {"entries": [{"id": "str", "elements": "str", "role": "str",'
-        ' "conf": 0.0, "evidence": "str", "options": ["str"], "wrong": false}]}.'
-        " elements and evidence are plain strings, never arrays."
-        " Describe roles and evidence; never judge whether a property holds."
+        "You are a Petri net reading assistant. You receive a canonical digest "
+        "of a Petri net: places, transitions, incidence, groupings, layout. For "
+        "each meaningful place group, propose a role hypothesis and a confidence "
+        "between 0 and 1. When unsure, list plausible alternative roles in "
+        '"options". Cite evidence from the given data using element ids or '
+        'names verbatim. Answer in the language given by "language" as a single '
+        "JSON object matching the provided schema. Write no text outside the "
+        'JSON. Never use the words "verified", "holds", "violated", "proved", '
+        '"true", "false", "correct" or "incorrect". Base every statement only '
+        "on the given data."
     ),
     "reading": (
-        "You are a formal-methods explainer. Read the given check formula in"
-        " plain language and state what it does NOT say."
-        " Answer ONLY with a JSON object of this exact shape:"
-        ' {"readings": {"<formula>": {"reading": "str", "not_says": "str",'
-        ' "pattern": "str", "cross": "str"}}}. Never state a verdict.'
+        "You are a formal-methods tutor. You receive a frozen grid of "
+        "verification questions about a Petri net, a digest of the places "
+        "involved, the accepted semantic roles of those places, and static "
+        'relations between questions. For each question: "reading" states what '
+        "the formula says about the system, naming places through their "
+        'accepted roles; "not_says" states the closest stronger reading the '
+        'formula does NOT entail; "pattern" restates the family given in the '
+        'grid; "cross" states the given static relations to other questions, '
+        "citing question ids verbatim. Restate relations only as given: never "
+        "invent a relation, a verdict or a question status. Answer in the "
+        'language given by "language" as a single JSON object matching the '
+        "provided schema. Write no text outside the JSON. Never use the words "
+        '"verified", "holds", "violated", "proved", "true", "false", "correct" '
+        'or "incorrect". Cite element ids and names verbatim. Base every '
+        "statement only on the given data."
     ),
     "clarification": (
-        "You are a reformulation assistant. Reformulate the given human"
-        " proposal about a Petri net and propose option chips."
-        " Answer ONLY with a JSON object of this exact shape:"
-        ' {"reform": "str", "options": ["str"]}. Never state a verdict.'
+        "You are a clarification assistant in a Petri net elicitation session. "
+        "You receive one raw human proposal about a question, the current "
+        "question (id, formula, reading), the accepted roles of the places "
+        'mentioned, and a bounded history. "reform" rephrases the proposal as a '
+        "check-style statement of intent that keeps the ambiguity visible; it "
+        'never resolves the ambiguity. "options" contains at most 4 short chips '
+        "of 5 to 8 words each, one per distinct plausible reading of the "
+        "proposal. Never choose for the engineer. Answer in the language given "
+        'by "language" as a single JSON object matching the provided schema. '
+        "Write no text outside the JSON. Never use the words "
+        '"verified", "holds", "violated", "proved", "true", "false", "correct" or '
+        '"incorrect". Cite element ids and names verbatim. Base every statement '
+        "only on the given data."
     ),
     "cluster": (
-        "You are a diagnostic assistant. Group the given violations of a Petri"
-        " net by cause (model or specification) with a remediation each."
-        " Answer ONLY with a JSON object of this exact shape:"
-        ' {"clusters": [{"cause": "model|specification", "fix": "str",'
-        ' "members": ["str"]}]}. Never state a verdict.'
+        "You are a verification triage assistant. You receive the set of "
+        "violated clauses from a verification pass, each with per-tool verdicts "
+        "and techniques, a concordance status, a short witness summary and the "
+        "semantic roles involved. Group the clauses by their most probable "
+        'cause: "model" or "specification". "fix" proposes a remediation '
+        'direction, never an automated change. "members" lists clause ids. You '
+        "may restate the given per-tool verdicts as reported facts, but never "
+        "produce a new verdict of your own. Answer in the language given by "
+        '"language" as a single JSON object matching the provided schema. '
+        "Write no text outside the JSON. Never use the words "
+        '"verified", "holds", "violated", "proved", "true", "false", "correct" or '
+        '"incorrect". Cite element ids and names verbatim. Base every statement '
+        "only on the given data."
     ),
     "narration": (
-        "You are a step narrator for a witness trace of a Petri net. Describe"
-        " in one sentence what the given fired transition does to the marking."
-        " Answer ONLY with a JSON object of this exact shape:"
-        ' {"narrations": {"<transition>": "<sentence>"}}.'
-        " Describe the step; never state a verdict."
+        "You are a Petri net trace narrator. You receive the complete fired "
+        "trace of a witness, the violated clause as context, and a reported "
+        "cyclicity/back-edge signal. Produce exactly one sentence per fired "
+        "transition: what the firing does to the marking, naming places through "
+        "their accepted semantic roles, with the exact element id in "
+        "parentheses; steps that close a cycle are noted as such. Describe the "
+        "step, never its desirability. Answer in the language given by "
+        '"language" as a single JSON object matching the provided schema. '
+        "Write no text outside the JSON. Never use the words "
+        '"verified", "holds", "violated", "proved", "true", "false", "correct" or '
+        '"incorrect". Base every statement only on the given data.'
     ),
 }
-"""The prompt templates per usage; they carry no verdict vocabulary (guard test, §19.4)."""
+"""The system prompts per usage, verbatim from annexe B §B.3 (P73).
+
+They carry no verdict vocabulary outside their own guard sentence —
+pinned by the guard test (spec §19.4).
+"""
 
 
 class MistralProvider(LLMProvider):
@@ -107,11 +159,13 @@ class MistralProvider(LLMProvider):
         model: str = DEFAULT_MISTRAL_MODEL,
         http_client: httpx.Client | None = None,
         api_url: str = MISTRAL_API_URL,
+        language: str = DEFAULT_SESSION_LANGUAGE,
     ) -> None:
-        """Bind the provider to a key, a model and an HTTP client (injectable for tests)."""
+        """Bind the provider to a key, a model, an HTTP client and a session language."""
         self._api_key = api_key
         self._model = model
         self._api_url = api_url
+        self._language = language
         self._client = http_client or httpx.Client(timeout=60.0)
         self._owns_client = http_client is None
         self._calls = 0
@@ -146,10 +200,25 @@ class MistralProvider(LLMProvider):
         }
 
     def _complete(
-        self, *, usage: str, user_content: str, output_type: type[OutputType]
+        self,
+        *,
+        usage: str,
+        digest: dict[str, JsonValue],
+        data: dict[str, JsonValue],
+        output_type: type[OutputType],
     ) -> OutputType:
-        """One chat completion with bounded re-request and schema validation."""
+        """One chat completion (two messages) with bounded re-request and schema validation.
+
+        P73 (annexe B §B.1): message 1 is the system prompt of the usage,
+        verbatim; message 2 is the canonical JSON payload
+        ``{"digest": ..., "data": ..., "language": ...}``.
+        """
         prompt = PROMPT_TEMPLATES[usage]
+        user_content = json.dumps(
+            {"digest": digest, "data": data, "language": self._language},
+            ensure_ascii=False,
+            sort_keys=True,
+        )
         last_error: Exception | None = None
         for attempt in range(1, MAX_LLM_ATTEMPTS + 1):
             try:
@@ -236,50 +305,77 @@ class MistralProvider(LLMProvider):
             f" after {MAX_LLM_ATTEMPTS} attempts."
         ) from last_error
 
-    def semantic_profile(self, *, model_hash: ContentHash) -> SemanticProfile:
-        """Extract the semantic profile of a model via Mistral."""
+    def semantic_profile(self, *, model: CanonicalModel) -> SemanticProfilePublic:
+        """Extract the semantic profile of a model via Mistral (digest `profile`)."""
+        digest = net_digest(model, "profile")
         return self._complete(
             usage="semantic-profile",
-            user_content=f"Model content hash: {model_hash}. Propose the roles.",
-            output_type=SemanticProfile,
+            digest=digest,
+            data={},
+            output_type=SemanticProfilePublic,
         )
 
     def reading(
-        self, *, model_hash: ContentHash, formulas: tuple[FormulaText, ...]
+        self,
+        *,
+        model: CanonicalModel,
+        formulas: tuple[FormulaText, ...],
+        roles: dict[str, AcceptedRole] | None = None,
+        relations: tuple[str, ...] = (),
     ) -> FormulaReadings:
-        """Read the whole question grid in ONE call (P72: one HTTP call per document)."""
-        grid = "\n".join(f"- {formula}" for formula in formulas)
-        return self._complete(
-            usage="reading",
-            user_content=f"Model {model_hash}. Frozen question grid:\n{grid}",
-            output_type=FormulaReadings,
-        )
+        """Read the whole question grid in ONE call (P72) with the `places-only` digest (P73).
 
-    def clarification(self, *, model_hash: ContentHash, text: HumanMessage) -> Clarification:
-        """Reformulate a human proposal via Mistral."""
-        return self._complete(
-            usage="clarification",
-            user_content=f"Model {model_hash}. Proposal: {text}",
-            output_type=Clarification,
-        )
-
-    def cluster(self, *, model_hash: ContentHash) -> tuple[Cluster, ...]:
-        """Cluster the violations of a model via Mistral."""
+        The `cross` field only restates the static relations given in
+        ``relations``; the document may only answer the requested grid —
+        any extra key is an invention and degrades explicitly.
+        """
+        formula_texts = tuple(str(formula) for formula in formulas)
+        digest = net_digest(model, "places-only", formulas=formula_texts, roles=roles or {})
+        data: dict[str, JsonValue] = {
+            "grid": [{"formula": formula} for formula in formula_texts],
+            "relations": list(relations),
+        }
         document = self._complete(
-            usage="cluster",
-            user_content=f"Model {model_hash}. Cluster its violations.",
-            output_type=ClusterList,
+            usage="reading", digest=digest, data=data, output_type=FormulaReadings
         )
+        invented = set(document.readings) - set(formula_texts)
+        if invented:
+            raise LLMDegradationError(
+                f"Reading document answers formulas absent from the grid: {sorted(invented)}."
+            )
+        return document
+
+    def clarification(self, *, model: CanonicalModel, text: HumanMessage) -> Clarification:
+        """Reformulate a human proposal via Mistral (one call per proposal, `places-only`)."""
+        digest = net_digest(model, "places-only", formulas=(str(text),))
+        data: dict[str, JsonValue] = {"proposal": str(text)}
+        return self._complete(
+            usage="clarification", digest=digest, data=data, output_type=Clarification
+        )
+
+    def cluster(self, *, model: CanonicalModel) -> tuple[Cluster, ...]:
+        """Cluster the violations of a model via Mistral (digest `profile`)."""
+        digest = net_digest(model, "profile")
+        document = self._complete(usage="cluster", digest=digest, data={}, output_type=ClusterList)
         return document.clusters
 
-    def narrate(self, *, model_hash: ContentHash, transitions: tuple[str, ...]) -> NarrationCorpus:
-        """Narrate the COMPLETE witness in ONE call (P72: one HTTP call per document, P32)."""
-        trace = "\n".join(f"- {transition}" for transition in transitions)
-        return self._complete(
-            usage="narration",
-            user_content=f"Model {model_hash}. Fired transitions of the witness:\n{trace}",
-            output_type=NarrationCorpus,
+    def narrate(self, *, model: CanonicalModel, transitions: tuple[str, ...]) -> NarrationCorpus:
+        """Narrate the COMPLETE witness in ONE call (P72, P32) with the `trace` digest (P73).
+
+        The corpus may only cover the requested transitions — any extra key
+        is an invention and degrades explicitly.
+        """
+        digest = net_digest(model, "trace", trace=transitions)
+        data: dict[str, JsonValue] = {"transitions": list(transitions)}
+        corpus = self._complete(
+            usage="narration", digest=digest, data=data, output_type=NarrationCorpus
         )
+        invented = set(corpus.narrations) - set(transitions)
+        if invented:
+            raise LLMDegradationError(
+                f"Narration corpus covers transitions absent from the trace: {sorted(invented)}."
+            )
+        return corpus
 
     def close(self) -> None:
         """Close the owned HTTP client, if any."""
@@ -289,6 +385,7 @@ class MistralProvider(LLMProvider):
 
 __all__ = [
     "DEFAULT_MISTRAL_MODEL",
+    "DEFAULT_SESSION_LANGUAGE",
     "MAX_TOKENS_PER_USAGE",
     "MISTRAL_API_URL",
     "PROMPT_TEMPLATES",

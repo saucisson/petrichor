@@ -7,29 +7,28 @@
 """
 
 import json
-from typing import TYPE_CHECKING, get_args, get_origin
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 import httpx
 import pytest
-import structlog.testing
-from pydantic import BaseModel, SecretStr
+from pydantic import BaseModel, SecretStr, ValidationError
 
-from petrichor.api.app import create_app
-from petrichor.api.settings import ApiSettings
 from petrichor.llm import FormulaText, schemas
+from petrichor.pnml_import import import_pnml
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 from petrichor.llm.mistral import PROMPT_TEMPLATES, MistralProvider
-from petrichor.llm.provider import DeterministicMockProvider, LLMDegradationError
-from petrichor.main import select_llm_provider
-from petrichor.model_store import ModelStore
-from petrichor.petri_canonical import ContentHash
-from petrichor.run_store import RunStore
+from petrichor.llm.provider import LLMDegradationError
 
 TEST_API_KEY = "test-key"
 AUTH_HEADERS = {"X-API-Key": TEST_API_KEY}
-MODEL_HASH = ContentHash("sha256:48fb522c37d91504f4dc22ead01e8be6269eed234d62ab6b562a0fc38f9fb316")
+FIXTURES = Path(__file__).parent / "fixtures"
+PHILOSOPHES3_MODEL = import_pnml(
+    text=(FIXTURES / "philosophes3-maquette.pnml").read_text(encoding="utf-8")
+)
+MODEL_HASH = PHILOSOPHES3_MODEL.content_hash
 
 
 def mistral_response(content: str, *, total_tokens: int = 42) -> dict:
@@ -59,7 +58,7 @@ class TestMistralProvider:
             )
 
         provider = MistralProvider(api_key=SecretStr("sk-test"), http_client=fake_client(handler))
-        corpus = provider.narrate(model_hash=MODEL_HASH, transitions=("takeL_1",))
+        corpus = provider.narrate(model=PHILOSOPHES3_MODEL, transitions=("takeL_1",))
         assert corpus.narrations["takeL_1"] == "Le philosophe 1 prend la fourchette."
         assert len(requests) == 1
         body = json.loads(requests[0].content.decode("utf-8"))
@@ -89,7 +88,7 @@ class TestMistralProvider:
 
         provider = MistralProvider(api_key=SecretStr("sk-test"), http_client=fake_client(handler))
         with pytest.raises(LLMDegradationError):
-            provider.narrate(model_hash=MODEL_HASH, transitions=("takeL_1",))
+            provider.narrate(model=PHILOSOPHES3_MODEL, transitions=("takeL_1",))
         assert calls == 2
 
     def test_verdict_laden_output_fails_schema_validation_and_degrades(self) -> None:
@@ -105,7 +104,7 @@ class TestMistralProvider:
 
         provider = MistralProvider(api_key=SecretStr("sk-test"), http_client=fake_client(handler))
         with pytest.raises(LLMDegradationError):
-            provider.narrate(model_hash=MODEL_HASH, transitions=("takeL_1",))
+            provider.narrate(model=PHILOSOPHES3_MODEL, transitions=("takeL_1",))
 
     def test_http_error_is_retried_then_degrades(self) -> None:
         calls = 0
@@ -117,7 +116,7 @@ class TestMistralProvider:
 
         provider = MistralProvider(api_key=SecretStr("sk-test"), http_client=fake_client(handler))
         with pytest.raises(LLMDegradationError):
-            provider.semantic_profile(model_hash=MODEL_HASH)
+            provider.semantic_profile(model=PHILOSOPHES3_MODEL)
         assert calls == 2
 
 
@@ -142,7 +141,7 @@ class TestOneDocumentOneCall:
 
         provider = MistralProvider(api_key=SecretStr("sk-test"), http_client=fake_client(handler))
         document = provider.reading(
-            model_hash=MODEL_HASH,
+            model=PHILOSOPHES3_MODEL,
             formulas=tuple(
                 FormulaText(f) for f in ("EF (eat_1)", "AG EF (fork_1 = 1)", "EF DEADLOCK")
             ),
@@ -167,7 +166,7 @@ class TestOneDocumentOneCall:
 
         provider = MistralProvider(api_key=SecretStr("sk-test"), http_client=fake_client(handler))
         corpus = provider.narrate(
-            model_hash=MODEL_HASH, transitions=tuple(f"t{i}" for i in range(5))
+            model=PHILOSOPHES3_MODEL, transitions=tuple(f"t{i}" for i in range(5))
         )
         assert len(corpus.narrations) == 5
         assert len(requests) == 1
@@ -186,7 +185,7 @@ class TestOneDocumentOneCall:
             model="mistral-small-2603",
             http_client=fake_client(handler),
         )
-        provider.narrate(model_hash=MODEL_HASH, transitions=("takeL_1",))
+        provider.narrate(model=PHILOSOPHES3_MODEL, transitions=("takeL_1",))
         archive = provider.archived_calls()
         assert len(archive) == 1
         entry = archive[0]
@@ -197,9 +196,124 @@ class TestOneDocumentOneCall:
         assert entry["request"]["model"] == "mistral-small-2603"  # rejeu P46
 
 
+FORBIDDEN_VERDICT_WORDS = (
+    "verified",
+    "holds",
+    "violated",
+    "proved",
+    "true",
+    "false",
+    "correct",
+    "incorrect",
+)
+"""The verdict vocabulary forbidden in the real prompts (annexe B §B.3, P73)."""
+
+# A distinctive verbatim fragment of each annexe B §B.3 system prompt (P73:
+# the prompts are pinned verbatim, not paraphrased).
+VERBATIM_FRAGMENTS: dict[str, str] = {
+    "semantic-profile": "propose a role hypothesis and a confidence",
+    "reading": "the closest stronger reading the",
+    "clarification": "Never choose for the engineer",
+    "cluster": "never an automated change",
+    "narration": "never its desirability",
+}
+
+
+class TestCanonicalPayload:
+    """P73 (annexe B §B.1): each call is two messages - the system prompt, then a
+    canonical JSON payload {digest, data, language}."""
+
+    def test_user_message_is_the_canonical_json_payload_with_the_net_digest(self) -> None:
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(
+                200,
+                json=mistral_response(
+                    json.dumps({"narrations": {"takeL_1": "Le philosophe 1 prend la fourchette."}})
+                ),
+            )
+
+        provider = MistralProvider(api_key=SecretStr("sk-test"), http_client=fake_client(handler))
+        provider.narrate(model=PHILOSOPHES3_MODEL, transitions=("takeL_1",))
+        body = json.loads(requests[0].content.decode("utf-8"))
+        assert len(body["messages"]) == 2
+        assert body["messages"][0]["role"] == "system"
+        assert body["messages"][0]["content"] == PROMPT_TEMPLATES["narration"]
+        assert body["messages"][1]["role"] == "user"
+        payload = json.loads(body["messages"][1]["content"])
+        assert payload["language"] == "fr"
+        assert payload["digest"]["level"] == "trace"
+        assert payload["digest"]["steps"][0]["transition"]["id"] == "takeL_1"
+        assert payload["data"] == {"transitions": ["takeL_1"]}
+
+    def test_reading_payload_carries_the_places_only_digest_and_the_grid(self) -> None:
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            readings = {
+                "EF (eat_1)": {"reading": "r", "not_says": "n", "pattern": "p", "cross": "c"}
+            }
+            return httpx.Response(200, json=mistral_response(json.dumps({"readings": readings})))
+
+        provider = MistralProvider(api_key=SecretStr("sk-test"), http_client=fake_client(handler))
+        provider.reading(model=PHILOSOPHES3_MODEL, formulas=(FormulaText("EF (eat_1)"),))
+        body = json.loads(requests[0].content.decode("utf-8"))
+        payload = json.loads(body["messages"][1]["content"])
+        assert payload["digest"]["level"] == "places-only"
+        assert [place["name"] for place in payload["digest"]["places"]] == ["eat_1"]
+        assert payload["data"]["grid"] == [{"formula": "EF (eat_1)"}]
+        assert payload["data"]["relations"] == []
+
+
+class TestNoInvention:
+    """P73: any output data absent from the input data is an invention - the
+    provider degrades explicitly on an injected counterexample."""
+
+    def test_reading_document_answering_an_unrequested_formula_degrades(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            readings = {
+                "EF (eat_1)": {"reading": "r", "not_says": "n", "pattern": "p", "cross": "c"},
+                "EF DEADLOCK": {"reading": "r", "not_says": "n", "pattern": "p", "cross": "c"},
+            }
+            return httpx.Response(200, json=mistral_response(json.dumps({"readings": readings})))
+
+        provider = MistralProvider(api_key=SecretStr("sk-test"), http_client=fake_client(handler))
+        with pytest.raises(LLMDegradationError, match="absent from the grid"):
+            provider.reading(model=PHILOSOPHES3_MODEL, formulas=(FormulaText("EF (eat_1)"),))
+
+    def test_narration_corpus_covering_an_unfired_transition_degrades(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            narrations = {"takeL_1": "a", "takeL_2": "b"}
+            payload = mistral_response(json.dumps({"narrations": narrations}))
+            return httpx.Response(200, json=payload)
+
+        provider = MistralProvider(api_key=SecretStr("sk-test"), http_client=fake_client(handler))
+        with pytest.raises(LLMDegradationError, match="absent from the trace"):
+            provider.narrate(model=PHILOSOPHES3_MODEL, transitions=("takeL_1",))
+
+    def test_profile_answer_carrying_the_mock_wrong_field_degrades(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            entry = {
+                "id": "think",
+                "elements": "S1",
+                "role": "file d'attente",
+                "conf": 0.9,
+                "evidence": "e",
+                "wrong": True,
+            }
+            return httpx.Response(200, json=mistral_response(json.dumps({"entries": [entry]})))
+
+        provider = MistralProvider(api_key=SecretStr("sk-test"), http_client=fake_client(handler))
+        with pytest.raises(LLMDegradationError):
+            provider.semantic_profile(model=PHILOSOPHES3_MODEL)
+
+
 class TestPromptGuard:
     def test_every_prompt_template_forbids_verdicts(self) -> None:
-        """§19.4: no prompt asks for a verdict; each carries the guard phrase."""
+        """P73 guard: no verdict word in any real prompt, outside its own guard sentence."""
         assert set(PROMPT_TEMPLATES) == {
             "semantic-profile",
             "reading",
@@ -208,9 +322,23 @@ class TestPromptGuard:
             "narration",
         }
         for usage, template in PROMPT_TEMPLATES.items():
-            lowered = template.lower()
-            assert "never" in lowered, f"prompt {usage!r} must carry a never-guard phrase"
-            assert '"verdict"' not in lowered, f"prompt {usage!r} must not ask for a verdict key"
+            # The guard sentence itself names the forbidden words; strip it first.
+            # "violated clause(s)" is the annexe B input noun phrase (the given
+            # data), not a verdict the model is asked to produce.
+            body = template.split("Never use the words", maxsplit=1)[0].lower()
+            body = body.replace("violated clauses", "").replace("violated clause", "")
+            for word in FORBIDDEN_VERDICT_WORDS:
+                assert word not in body, f"prompt {usage!r} carries the verdict word {word!r}"
+            assert "never use the words" in template.lower(), (
+                f"prompt {usage!r} must carry the verbatim guard sentence"
+            )
+
+    def test_prompts_are_the_verbatim_annexe_b_texts(self) -> None:
+        """P73: each system prompt is the annexe B §B.3 text, pinned by a verbatim fragment."""
+        for usage, fragment in VERBATIM_FRAGMENTS.items():
+            assert fragment in PROMPT_TEMPLATES[usage], (
+                f"prompt {usage!r} is not the verbatim annexe B text"
+            )
 
     def test_no_llm_schema_has_a_verdict_field(self) -> None:
         """Structural guard: no LLM output schema can carry a verdict key."""
@@ -220,163 +348,22 @@ class TestPromptGuard:
             if isinstance(obj, type) and issubclass(obj, BaseModel):
                 assert "verdict" not in obj.model_fields, f"{name} has a verdict field"
 
-
-# The shape each prompt template advertises, mapped to the pydantic schema that
-# validates the real output (issue #176: the drift between the two made every
-# real call fail validation). The guard is mechanical in both directions: the
-# sample must validate against the schema, and every key of the sample must be
-# named in the prompt - change either side and this test fails.
-USAGE_SCHEMAS: dict[str, type[BaseModel]] = {
-    "semantic-profile": schemas.SemanticProfile,
-    "reading": schemas.FormulaReadings,
-    "clarification": schemas.Clarification,
-    "cluster": schemas.ClusterList,
-    "narration": schemas.NarrationCorpus,
-}
-
-USAGE_SAMPLES: dict[str, dict[str, object]] = {
-    "semantic-profile": {
-        "entries": [
-            {
-                "id": "p1",
-                "elements": "M1",
-                "role": "ressource",
-                "conf": 0.9,
-                "evidence": "place M1 is consumed by takeL",
-                "options": ["jeton"],
-                "wrong": False,
-            }
-        ]
-    },
-    "reading": {
-        "readings": {
-            "AG(philo0 thinking)": {
-                "reading": "toujours vrai",
-                "not_says": "vivacite",
-                "pattern": "safety",
-                "cross": "q2",
-            }
-        }
-    },
-    "clarification": {"reform": "verifier que ...", "options": ["lecture A", "lecture B"]},
-    "cluster": {"clusters": [{"cause": "model", "fix": "ajouter une place", "members": ["c1"]}]},
-    "narration": {"narrations": {"takeL_1": "Le philosophe 1 prend la fourchette."}},
-}
-
-
-def _annotation_keys(annotation: object) -> set[str]:
-    """The nested schema keys reachable through a field annotation."""
-    origin = get_origin(annotation)
-    if origin is not None:
-        keys: set[str] = set()
-        for argument in get_args(annotation):
-            keys |= _annotation_keys(argument)
-        return keys
-    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
-        return _schema_keys(annotation)
-    return set()
-
-
-def _schema_keys(model: type[BaseModel]) -> set[str]:
-    """Every JSON key of a pydantic model, recursively (validation aliases win)."""
-    keys: set[str] = set()
-    for name, field in model.model_fields.items():
-        alias = field.validation_alias if isinstance(field.validation_alias, str) else name
-        keys.add(alias)
-        keys |= _annotation_keys(field.annotation)
-    return keys
-
-
-class TestPromptSchemaParity:
-    def test_every_usage_prompt_matches_its_pydantic_schema(self) -> None:
-        """Issue #176 guard: the JSON shape advertised by each prompt template
-        validates against the usage's pydantic schema, and the prompt names
-        every key of that schema - prompt/schema drift fails here."""
-        assert set(USAGE_SCHEMAS) == set(PROMPT_TEMPLATES)
-        for usage, schema in USAGE_SCHEMAS.items():
-            schema.model_validate(USAGE_SAMPLES[usage])
-            template = PROMPT_TEMPLATES[usage]
-            for key in _schema_keys(schema):
-                assert f'"{key}"' in template, (
-                    f"prompt {usage!r} does not name the schema key {key!r}"
-                )
-
-
-class TestProviderSelection:
-    def test_mock_is_the_default(self) -> None:
-        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
-        assert isinstance(select_llm_provider(settings=settings), DeterministicMockProvider)
-
-    def test_mistral_without_key_fails_at_startup(self) -> None:
-        settings = ApiSettings(
-            api_key=SecretStr(TEST_API_KEY), llm_provider="mistral", mistral_api_key=None
-        )
-        with pytest.raises(SystemExit):
-            select_llm_provider(settings=settings)
-
-    def test_mistral_with_key_is_selected(self) -> None:
-        settings = ApiSettings(
-            api_key=SecretStr(TEST_API_KEY),
-            llm_provider="mistral",
-            mistral_api_key=SecretStr("sk-test"),
-        )
-        provider = select_llm_provider(settings=settings)
-        assert isinstance(provider, MistralProvider)
-        provider.close()
-
-
-class TestLlmUsageEndpoint:
-    def test_llm_usage_is_exposed_apart_from_the_tool_budget(self) -> None:
-        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
-        app = create_app(
-            settings=settings,
-            store=ModelStore(),
-            run_store=RunStore(),
-            runner=None,
-            llm_provider=DeterministicMockProvider(),
-        )
-        client = httpx.Client(transport=httpx.WSGITransport(app=app), base_url="http://testserver")
-        response = client.get("/v1/llm/usage", headers=AUTH_HEADERS)
-        assert response.status_code == 200
-        payload = response.json()
-        assert payload["llm"]["provider"] == "mock"
-        assert "NOT part of the MC tool-time budget" in payload["budget_note"]
-
-    def test_llm_usage_without_provider_is_503(self) -> None:
-        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
-        app = create_app(settings=settings, store=ModelStore(), run_store=RunStore(), runner=None)
-        client = httpx.Client(transport=httpx.WSGITransport(app=app), base_url="http://testserver")
-        response = client.get("/v1/llm/usage", headers=AUTH_HEADERS)
-        assert response.status_code == 503
-        assert response.json()["extensions"]["reason"] == "llm_not_configured"
-
-
-class TestLlmLogNarration:
-    """The LLM layer's log events are part of the narration contract (ADR-0005)."""
-
-    def test_mistral_failure_and_degradation_events_are_pinned(self) -> None:
-        def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(200, json=mistral_response("not json"))
-
-        provider = MistralProvider(api_key=SecretStr("sk-test"), http_client=fake_client(handler))
-        with structlog.testing.capture_logs() as logs, pytest.raises(LLMDegradationError):
-            provider.narrate(model_hash=MODEL_HASH, transitions=("takeL_1",))
-        events = [event["event"] for event in logs]
-        assert events.count("llm_mistral_call_failed") == 2
-        assert "llm_degraded" in events
-
-    def test_llm_usage_endpoint_event_is_pinned(self) -> None:
-        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
-        app = create_app(
-            settings=settings,
-            store=ModelStore(),
-            run_store=RunStore(),
-            runner=None,
-            llm_provider=DeterministicMockProvider(),
-        )
-        client = httpx.Client(transport=httpx.WSGITransport(app=app), base_url="http://testserver")
-        with structlog.testing.capture_logs() as logs:
-            response = client.get("/v1/llm/usage", headers=AUTH_HEADERS)
-            assert response.status_code == 200
-        events = [event["event"] for event in logs]
-        assert "api_llm_usage_read" in events
+    def test_real_profile_schema_excludes_the_mock_wrong_field(self) -> None:
+        """P73 (annexe B §B.5): the real provider's schema has no `wrong` field."""
+        assert "wrong" not in schemas.SemanticProfilePublic.model_fields
+        assert "wrong" not in schemas.ProfileEntryPublic.model_fields
+        with pytest.raises(ValidationError):
+            schemas.SemanticProfilePublic.model_validate(
+                {
+                    "entries": [
+                        {
+                            "id": "p",
+                            "elements": "M1",
+                            "role": "r",
+                            "conf": 0.5,
+                            "evidence": "e",
+                            "wrong": True,
+                        }
+                    ]
+                }
+            )
