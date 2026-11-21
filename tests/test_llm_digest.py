@@ -127,6 +127,12 @@ class TestProfileLevel:
         assert digest["degraded"] == "grouped-summary"
         assert digest["totals"]["places"] == 12
         assert "places" not in digest, "no silent truncation: the full list is replaced, not cut"
+        # The counters must agree with the full digest's incidence direction
+        # (place→transition consumes, transition→place produces).
+        full_incidence = {entry["transition"]: entry for entry in full["incidence"]}
+        for transition_id, counters in digest["incidence_counters"].items():
+            assert counters["consumes"] == len(full_incidence[transition_id]["consumes"])
+            assert counters["produces"] == len(full_incidence[transition_id]["produces"])
 
     def test_profile_digest_raises_explicitly_when_even_the_summary_is_too_big(
         self, monkeypatch: pytest.MonkeyPatch

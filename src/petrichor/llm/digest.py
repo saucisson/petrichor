@@ -158,8 +158,9 @@ def _profile_summary(model: CanonicalModel) -> dict[str, JsonValue]:
         ),
         "incidence_counters": {
             transition.id: {
-                "consumes": sum(1 for arc in model.arcs if arc.source == transition.id),
-                "produces": sum(1 for arc in model.arcs if arc.target == transition.id),
+                # Same direction semantics as _incidence: place→transition consumes.
+                "consumes": sum(1 for arc in model.arcs if arc.target == transition.id),
+                "produces": sum(1 for arc in model.arcs if arc.source == transition.id),
             }
             for transition in model.transitions
         },
@@ -264,41 +265,45 @@ def net_digest(
     truncation.
     """
     accepted_roles = roles or {}
-    if level == "profile":
-        digest = _profile_digest(model)
-        if estimate_tokens(digest) > DIGEST_TOKEN_CEILING:
-            summary = _profile_summary(model)
-            if estimate_tokens(summary) > DIGEST_TOKEN_CEILING:
-                raise DigestError(
-                    "Profile digest exceeds the token ceiling even as a grouped summary."
-                )
-            return summary
-        return digest
-    if level == "places-only":
-        places_digest = _places_only_digest(model, formulas=formulas, roles=accepted_roles)
-        if estimate_tokens(places_digest) > DIGEST_TOKEN_CEILING:
-            cited = places_digest["places"]
-            cited_places = cited if isinstance(cited, list) else []
-            places_summary: dict[str, JsonValue] = {
-                "level": "places-only",
-                "degraded": "grouped-summary",
-                "cited_place_count": len(cited_places),
-                "role_count": sum(
-                    1
-                    for place in cited_places
-                    if isinstance(place, dict) and place.get("role") is not None
-                ),
-            }
-            if estimate_tokens(places_summary) > DIGEST_TOKEN_CEILING:
-                raise DigestError(
-                    "Places-only digest exceeds the token ceiling even as a grouped summary."
-                )
-            return places_summary
-        return places_digest
-    digest = _trace_digest(model, trace=trace, roles=accepted_roles)
-    if estimate_tokens(digest) > DIGEST_TOKEN_CEILING:
-        raise DigestError("Trace digest exceeds the token ceiling.")
-    return digest
+    match level:
+        case "profile":
+            digest = _profile_digest(model)
+            if estimate_tokens(digest) > DIGEST_TOKEN_CEILING:
+                summary = _profile_summary(model)
+                if estimate_tokens(summary) > DIGEST_TOKEN_CEILING:
+                    raise DigestError(
+                        "Profile digest exceeds the token ceiling even as a grouped summary."
+                    )
+                return summary
+            return digest
+        case "places-only":
+            places_digest = _places_only_digest(model, formulas=formulas, roles=accepted_roles)
+            if estimate_tokens(places_digest) > DIGEST_TOKEN_CEILING:
+                cited = places_digest["places"]
+                cited_places = cited if isinstance(cited, list) else []
+                places_summary: dict[str, JsonValue] = {
+                    "level": "places-only",
+                    "degraded": "grouped-summary",
+                    "cited_place_count": len(cited_places),
+                    "role_count": sum(
+                        1
+                        for place in cited_places
+                        if isinstance(place, dict) and place.get("role") is not None
+                    ),
+                }
+                if estimate_tokens(places_summary) > DIGEST_TOKEN_CEILING:
+                    raise DigestError(
+                        "Places-only digest exceeds the token ceiling even as a grouped summary."
+                    )
+                return places_summary
+            return places_digest
+        case "trace":
+            digest = _trace_digest(model, trace=trace, roles=accepted_roles)
+            if estimate_tokens(digest) > DIGEST_TOKEN_CEILING:
+                raise DigestError("Trace digest exceeds the token ceiling.")
+            return digest
+        case _:
+            raise AssertionError(f"unreachable digest level: {level!r}")
 
 
 __all__ = [
