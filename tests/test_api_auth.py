@@ -6,10 +6,15 @@ other request gets a uniform 401 problem response and a structured
 ``api_request_unauthorized`` log with the exact reason (ADR-0005).
 """
 
+from typing import TYPE_CHECKING
+
 import httpx
 import pytest
 import structlog.testing
 from pydantic import SecretStr
+
+if TYPE_CHECKING:
+    from wsgiref.types import WSGIEnvironment
 
 from petrichor.api import create_app
 from petrichor.api.auth import (
@@ -156,28 +161,28 @@ class TestIdentityExposure:
         self, accepting_verifier: StubVerifier
     ) -> None:
         settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
-        environ: dict[str, object] = {"HTTP_AUTHORIZATION": "Bearer good-token"}
+        environ: WSGIEnvironment = {"HTTP_AUTHORIZATION": "Bearer good-token"}
         decision = authenticate_request(
             environ=environ,
             settings=settings,
-            token_verifier=accepting_verifier,  # type: ignore[arg-type]
+            token_verifier=accepting_verifier,
         )
         assert decision.allowed
         assert decision.claims == VALID_CLAIMS
         environ[ENVIRON_AUTH_CLAIMS] = decision.claims
-        assert auth_claims_from_environ(environ) == VALID_CLAIMS  # type: ignore[arg-type]
+        assert auth_claims_from_environ(environ) == VALID_CLAIMS
 
     def test_legacy_key_carries_no_identity(self) -> None:
         settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
-        environ: dict[str, object] = {"HTTP_X_API_KEY": TEST_API_KEY}
+        environ: WSGIEnvironment = {"HTTP_X_API_KEY": TEST_API_KEY}
         decision = authenticate_request(
             environ=environ,
             settings=settings,
-            token_verifier=None,  # type: ignore[arg-type]
+            token_verifier=None,
         )
         assert decision.allowed
         assert decision.claims is None
-        assert auth_claims_from_environ(environ) is None  # type: ignore[arg-type]
+        assert auth_claims_from_environ(environ) is None
 
 
 class TestL3Guard:
