@@ -524,6 +524,42 @@ class TestLlmUsageEndpoint:
         assert payload["llm"]["provider"] == "mock"
         assert "NOT part of the MC tool-time budget" in payload["budget_note"]
 
+    def test_llm_usage_exposes_the_pinned_routing_per_usage_model(self) -> None:
+        """P74 (ADR-0108): the endpoint payload carries the pinned routing
+        fingerprint and the per (usage, model) breakdown (openapi.yaml)."""
+        provider = MistralProvider(
+            api_key=SecretStr("sk-test"),
+            http_client=fake_client(
+                lambda request: httpx.Response(
+                    200,
+                    json=mistral_response(
+                        json.dumps(
+                            {"narrations": {"takeL_1": "Le philosophe 1 prend la fourchette."}}
+                        )
+                    ),
+                )
+            ),
+        )
+        provider.narrate(model=PHILOSOPHES3_MODEL, transitions=("takeL_1",))
+        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+        app = create_app(
+            settings=settings,
+            store=ModelStore(),
+            run_store=RunStore(),
+            runner=None,
+            llm_provider=provider,
+        )
+        client = httpx.Client(transport=httpx.WSGITransport(app=app), base_url="http://testserver")
+        response = client.get("/v1/llm/usage", headers=AUTH_HEADERS)
+        assert response.status_code == 200
+        llm = response.json()["llm"]
+        assert llm["provider"] == "mistral"
+        assert llm["routing"]["narration"] == "ministral-14b-2512"
+        assert llm["routing"]["reading"] == "mistral-small-2603"
+        assert llm["by_usage_model"] == {
+            "narration|ministral-14b-2512": {"calls": 1, "total_tokens": 42}
+        }
+
     def test_llm_usage_without_provider_is_503(self) -> None:
         settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
         app = create_app(settings=settings, store=ModelStore(), run_store=RunStore(), runner=None)
