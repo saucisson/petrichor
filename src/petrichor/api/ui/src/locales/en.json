@@ -68,7 +68,8 @@
       "edition": "Edition",
       "source": "Source",
       "size": "Size"
-    }
+    },
+    "sessionCreateFailed": "Session creation failed: the server returned an empty session id."
   },
   "questions": {
     "title": "Static questions",
@@ -104,7 +105,9 @@
     "fusionError": "Fusion refused by the API ({{status}}): {{detail}}",
     "convergencesTitle": "Arbitrated fusions (human only)",
     "convergencesEmpty": "No arbitrated fusion for this session.",
-    "convergenceLine": "{{questionId}} → covered by {{propositionId}}"
+    "convergenceLine": "{{questionId}} → covered by {{propositionId}}",
+    "loading": "Loading questions…",
+    "empty": "No questions for this session."
   },
   "verifications": {
     "title": "MC checks",
@@ -117,7 +120,9 @@
     "witnessAcyclic": " — acyclic",
     "marking": "marking: {{marking}}",
     "fired": "fires: {{transition}}",
-    "narrationProvenance": "(provenance: {{provenance}})"
+    "narrationProvenance": "(provenance: {{provenance}})",
+    "loading": "Loading verifications…",
+    "empty": "No runs for this session."
   },
   "synthese": {
     "title": "Summary",
@@ -139,6 +144,8 @@
         "replay": "Replay the witness step by step",
         "closeReplay": "Close the witness"
       }
-    }
+    },
+    "loading": "Loading contract…",
+    "journalEmpty": "No entries in the arbitration journal."
   }
 }

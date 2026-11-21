@@ -126,7 +126,9 @@ describe("amorçage catalog panel (issue #166)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Rechercher" }));
     await waitFor(() => expect(screen.getByText("2 modèle(s) dans le catalogue.")).toBeInTheDocument());
     const searchCall = calls.find((call) => call.url.startsWith("/v1/catalog/models"));
-    expect(searchCall?.url).toContain("q=philosophes");
+    // P76: the backend contract reads `search`, never `q`.
+    expect(searchCall?.url).toContain("search=philosophes");
+    expect(searchCall?.url).not.toContain("q=philosophes");
     // Facet select triggers a new search with the facet parameter.
     fireEvent.change(screen.getByLabelText("Formalisme"), { target: { value: "PT" } });
     await waitFor(() => {

@@ -68,7 +68,8 @@
       "edition": "Édition",
       "source": "Source",
       "size": "Taille"
-    }
+    },
+    "sessionCreateFailed": "Échec de la création de session : identifiant de session vide reçu du serveur."
   },
   "questions": {
     "title": "Questions statiques",
@@ -104,7 +105,9 @@
     "fusionError": "Fusion refusée par l'API ({{status}}) : {{detail}}",
     "convergencesTitle": "Fusions arbitrées (humain uniquement)",
     "convergencesEmpty": "Aucune fusion arbitrée pour cette session.",
-    "convergenceLine": "{{questionId}} → couverte par {{propositionId}}"
+    "convergenceLine": "{{questionId}} → couverte par {{propositionId}}",
+    "loading": "Chargement des questions…",
+    "empty": "Aucune question pour cette session."
   },
   "verifications": {
     "title": "Vérifications MC",
@@ -117,7 +120,9 @@
     "witnessAcyclic": " — acyclique",
     "marking": "marquage : {{marking}}",
     "fired": "tire : {{transition}}",
-    "narrationProvenance": "(provenance : {{provenance}})"
+    "narrationProvenance": "(provenance : {{provenance}})",
+    "loading": "Chargement des vérifications…",
+    "empty": "Aucun run pour cette session."
   },
   "synthese": {
     "title": "Synthèse",
@@ -139,6 +144,8 @@
         "replay": "Rejouer le témoin pas à pas",
         "closeReplay": "Fermer le témoin"
       }
-    }
+    },
+    "loading": "Chargement du contrat…",
+    "journalEmpty": "Aucune entrée dans le journal d'arbitrage."
   }
 }

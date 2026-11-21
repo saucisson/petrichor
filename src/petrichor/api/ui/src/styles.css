@@ -14,6 +14,7 @@
   --color-line: #d1d5db; /* gray-300 borders */
   --color-surface: #f9fafb; /* gray-50 panels */
   --color-error: #b91c1c; /* red-700: 5.9:1 on white */
+  --color-warning: #b45309; /* amber-700: 4.8:1 on white */
   --color-highlight: #fde68a; /* amber-200: 12.6:1 with ink text */
 
   /* Typography */
@@ -88,6 +89,11 @@
 
   .message-ok {
     @apply font-semibold text-primary;
+  }
+
+  /* P76: referenced by the COL warning and other caution messages. */
+  .message-warning {
+    @apply font-semibold text-warning;
   }
 
   #language-select {

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { ApiClient } from "../api";
+import { readProblemDetail, type ApiClient } from "../api";
 import type { Contract, ContractProof, ProofDossier } from "../types";
 import { WitnessReader } from "./Verifications";
 
@@ -86,8 +86,11 @@ interface SyntheseProps {
 export default function Synthese({ hidden, client, sessionId, reloadToken }: SyntheseProps) {
   const { t } = useTranslation();
   const [markdown, setMarkdown] = useState<string | null>(null);
-  const [markdownError, setMarkdownError] = useState<number | null>(null);
+  const [markdownError, setMarkdownError] = useState<string | null>(null);
   const [contract, setContract] = useState<Contract | null>(null);
+  // P76: loading / error are explicit states - never a silent return.
+  const [loading, setLoading] = useState(false);
+  const [journalError, setJournalError] = useState<string | null>(null);
 
   const loadContractMarkdown = useCallback(async () => {
     if (!sessionId) return;
@@ -95,7 +98,9 @@ export default function Synthese({ hidden, client, sessionId, reloadToken }: Syn
       headers: { Accept: "text/markdown" },
     });
     if (response.status !== 200) {
-      setMarkdownError(response.status);
+      // The problem detail is server-produced text: displayed verbatim.
+      setMarkdownError(await readProblemDetail(response));
+      setMarkdown(null);
       return;
     }
     setMarkdownError(null);
@@ -107,14 +112,21 @@ export default function Synthese({ hidden, client, sessionId, reloadToken }: Syn
     const response = await client.request("/v1/sessions/" + sessionId + "/contract", {
       headers: { Accept: CONTRACT_ACCEPT },
     });
-    if (response.status !== 200) return;
+    if (response.status !== 200) {
+      setJournalError(await readProblemDetail(response));
+      setContract(null);
+      return;
+    }
+    setJournalError(null);
     setContract((await response.json()) as Contract);
   }, [client, sessionId]);
 
   useEffect(() => {
     if (hidden) return;
-    void loadContractMarkdown();
-    void loadJournal();
+    setLoading(true);
+    void Promise.allSettled([loadContractMarkdown(), loadJournal()]).finally(() =>
+      setLoading(false),
+    );
   }, [hidden, loadContractMarkdown, loadJournal, reloadToken]);
 
   const downloadMarkdown = () => {
@@ -131,13 +143,26 @@ export default function Synthese({ hidden, client, sessionId, reloadToken }: Syn
     <section id="step-synthese" hidden={hidden} aria-labelledby="h-synthese">
       <h2 id="h-synthese">{t("synthese.title")}</h2>
       <p>{t("synthese.intro")}</p>
+      {loading ? (
+        <p className="message message-info" role="status">
+          {t("synthese.loading")}
+        </p>
+      ) : null}
+      {markdownError !== null ? (
+        <p className="message message-error" role="alert">
+          {markdownError}
+        </p>
+      ) : null}
+      {journalError !== null ? (
+        <p className="message message-error" role="alert">
+          {journalError}
+        </p>
+      ) : null}
       <button id="export-markdown" type="button" className="btn btn-primary" onClick={downloadMarkdown}>
         {t("synthese.export")}
       </button>
       <pre id="contract-preview" aria-live="polite">
-        {markdownError !== null
-          ? t("synthese.unavailable", { status: markdownError })
-          : (markdown ?? "")}
+        {markdownError === null ? (markdown ?? "") : ""}
       </pre>
       <h3>{t("synthese.dossiers.title")}</h3>
       {contract === null || contract.proof_dossiers === undefined || contract.proof_dossiers.length === 0 ? (
@@ -150,6 +175,9 @@ export default function Synthese({ hidden, client, sessionId, reloadToken }: Syn
         </div>
       )}
       <h3>{t("synthese.journalTitle")}</h3>
+      {!loading && journalError === null && (contract === null || contract.journal.length === 0) ? (
+        <p className="message message-info">{t("synthese.journalEmpty")}</p>
+      ) : null}
       <ul id="journal-list" aria-live="polite">
         {contract?.journal.map((entry, index) => {
           const detail =
