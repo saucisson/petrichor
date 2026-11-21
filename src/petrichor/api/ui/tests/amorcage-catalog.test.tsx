@@ -110,6 +110,20 @@ const BASE_ROUTES = [
 beforeEach(() => {
   localStorage.clear();
 });
+/* P77 wizard navigation helpers: the import paths live behind the source
+   cards (local file / remote source -> catalog or direct URL). */
+function openLocalImport() {
+  fireEvent.click(screen.getByRole("button", { name: /^Fichier local/ }));
+}
+function openCatalog() {
+  fireEvent.click(screen.getByRole("button", { name: /^Source distante/ }));
+  fireEvent.click(screen.getByRole("button", { name: /^Catalogue intégré/ }));
+}
+function openUrlImport() {
+  fireEvent.click(screen.getByRole("button", { name: /^Source distante/ }));
+  fireEvent.click(screen.getByRole("button", { name: /^URL directe/ }));
+}
+
 
 afterEach(() => {
   cleanup();
@@ -120,11 +134,12 @@ describe("amorçage catalog panel (issue #166)", () => {
   it("searches the catalog with query and facets, then imports by name with provenance confirmation", async () => {
     mockFetch(BASE_ROUTES);
     render(<App />);
+    openCatalog();
     fireEvent.change(screen.getByLabelText("Recherche dans le catalogue"), {
       target: { value: "philosophes" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Rechercher" }));
-    await waitFor(() => expect(screen.getByText("2 modèle(s) dans le catalogue.")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/2 modèle\(s\) dans le catalogue/)).toBeInTheDocument());
     const searchCall = calls.find((call) => call.url.startsWith("/v1/catalog/models"));
     // P76: the backend contract reads `search`, never `q`.
     expect(searchCall?.url).toContain("search=philosophes");
@@ -147,9 +162,66 @@ describe("amorçage catalog panel (issue #166)", () => {
     expect(JSON.parse(String(importCall?.body))).toEqual({ name: "philosophes-PT-v3" });
   });
 
+  // P77: clicking a column header emits the server `sort` parameter.
+  it("sends sort= when a column header is clicked and toggles the direction", async () => {
+    mockFetch(BASE_ROUTES);
+    render(<App />);
+    openCatalog();
+    fireEvent.click(screen.getByRole("button", { name: "Rechercher" }));
+    await waitFor(() => expect(screen.getByText(/2 modèle\(s\) dans le catalogue/)).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: /Famille/ }));
+    await waitFor(() => {
+      const last = calls.filter((call) => call.url.startsWith("/v1/catalog/models")).at(-1);
+      expect(last?.url).toContain("sort=family");
+    });
+    // The table unmounts while a fetch is in flight, so re-query the header
+    // inside each waitFor instead of holding a stale element reference.
+    await waitFor(() =>
+      expect(screen.getByRole("columnheader", { name: /Famille/ })).toHaveAttribute(
+        "aria-sort",
+        "ascending",
+      ),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Famille/ }));
+    await waitFor(() =>
+      expect(screen.getByRole("columnheader", { name: /Famille/ })).toHaveAttribute(
+        "aria-sort",
+        "descending",
+      ),
+    );
+  });
+
+  // P77: "Afficher plus" accumulates server pages client-side (offset grows).
+  it("accumulates pages with Afficher plus (offset grows, rows are kept)", async () => {
+    const page1 = { ...CATALOG_PAGE, items: [CATALOG_PAGE.items[0]], total: 2, limit: 1, offset: 0 };
+    const page2 = { ...CATALOG_PAGE, items: [CATALOG_PAGE.items[1]], total: 2, limit: 1, offset: 1 };
+    let fetched = 0;
+    mockFetch([
+      {
+        match: (call: { url: string; method: string }) =>
+          call.url.startsWith("/v1/catalog/models") && call.method === "GET",
+        respond: () => {
+          fetched += 1;
+          return jsonResponse(200, fetched === 1 ? page1 : page2);
+        },
+      },
+    ]);
+    render(<App />);
+    openCatalog();
+    fireEvent.click(screen.getByRole("button", { name: "Rechercher" }));
+    await waitFor(() => expect(screen.getByText("philosophes-COL-v3")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Afficher plus" }));
+    await waitFor(() => expect(screen.getByText("philosophes-PT-v3")).toBeInTheDocument());
+    // Both rows are still displayed after the second page loaded.
+    expect(screen.getByText("philosophes-COL-v3")).toBeInTheDocument();
+    const last = calls.filter((call) => call.url.startsWith("/v1/catalog/models")).at(-1);
+    expect(last?.url).toContain("offset=1");
+  });
+
   it("warns on COL entries and proposes the -PT- twin", async () => {
     mockFetch(BASE_ROUTES);
     render(<App />);
+    openCatalog();
     fireEvent.click(screen.getByRole("button", { name: "Rechercher" }));
     await waitFor(() => expect(screen.getByText(/réseau symétrique non déplié/)).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Importer le jumeau philosophes-PT-v3" }));
@@ -161,6 +233,7 @@ describe("amorçage catalog panel (issue #166)", () => {
   it("imports by exact catalog name from the dedicated field", async () => {
     mockFetch(BASE_ROUTES);
     render(<App />);
+    openCatalog();
     fireEvent.change(screen.getByLabelText("Nom exact dans le catalogue"), {
       target: { value: "philosophes-PT-v3" },
     });
@@ -177,6 +250,7 @@ describe("amorçage catalog panel (issue #166)", () => {
       },
     ]);
     render(<App />);
+    openCatalog();
     fireEvent.click(screen.getByRole("button", { name: "Rechercher" }));
     await waitFor(() =>
       expect(screen.getByRole("alert")).toHaveTextContent("catalog index not ready"),
@@ -192,6 +266,7 @@ describe("amorçage catalog panel (issue #166)", () => {
       },
     ]);
     render(<App />);
+    openCatalog();
     fireEvent.change(screen.getByLabelText("Nom exact dans le catalogue"), { target: { value: "nope" } });
     fireEvent.click(screen.getByRole("button", { name: "Importer depuis le catalogue" }));
     await waitFor(() =>
@@ -204,6 +279,7 @@ describe("amorçage URL import (issue #166)", () => {
   it("imports from a URL and shows the provenance", async () => {
     mockFetch(BASE_ROUTES);
     render(<App />);
+    openUrlImport();
     fireEvent.change(screen.getByLabelText(/URL du modèle ou de l'archive/), {
       target: { value: "https://example.org/m.pnml" },
     });
@@ -226,6 +302,7 @@ describe("amorçage URL import (issue #166)", () => {
       },
     ]);
     render(<App />);
+    openUrlImport();
     fireEvent.change(screen.getByLabelText(/URL du modèle ou de l'archive/), {
       target: { value: "https://evil.example/x.pnml" },
     });
@@ -273,6 +350,7 @@ describe("amorçage archive import and 409 candidate choice (issue #166)", () =>
     ]);
     render(<App />);
     const file = new File(["PK"], "models.zip", { type: "application/zip" });
+    openLocalImport();
     fireEvent.change(screen.getByLabelText("Fichier PNML"), { target: { files: [file] } });
     fireEvent.click(screen.getByRole("button", { name: "Importer le modèle et créer la session" }));
     await waitFor(() =>
@@ -308,6 +386,7 @@ describe("amorçage archive import and 409 candidate choice (issue #166)", () =>
     ]);
     render(<App />);
     const file = new File(["PK"], "models.tgz", { type: "application/gzip" });
+    openLocalImport();
     fireEvent.change(screen.getByLabelText("Fichier PNML"), { target: { files: [file] } });
     fireEvent.click(screen.getByRole("button", { name: "Importer le modèle et créer la session" }));
     await waitFor(() => expect(screen.getByText("Modèle importé : m-zip.")).toBeInTheDocument());

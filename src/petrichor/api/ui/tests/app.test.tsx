@@ -95,6 +95,12 @@ const WITNESS = {
 beforeEach(() => {
   localStorage.clear();
 });
+/* P77 wizard navigation helpers: the import paths live behind the source
+   cards (local file / remote source -> catalog or direct URL). */
+function openLocalImport() {
+  fireEvent.click(screen.getByRole("button", { name: /^Fichier local/ }));
+}
+
 
 afterEach(() => {
   cleanup();
@@ -123,6 +129,7 @@ describe("UI v2 parity with the vanilla UI", () => {
       { match: (call) => call.url === "/v1/sessions/s1/profile/arbitrate" && call.method === "POST", respond: () => jsonResponse(200, {}) },
     ]);
     render(<App />);
+    openLocalImport();
     const file = new File(["<pnml/>"], "model.pnml", { type: "application/pnml+xml" });
     fireEvent.change(screen.getByLabelText("Fichier PNML"), { target: { files: [file] } });
     fireEvent.click(screen.getByRole("button", { name: "Importer le modèle et créer la session" }));
@@ -307,6 +314,7 @@ describe("UI v3 chrome (issue #162)", () => {
       { match: (call) => call.url === "/v1/sessions/s1/profile", respond: () => jsonResponse(200, PROFILE) },
     ]);
     render(<App />);
+    openLocalImport();
     const file = new File(["<pnml/>"], "model.pnml", { type: "application/pnml+xml" });
     fireEvent.change(screen.getByLabelText("Fichier PNML"), { target: { files: [file] } });
     fireEvent.click(screen.getByRole("button", { name: "Importer le modèle et créer la session" }));

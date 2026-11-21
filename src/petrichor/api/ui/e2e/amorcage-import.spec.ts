@@ -99,6 +99,9 @@ test.describe("amorçage — trois voies d'import (issue #166)", () => {
   test("import par nom depuis le catalogue, avec avertissement COL et jumeau -PT-", async ({ page }) => {
     await mockApi(page);
     await page.goto("/");
+    // P77 wizard: Source distante -> Catalogue intégré.
+    await page.getByRole("button", { name: "Source distante" }).click();
+    await page.getByRole("button", { name: "Catalogue intégré" }).click();
     await page.locator("#catalog-search-button").click();
     await expect(page.locator(".catalog-entry").first()).toBeVisible();
     // L'entrée COL affiche l'avertissement "symmetric non déplié" et le jumeau -PT-.
@@ -116,6 +119,8 @@ test.describe("amorçage — trois voies d'import (issue #166)", () => {
   test("import par URL avec provenance affichée", async ({ page }) => {
     await mockApi(page);
     await page.goto("/");
+    await page.getByRole("button", { name: "Source distante" }).click();
+    await page.getByRole("button", { name: "URL directe" }).click();
     await page.locator("#import-url").fill("https://example.org/m.pnml");
     await page.locator("#import-url-button").click();
     await expect(page.locator("#profile")).toContainText("Modèle importé : m-url.");
@@ -146,6 +151,7 @@ test.describe("amorçage — trois voies d'import (issue #166)", () => {
       },
     });
     await page.goto("/");
+    await page.getByRole("button", { name: "Fichier local" }).click();
     await page.locator("#pnml-file").setInputFiles({
       name: "models.zip",
       mimeType: "application/zip",

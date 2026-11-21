@@ -4,7 +4,7 @@ import type { ApiClient } from "../api";
 import type {
   CandidateList,
   CatalogEntry,
-  CatalogPage,
+  CatalogFacets,
   ImportedModel,
   ModelProvenance,
   Profile,
@@ -15,6 +15,28 @@ const ACCEPTED_EXTENSIONS = [".pnml", ".xml", ".zip", ".tgz", ".tar.gz", ".tar"]
 
 const FACET_KEYS = ["family", "formalism", "edition", "source", "size"] as const;
 type FacetKey = (typeof FACET_KEYS)[number];
+
+/* Grid columns in display order (mission §2.1). Server-side sortable columns
+   are the backend contract's sort keys: name|family|edition|size. */
+const COLUMNS: { key: string; sortKey?: SortKey }[] = [
+  { key: "name", sortKey: "name" },
+  { key: "family", sortKey: "family" },
+  { key: "formalism" },
+  { key: "edition", sortKey: "edition" },
+  { key: "source" },
+  { key: "size", sortKey: "size" },
+  { key: "action" },
+];
+type SortKey = "name" | "family" | "edition" | "size";
+type SortDir = "asc" | "desc";
+
+/* Facet columns rendered as selects served by page.facets (mission §2.1);
+   the others stay free-text inputs whose value is sent as the facet param. */
+const SELECT_FACETS: ReadonlySet<FacetKey> = new Set(["family", "edition"]);
+
+const PAGE_SIZE = 50;
+
+type WizardScreen = "source" | "local" | "distant" | "catalog" | "url";
 
 /* Human-readable size with a translated unit (chrome string, issue #163):
    fr unit "o" -> "o"/"Ko"/"Mo", en unit "B" -> "B"/"KB"/"MB". */
@@ -50,11 +72,12 @@ interface AmorcageProps {
   resumeError: string | null;
 }
 
-/* Step 1 - import the PNML model (file, catalog name or URL), create the
-   session, arbitrate the proposed semantic profile. Server state is the
-   source of truth: the profile view is rebuilt from GET /profile after every
-   arbitration. Server-produced values (entry ids, roles, confidences, error
-   messages) are rendered verbatim and never translated (spec §9 v1.3). */
+/* Step 1 - import wizard (P77): source choice, then local file / remote
+   catalog grid / direct URL. The import itself is unchanged (same /v1
+   routes), the session is created server-side and the proposed semantic
+   profile is arbitrated. Server state is the source of truth: server-produced
+   values (entry ids, roles, confidences, error messages) are rendered
+   verbatim and never translated (spec §9 v1.3). */
 export default function Amorcage({
   hidden,
   client,
@@ -76,7 +99,11 @@ export default function Amorcage({
     provenance: ModelProvenance | null;
   } | null>(null);
 
-  // P71 (issue #166, spec §21): catalog search panel state.
+  // P77: wizard navigation.
+  const [screen, setScreen] = useState<WizardScreen>("source");
+
+  // P77: catalog data grid state. Items accumulate client-side across server
+  // pages ("Afficher plus"); a new search/facet/sort resets the accumulation.
   const [catalogQuery, setCatalogQuery] = useState("");
   const [catalogFacets, setCatalogFacets] = useState<Record<FacetKey, string>>({
     family: "",
@@ -85,7 +112,11 @@ export default function Amorcage({
     source: "",
     size: "",
   });
-  const [catalogPage, setCatalogPage] = useState<CatalogPage | null>(null);
+  const [sortKey, setSortKey] = useState<SortKey>("name");
+  const [sortDir, setSortDir] = useState<SortDir>("asc");
+  const [items, setItems] = useState<CatalogEntry[]>([]);
+  const [total, setTotal] = useState(0);
+  const [facets, setFacets] = useState<CatalogFacets | null>(null);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogSearched, setCatalogSearched] = useState(false);
   const [catalogName, setCatalogName] = useState("");
@@ -114,14 +145,24 @@ export default function Amorcage({
   const hasAcceptedExtension = (file: File): boolean =>
     ACCEPTED_EXTENSIONS.some((extension) => file.name.toLowerCase().endsWith(extension));
 
-  const searchCatalog = useCallback(
-    async (overrides: Partial<Record<FacetKey, string>> = {}, query?: string) => {
+  /* One server page of the catalog. `replace` resets the client-side
+     accumulation (new search/facet/sort); otherwise the page is appended. */
+  const fetchCatalogPage = useCallback(
+    async (
+      offset: number,
+      replace: boolean,
+      overrides: { facets?: Record<FacetKey, string>; query?: string; sort?: SortKey },
+    ) => {
       setCatalogLoading(true);
       setError(null);
       try {
-        const params: Record<string, string> = {};
-        const merged = { ...catalogFacets, ...overrides };
-        const effectiveQuery = query ?? catalogQuery;
+        const params: Record<string, string> = {
+          sort: overrides.sort ?? sortKey,
+          limit: String(PAGE_SIZE),
+          offset: String(offset),
+        };
+        const merged = { ...catalogFacets, ...(overrides.facets ?? {}) };
+        const effectiveQuery = overrides.query ?? catalogQuery;
         // P76: the backend contract reads `search`, never `q`.
         if (effectiveQuery.trim() !== "") params.search = effectiveQuery.trim();
         for (const key of FACET_KEYS) {
@@ -129,20 +170,46 @@ export default function Amorcage({
         }
         const result = await client.searchCatalog(params);
         if (result.status !== 200 || result.page === undefined) {
-          setCatalogPage(null);
+          setItems([]);
+          setTotal(0);
+          setFacets(null);
           setError(
             result.detail ?? t("amorcage.catalogUnavailable", { status: result.status }),
           );
           return;
         }
-        setCatalogPage(result.page);
+        const page = result.page;
+        setItems((previous) => (replace ? page.items : [...previous, ...page.items]));
+        setTotal(page.total);
+        setFacets(page.facets);
         setCatalogSearched(true);
       } finally {
         setCatalogLoading(false);
       }
     },
-    [client, catalogFacets, catalogQuery, t],
+    [client, catalogFacets, catalogQuery, sortKey, t],
   );
+
+  const searchCatalog = useCallback(
+    (overrides: { facets?: Record<FacetKey, string>; query?: string; sort?: SortKey } = {}) =>
+      void fetchCatalogPage(0, true, overrides),
+    [fetchCatalogPage],
+  );
+
+  const showMore = useCallback(() => {
+    void fetchCatalogPage(items.length, false, {});
+  }, [fetchCatalogPage, items.length]);
+
+  /* Column header click: toggle asc/desc on the same key, or select a new key
+     ascending. The server `sort` param carries the key; a descending display
+     only reverses the already-fetched rows client-side (presentation only,
+     no server data is hidden). */
+  const toggleSort = (key: SortKey) => {
+    const nextDir: SortDir = sortKey === key && sortDir === "asc" ? "desc" : "asc";
+    setSortKey(key);
+    setSortDir(nextDir);
+    void fetchCatalogPage(0, true, { sort: key });
+  };
 
   /* Shared tail of every import path: record the confirmation (model id +
      provenance) and create the session. P68 flow unchanged. */
@@ -272,194 +339,342 @@ export default function Amorcage({
       sha256: provenance.sha256 ?? provenance.archive_sha256 ?? "—",
     });
 
+  const goBack = () => {
+    if (screen === "catalog" || screen === "url") setScreen("distant");
+    else if (screen === "local" || screen === "distant") setScreen("source");
+  };
+
+  const breadcrumb = () => {
+    if (screen === "local") return t("amorcage.wizard.crumbLocal");
+    if (screen === "distant") return t("amorcage.wizard.crumbDistant");
+    if (screen === "catalog")
+      return `${t("amorcage.wizard.crumbDistant")} ⟩ ${t("amorcage.wizard.crumbCatalog")}`;
+    if (screen === "url")
+      return `${t("amorcage.wizard.crumbDistant")} ⟩ ${t("amorcage.wizard.crumbUrl")}`;
+    return null;
+  };
+
+  const displayedItems = sortDir === "desc" ? [...items].reverse() : items;
+
+  const sortIndicator = (key: SortKey) => (sortKey === key ? (sortDir === "asc" ? "▲" : "▼") : "");
+
   return (
     <section id="step-amorcage" hidden={hidden} aria-labelledby="h-amorcage">
       <h2 id="h-amorcage">{t("amorcage.title")}</h2>
       <p>{t("amorcage.intro")}</p>
 
-      <details className="catalog-panel" id="catalog-panel">
-        <summary>{t("amorcage.catalogTitle")}</summary>
-        <p>{t("amorcage.catalogIntro")}</p>
-        <div className="catalog-search">
-          <label htmlFor="catalog-search">{t("amorcage.catalogSearchLabel")}</label>
-          <input
-            id="catalog-search"
-            type="search"
-            value={catalogQuery}
-            onChange={(event) => setCatalogQuery(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") void searchCatalog();
-            }}
-          />
+      {screen !== "source" ? (
+        <div className="wizard-nav">
+          <button type="button" className="btn" onClick={goBack}>
+            {t("amorcage.wizard.back")}
+          </button>
+          <p className="breadcrumb" aria-label={t("amorcage.wizard.breadcrumbAria")}>
+            {breadcrumb()}
+          </p>
+        </div>
+      ) : null}
+
+      {screen === "source" ? (
+        <div className="wizard-cards">
           <button
-            id="catalog-search-button"
             type="button"
-            className="btn"
-            disabled={catalogLoading}
-            onClick={() => void searchCatalog()}
+            className="wizard-card"
+            onClick={() => setScreen("local")}
           >
-            {t("amorcage.catalogSearchButton")}
+            <strong>{t("amorcage.wizard.localCard")}</strong>
+            <span>{t("amorcage.wizard.localCardHint", { extensions: ACCEPTED_EXTENSIONS.join(", ") })}</span>
+          </button>
+          <button
+            type="button"
+            className="wizard-card"
+            onClick={() => setScreen("distant")}
+          >
+            <strong>{t("amorcage.wizard.distantCard")}</strong>
+            <span>{t("amorcage.wizard.distantCardHint")}</span>
           </button>
         </div>
-        {catalogPage !== null ? (
-          <div className="catalog-facets">
-            {FACET_KEYS.map((key) => (
-              <label key={key} htmlFor={`facet-${key}`}>
-                {t(`amorcage.facet.${key}`)}
-                <select
-                  id={`facet-${key}`}
-                  value={catalogFacets[key]}
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    setCatalogFacets((previous) => ({ ...previous, [key]: value }));
-                    void searchCatalog({ [key]: value });
-                  }}
-                >
-                  <option value="">{t("amorcage.facetAll")}</option>
-                  {Object.entries(catalogPage.facets[key]).map(([value, count]) => (
-                    <option key={value} value={value}>
-                      {value} ({count})
-                    </option>
-                  ))}
-                </select>
-              </label>
-            ))}
-          </div>
-        ) : null}
-        {catalogLoading ? (
-          <p className="message message-info" role="status">
-            {t("amorcage.catalogLoading")}
+      ) : null}
+
+      {screen === "distant" ? (
+        <div className="wizard-cards">
+          <button
+            type="button"
+            className="wizard-card"
+            onClick={() => setScreen("catalog")}
+          >
+            <strong>{t("amorcage.wizard.catalogCard")}</strong>
+            <span>{t("amorcage.wizard.catalogCardHint")}</span>
+          </button>
+          <button
+            type="button"
+            className="wizard-card"
+            onClick={() => setScreen("url")}
+          >
+            <strong>{t("amorcage.wizard.urlCard")}</strong>
+            <span>{t("amorcage.wizard.urlCardHint")}</span>
+          </button>
+        </div>
+      ) : null}
+
+      {screen === "local" ? (
+        <div
+          className="import-zone"
+          onDragOver={(event) => event.preventDefault()}
+          onDrop={(event) => {
+            event.preventDefault();
+            const file = event.dataTransfer.files[0];
+            if (file !== undefined) setSelectedFile(file);
+          }}
+        >
+          <label htmlFor="pnml-file" className="import-zone-label">
+            {t("amorcage.dropZone")}
+          </label>
+          <p className="message message-info">
+            {t("amorcage.wizard.extensionsHint", { extensions: ACCEPTED_EXTENSIONS.join(", ") })}
           </p>
-        ) : null}
-        {catalogSearched && catalogPage !== null ? (
-          catalogPage.items.length === 0 ? (
-            <p className="message message-info">{t("amorcage.catalogEmpty")}</p>
-          ) : (
-            <>
-              <p className="message message-info" role="status">
-                {t("amorcage.catalogTotal", { count: catalogPage.total })}
-              </p>
-              <ul className="catalog-results">
-                {catalogPage.items.map((entry: CatalogEntry) => (
-                  <li key={entry.name} className="catalog-entry">
-                    <span>
-                      {entry.name} — {entry.family} / {entry.formalism ?? "—"} /{" "}
-                      {entry.edition ?? "—"} / {entry.source}
-                    </span>
-                    {entry.formalism === "COL" ? (
-                      <p className="message message-warning" role="note">
-                        {t("amorcage.colWarning")}{" "}
-                        <button
-                          type="button"
-                          className="btn"
-                          disabled={importing}
-                          onClick={() => importFromCatalogName(entry.name.replace("-COL-", "-PT-"))}
-                        >
-                          {t("amorcage.ptTwin", {
-                            name: entry.name.replace("-COL-", "-PT-"),
-                          })}
-                        </button>
-                      </p>
-                    ) : null}
-                    <button
-                      type="button"
-                      className="btn btn-primary"
-                      disabled={importing}
-                      onClick={() => importFromCatalogName(entry.name)}
-                    >
-                      {t("amorcage.catalogImport")}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </>
-          )
-        ) : null}
-        <div className="catalog-by-name">
-          <label htmlFor="catalog-name">{t("amorcage.importByNameLabel")}</label>
           <input
-            id="catalog-name"
-            type="text"
-            value={catalogName}
-            onChange={(event) => setCatalogName(event.target.value)}
+            id="pnml-file"
+            type="file"
+            accept={ACCEPTED_EXTENSIONS.join(",")}
+            aria-label={t("amorcage.fileAria")}
+            className="text-sm"
+            onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
+          />
+          {selectedFile !== null ? (
+            <p className="import-file-info">
+              {t("amorcage.fileSelected", {
+                name: selectedFile.name,
+                size: formatSize(selectedFile.size, t("amorcage.sizeUnit")),
+              })}
+            </p>
+          ) : null}
+          <button
+            id="import-model"
+            type="button"
+            className="btn btn-primary"
+            disabled={importing}
+            onClick={() => {
+              const input = document.getElementById("pnml-file") as HTMLInputElement | null;
+              const file = selectedFile ?? input?.files?.[0];
+              if (!file) {
+                setError(t("amorcage.noFile"));
+                return;
+              }
+              importFile(file);
+            }}
+          >
+            {t("amorcage.import")}
+          </button>
+        </div>
+      ) : null}
+
+      {screen === "url" ? (
+        <div className="url-import">
+          <label htmlFor="import-url">{t("amorcage.importByUrlLabel")}</label>
+          <input
+            id="import-url"
+            type="url"
+            value={importUrl}
+            onChange={(event) => setImportUrl(event.target.value)}
           />
           <button
-            id="catalog-name-button"
+            id="import-url-button"
             type="button"
             className="btn"
             disabled={importing}
-            onClick={() => importFromCatalogName(catalogName)}
+            onClick={() => importFromUrlValue(importUrl)}
           >
-            {t("amorcage.importByNameButton")}
+            {t("amorcage.importByUrlButton")}
           </button>
         </div>
-      </details>
+      ) : null}
 
-      <div className="url-import">
-        <label htmlFor="import-url">{t("amorcage.importByUrlLabel")}</label>
-        <input
-          id="import-url"
-          type="url"
-          value={importUrl}
-          onChange={(event) => setImportUrl(event.target.value)}
-        />
-        <button
-          id="import-url-button"
-          type="button"
-          className="btn"
-          disabled={importing}
-          onClick={() => importFromUrlValue(importUrl)}
-        >
-          {t("amorcage.importByUrlButton")}
-        </button>
-      </div>
-
-      <div
-        className="import-zone"
-        onDragOver={(event) => event.preventDefault()}
-        onDrop={(event) => {
-          event.preventDefault();
-          const file = event.dataTransfer.files[0];
-          if (file !== undefined) setSelectedFile(file);
-        }}
-      >
-        <label htmlFor="pnml-file" className="import-zone-label">
-          {t("amorcage.dropZone")}
-        </label>
-        <input
-          id="pnml-file"
-          type="file"
-          accept={ACCEPTED_EXTENSIONS.join(",")}
-          aria-label={t("amorcage.fileAria")}
-          className="text-sm"
-          onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)}
-        />
-        {selectedFile !== null ? (
-          <p className="import-file-info">
-            {t("amorcage.fileSelected", {
-              name: selectedFile.name,
-              size: formatSize(selectedFile.size, t("amorcage.sizeUnit")),
-            })}
-          </p>
-        ) : null}
-        <button
-          id="import-model"
-          type="button"
-          className="btn btn-primary"
-          disabled={importing}
-          onClick={() => {
-            const input = document.getElementById("pnml-file") as HTMLInputElement | null;
-            const file = selectedFile ?? input?.files?.[0];
-            if (!file) {
-              setError(t("amorcage.noFile"));
-              return;
-            }
-            importFile(file);
-          }}
-        >
-          {t("amorcage.import")}
-        </button>
-      </div>
+      {screen === "catalog" ? (
+        <div className="catalog-panel" id="catalog-panel">
+          <h3>{t("amorcage.catalogTitle")}</h3>
+          <p>{t("amorcage.catalogIntro")}</p>
+          <div className="catalog-search">
+            <label htmlFor="catalog-search">{t("amorcage.catalogSearchLabel")}</label>
+            <input
+              id="catalog-search"
+              type="search"
+              value={catalogQuery}
+              onChange={(event) => setCatalogQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") void searchCatalog();
+              }}
+            />
+            <button
+              id="catalog-search-button"
+              type="button"
+              className="btn"
+              disabled={catalogLoading}
+              onClick={() => void searchCatalog()}
+            >
+              {t("amorcage.catalogSearchButton")}
+            </button>
+          </div>
+          {catalogLoading ? (
+            <p className="message message-info" role="status">
+              {t("amorcage.catalogLoading")}
+            </p>
+          ) : null}
+          {catalogSearched && !catalogLoading ? (
+            items.length === 0 ? (
+              <p className="message message-info">{t("amorcage.catalogEmpty")}</p>
+            ) : (
+              <>
+                <p className="message message-info" role="status">
+                  {t("amorcage.catalogTotal", { count: total })}{" "}
+                  {t("amorcage.shownCount", { shown: items.length, total })}
+                </p>
+                <table className="catalog-table">
+                  <thead>
+                    <tr>
+                      {COLUMNS.map((column) => (
+                        <th
+                          key={column.key}
+                          aria-sort={
+                            column.sortKey !== undefined && sortKey === column.sortKey
+                              ? sortDir === "asc"
+                                ? "ascending"
+                                : "descending"
+                              : "none"
+                          }
+                        >
+                          {column.sortKey !== undefined ? (
+                            <button
+                              type="button"
+                              className="btn catalog-sort"
+                              onClick={() => toggleSort(column.sortKey as SortKey)}
+                            >
+                              {t(`amorcage.col.${column.key}`)} {sortIndicator(column.sortKey)}
+                            </button>
+                          ) : (
+                            t(`amorcage.col.${column.key}`)
+                          )}
+                        </th>
+                      ))}
+                    </tr>
+                    <tr className="catalog-filters">
+                      {COLUMNS.map((column) => {
+                        const facetKey = column.key as FacetKey;
+                        if (column.key === "name" || column.key === "action") {
+                          return <td key={column.key} />;
+                        }
+                        return (
+                          <td key={column.key}>
+                            <label htmlFor={`facet-${facetKey}`} className="sr-only">
+                              {t(`amorcage.facet.${facetKey}`)}
+                            </label>
+                            {SELECT_FACETS.has(facetKey) ? (
+                              <select
+                                id={`facet-${facetKey}`}
+                                value={catalogFacets[facetKey]}
+                                onChange={(event) => {
+                                  const value = event.target.value;
+                                  setCatalogFacets((previous) => ({ ...previous, [facetKey]: value }));
+                                  void searchCatalog({ facets: { ...catalogFacets, [facetKey]: value } });
+                                }}
+                              >
+                                <option value="">{t("amorcage.facetAll")}</option>
+                                {Object.entries(facets?.[facetKey] ?? {}).map(([value, count]) => (
+                                  <option key={value} value={value}>
+                                    {value} ({count})
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              <input
+                                id={`facet-${facetKey}`}
+                                type="text"
+                                value={catalogFacets[facetKey]}
+                                onChange={(event) => {
+                                  const value = event.target.value;
+                                  setCatalogFacets((previous) => ({ ...previous, [facetKey]: value }));
+                                  void searchCatalog({ facets: { ...catalogFacets, [facetKey]: value } });
+                                }}
+                              />
+                            )}
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {displayedItems.map((entry: CatalogEntry) => (
+                      <tr key={entry.name} className="catalog-entry">
+                        <td>{entry.name}</td>
+                        <td>{entry.family}</td>
+                        <td>{entry.formalism ?? "—"}</td>
+                        <td>{entry.edition ?? "—"}</td>
+                        <td>{entry.source}</td>
+                        <td>{entry.size_bucket ?? "—"}</td>
+                        <td>
+                          {entry.formalism === "COL" ? (
+                            <p className="message message-warning" role="note">
+                              {t("amorcage.colWarning")}{" "}
+                              <button
+                                type="button"
+                                className="btn"
+                                disabled={importing}
+                                onClick={() =>
+                                  importFromCatalogName(entry.name.replace("-COL-", "-PT-"))
+                                }
+                              >
+                                {t("amorcage.ptTwin", {
+                                  name: entry.name.replace("-COL-", "-PT-"),
+                                })}
+                              </button>
+                            </p>
+                          ) : null}
+                          <button
+                            type="button"
+                            className="btn btn-primary"
+                            disabled={importing}
+                            onClick={() => importFromCatalogName(entry.name)}
+                          >
+                            {t("amorcage.catalogImport")}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {items.length < total ? (
+                  <button
+                    type="button"
+                    className="btn"
+                    id="catalog-show-more"
+                    disabled={catalogLoading}
+                    onClick={showMore}
+                  >
+                    {t("amorcage.showMore")}
+                  </button>
+                ) : null}
+              </>
+            )
+          ) : null}
+          <div className="catalog-by-name">
+            <label htmlFor="catalog-name">{t("amorcage.importByNameLabel")}</label>
+            <input
+              id="catalog-name"
+              type="text"
+              value={catalogName}
+              onChange={(event) => setCatalogName(event.target.value)}
+            />
+            <button
+              id="catalog-name-button"
+              type="button"
+              className="btn"
+              disabled={importing}
+              onClick={() => importFromCatalogName(catalogName)}
+            >
+              {t("amorcage.importByNameButton")}
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {candidates !== null ? (
         <fieldset className="candidate-chooser" id="candidate-chooser">
