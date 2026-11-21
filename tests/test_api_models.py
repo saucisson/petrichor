@@ -344,6 +344,8 @@ class TestCompositionRoot:
 
     def test_main_builds_and_serves_until_stopped(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("PETRICHOR_API_KEY", TEST_API_KEY)
+        monkeypatch.setenv("AUTH_ISSUER", "https://auth.test")
+        monkeypatch.setenv("AUTH_CLIENT_ID", "petrichor-test")
         monkeypatch.setattr(WSGIServer, "serve_forever", lambda self: self.server_close())
         main()
 
@@ -372,6 +374,8 @@ class TestCompositionRoot:
         monkeypatch.setenv("PETRICHOR_API_KEY", TEST_API_KEY)
         monkeypatch.setenv("PETRICHOR_HOST", "127.0.0.2")
         monkeypatch.setenv("PETRICHOR_PORT", "9998")
+        monkeypatch.setenv("AUTH_ISSUER", "https://auth.test")
+        monkeypatch.setenv("AUTH_CLIENT_ID", "petrichor-test")
         captured: dict[str, object] = {}
 
         def fake_serve_forever(self: WSGIServer) -> None:

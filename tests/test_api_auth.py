@@ -1,0 +1,210 @@
+"""Tests of the API authentication middleware (PT-2, issue #183).
+
+The middleware accepts a valid ``Authorization: Bearer`` JWT (validated by a
+stubbed PT-1 verifier — no network) alongside the legacy ``X-API-Key``; any
+other request gets a uniform 401 problem response and a structured
+``api_request_unauthorized`` log with the exact reason (ADR-0005).
+"""
+
+import httpx
+import pytest
+import structlog.testing
+from pydantic import SecretStr
+
+from petrichor.api import create_app
+from petrichor.api.auth import (
+    ENVIRON_AUTH_CLAIMS,
+    REASON_INVALID_BEARER,
+    REASON_MISSING_CREDENTIALS,
+    auth_claims_from_environ,
+    authenticate_request,
+)
+from petrichor.api.settings import ApiSettings
+from petrichor.auth import AuthSettings, TokenClaims, TokenRejectedError, TokenVerifier
+from petrichor.llm.provider import DeterministicMockProvider
+from petrichor.main import ConfigurationError, build_token_verifier
+from petrichor.model_store import ModelStore
+from petrichor.run_store import RunStore
+
+TEST_API_KEY = "test-key"
+ISSUER = "https://auth.test"
+CLIENT_ID = "petrichor-test"
+
+VALID_CLAIMS = TokenClaims(sub="user-1", iss=ISSUER, aud=[CLIENT_ID], exp=4_000_000_000)
+
+
+class StubVerifier(TokenVerifier):
+    """A PT-1 verifier stub: no HTTP, a scripted outcome per instance."""
+
+    def __init__(
+        self, *, settings: AuthSettings, outcome: TokenClaims | TokenRejectedError
+    ) -> None:
+        super().__init__(
+            settings=settings,
+            http_client=httpx.Client(
+                transport=httpx.MockTransport(lambda request: httpx.Response(200))
+            ),
+        )
+        self._outcome = outcome
+
+    def verify_access_token(self, *, token: str) -> TokenClaims:
+        if isinstance(self._outcome, TokenRejectedError):
+            raise self._outcome
+        return self._outcome
+
+
+def make_settings(**overrides: str) -> AuthSettings:
+    env = {"AUTH_ISSUER": ISSUER, "AUTH_CLIENT_ID": CLIENT_ID, **overrides}
+    return AuthSettings.model_validate(env)
+
+
+PROBE_PATH = "/v1/llm/usage"
+"""A GET route that answers 200 with the mock provider, used to probe the auth gate."""
+
+
+def make_app(verifier: TokenVerifier | None) -> httpx.Client:
+    settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+    app = create_app(
+        settings=settings,
+        store=ModelStore(),
+        run_store=RunStore(),
+        runner=None,
+        llm_provider=DeterministicMockProvider(),
+        token_verifier=verifier,
+    )
+    return httpx.Client(transport=httpx.WSGITransport(app=app), base_url="http://testserver")
+
+
+@pytest.fixture()
+def accepting_verifier() -> StubVerifier:
+    return StubVerifier(settings=make_settings(), outcome=VALID_CLAIMS)
+
+
+@pytest.fixture()
+def rejecting_verifier() -> StubVerifier:
+    return StubVerifier(settings=make_settings(), outcome=TokenRejectedError(reason="expired"))
+
+
+class TestBearerAuthentication:
+    def test_valid_bearer_token_grants_access(self, accepting_verifier: StubVerifier) -> None:
+        client = make_app(accepting_verifier)
+        response = client.get(PROBE_PATH, headers={"Authorization": "Bearer good-token"})
+        assert response.status_code == 200
+
+    def test_invalid_bearer_token_returns_401_with_the_exact_reason_logged(
+        self, rejecting_verifier: StubVerifier
+    ) -> None:
+        client = make_app(rejecting_verifier)
+        with structlog.testing.capture_logs() as logs:
+            response = client.get(PROBE_PATH, headers={"Authorization": "Bearer bad-token"})
+        assert response.status_code == 401
+        assert response.json()["extensions"]["reason"] == REASON_INVALID_BEARER
+        unauthorized = [event for event in logs if event["event"] == "api_request_unauthorized"]
+        assert len(unauthorized) == 1
+        assert unauthorized[0]["reason"] == "expired"
+
+    def test_unsupported_authorization_scheme_is_rejected(
+        self, accepting_verifier: StubVerifier
+    ) -> None:
+        client = make_app(accepting_verifier)
+        response = client.get(PROBE_PATH, headers={"Authorization": "Basic dXNlcg=="})
+        assert response.status_code == 401
+        assert response.json()["extensions"]["reason"] == REASON_INVALID_BEARER
+
+    def test_bearer_without_a_wired_verifier_is_rejected(self) -> None:
+        client = make_app(None)
+        response = client.get(PROBE_PATH, headers={"Authorization": "Bearer any-token"})
+        assert response.status_code == 401
+
+
+class TestLegacyApiKey:
+    def test_legacy_api_key_still_passes_the_same_middleware(
+        self, accepting_verifier: StubVerifier
+    ) -> None:
+        client = make_app(accepting_verifier)
+        response = client.get(PROBE_PATH, headers={"X-API-Key": TEST_API_KEY})
+        assert response.status_code == 200
+
+    def test_missing_credentials_return_the_uniform_401(
+        self, accepting_verifier: StubVerifier
+    ) -> None:
+        client = make_app(accepting_verifier)
+        response = client.get(PROBE_PATH)
+        assert response.status_code == 401
+        assert response.json()["extensions"]["reason"] == REASON_MISSING_CREDENTIALS
+
+    def test_wrong_api_key_returns_401(self, accepting_verifier: StubVerifier) -> None:
+        client = make_app(accepting_verifier)
+        response = client.get(PROBE_PATH, headers={"X-API-Key": "wrong"})
+        assert response.status_code == 401
+
+
+class TestDisabledMode:
+    def test_auth_disabled_lets_requests_through_without_credentials(self) -> None:
+        verifier = StubVerifier(
+            settings=make_settings(AUTH_DISABLED="1"),
+            outcome=TokenRejectedError(reason="auth_disabled"),
+        )
+        assert verifier.enabled is False
+        client = make_app(verifier)
+        response = client.get(PROBE_PATH)
+        assert response.status_code == 200
+
+
+class TestIdentityExposure:
+    def test_valid_bearer_claims_are_exposed_to_handlers(
+        self, accepting_verifier: StubVerifier
+    ) -> None:
+        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+        environ: dict[str, object] = {"HTTP_AUTHORIZATION": "Bearer good-token"}
+        decision = authenticate_request(
+            environ=environ,
+            settings=settings,
+            token_verifier=accepting_verifier,  # type: ignore[arg-type]
+        )
+        assert decision.allowed
+        assert decision.claims == VALID_CLAIMS
+        environ[ENVIRON_AUTH_CLAIMS] = decision.claims
+        assert auth_claims_from_environ(environ) == VALID_CLAIMS  # type: ignore[arg-type]
+
+    def test_legacy_key_carries_no_identity(self) -> None:
+        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+        environ: dict[str, object] = {"HTTP_X_API_KEY": TEST_API_KEY}
+        decision = authenticate_request(
+            environ=environ,
+            settings=settings,
+            token_verifier=None,  # type: ignore[arg-type]
+        )
+        assert decision.allowed
+        assert decision.claims is None
+        assert auth_claims_from_environ(environ) is None  # type: ignore[arg-type]
+
+
+class TestL3Guard:
+    def test_auth_disabled_in_production_is_a_fatal_configuration_error(self) -> None:
+        with pytest.raises(ConfigurationError, match="AUTH_DISABLED=1"):
+            build_token_verifier(
+                environment={
+                    "AUTH_ISSUER": ISSUER,
+                    "AUTH_CLIENT_ID": CLIENT_ID,
+                    "AUTH_DISABLED": "1",
+                    "PETRICHOR_ENV": "production",
+                }
+            )
+
+    def test_auth_disabled_outside_production_builds_a_disabled_verifier(self) -> None:
+        verifier = build_token_verifier(
+            environment={
+                "AUTH_ISSUER": ISSUER,
+                "AUTH_CLIENT_ID": CLIENT_ID,
+                "AUTH_DISABLED": "1",
+                "PETRICHOR_ENV": "development",
+            }
+        )
+        assert verifier.enabled is False
+
+    def test_auth_is_active_when_the_flag_is_absent(self) -> None:
+        verifier = build_token_verifier(
+            environment={"AUTH_ISSUER": ISSUER, "AUTH_CLIENT_ID": CLIENT_ID}
+        )
+        assert verifier.enabled is True

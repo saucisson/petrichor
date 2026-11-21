@@ -2185,7 +2185,12 @@ components:
           type: string
   responses:
     Unauthorized:
-      description: Missing or invalid X-API-Key.
+      description: >-
+        Missing or invalid credentials: a valid `Authorization: Bearer`
+        access token (OIDC, validated locally against the IdP JWKS) or the
+        legacy `X-API-Key` header. Reason `invalid_bearer_token` when an
+        Authorization header was present but rejected, else
+        `missing_or_invalid_api_key`.
       content:
         application/problem+json:
           schema:

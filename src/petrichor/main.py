@@ -20,6 +20,7 @@ import structlog
 from petrichor.api import create_app
 from petrichor.api.settings import ApiSettings
 from petrichor.arbitration import ArbitrationStore
+from petrichor.auth import AuthSettings, TokenVerifier
 from petrichor.catalog_sources import (
     DEFAULT_CONFIG_PATH,
     CatalogService,
@@ -46,6 +47,28 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8080
 HOST_ENVIRONMENT_VARIABLE = "PETRICHOR_HOST"
 PORT_ENVIRONMENT_VARIABLE = "PETRICHOR_PORT"
+ENVIRONMENT_VARIABLE = "PETRICHOR_ENV"
+PRODUCTION_ENVIRONMENT = "production"
+"""Production indicator: AUTH_DISABLED=1 must never combine with it (L3 guard)."""
+
+
+def build_token_verifier(*, environment: dict[str, str] | None = None) -> TokenVerifier:
+    """Build the PT-1 verifier from the environment, with the L3 guard (PT-2).
+
+    ``AUTH_DISABLED=1`` is the local-dev bypass only: combining it with
+    ``PETRICHOR_ENV=production`` is a fatal configuration error, never a
+    silent open server.
+    """
+    env = os.environ if environment is None else environment
+    auth_settings = AuthSettings.model_validate(env)
+    if auth_settings.auth_disabled and env.get(ENVIRONMENT_VARIABLE) == PRODUCTION_ENVIRONMENT:
+        raise ConfigurationError(
+            f"AUTH_DISABLED=1 must never be combined with {ENVIRONMENT_VARIABLE}="
+            f"{PRODUCTION_ENVIRONMENT}."
+        )
+    return TokenVerifier(settings=auth_settings)
+
+
 """Container deployment (ADR-0102): the API listens on 0.0.0.0 inside the
 container so the published port can reach it; locally it stays on loopback."""
 DEFAULT_SESSIONS_DIRECTORY = ".petrichor/sessions"
@@ -78,6 +101,7 @@ def build_server(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
     edit_store: FormulaEditStore,
     catalog: CatalogService | None = None,
     url_import: UrlImportConfig | None = None,
+    token_verifier: TokenVerifier | None = None,
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
 ) -> WSGIServer:
@@ -96,6 +120,7 @@ def build_server(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
         edit_store=edit_store,
         catalog=catalog,
         url_import=url_import,
+        token_verifier=token_verifier,
     )
     return make_server(host, port, app)
 
@@ -160,6 +185,7 @@ def main() -> None:
         edit_store=edit_store,
         catalog=catalog,
         url_import=url_import_config,
+        token_verifier=build_token_verifier(),
         host=host,
         port=port,
     )
