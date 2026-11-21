@@ -28,7 +28,6 @@ The contract document is ``openapi.yaml`` next to this module (ADR-0016).
 """
 
 import hashlib
-import hmac
 import json
 import threading
 import time
@@ -42,6 +41,13 @@ from wsgiref.types import StartResponse, WSGIEnvironment
 import structlog
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from petrichor.api.auth import (
+    ENVIRON_AUTH_CLAIMS,
+    HEADER_API_KEY,
+    REASON_INVALID_BEARER,
+    REASON_MISSING_CREDENTIALS,
+    authenticate_request,
+)
 from petrichor.arbitration import ArbitrationDecisionKind, ArbitrationStore
 from petrichor.archive_ingest import (
     ARCHIVE_CONTENT_TYPES,
@@ -139,6 +145,7 @@ from petrichor.witness import (
 
 if TYPE_CHECKING:
     from petrichor.api.settings import ApiSettings
+    from petrichor.auth import TokenVerifier
     from petrichor.convergence import ConvergenceStore
     from petrichor.elicitation import GeneratedQuestion
     from petrichor.llm.provider import LLMProvider
@@ -233,20 +240,12 @@ UI_CONTENT_TYPES_BY_SUFFIX = {
     ".css": CONTENT_TYPE_CSS,
     ".svg": "image/svg+xml",
 }
-HEADER_API_KEY = "X-API-Key"
 PROBLEM_TYPE_BASE_URL = "https://petrichor.dev/problems/"
 WATCHDOG_GRACE_SECONDS = 5
 """Extra seconds the watchdog waits past the run timeout before forcing the error state."""
 ACCEPTABLE_MEDIA_TYPES = frozenset(
     {"*/*", "application/*", "application/petri+json", "application/json"}
 )
-
-
-def _is_authorized(*, environ: WSGIEnvironment, settings: ApiSettings) -> bool:
-    """Constant-time comparison of the X-API-Key header against the configured key."""
-    provided = environ.get("HTTP_X_API_KEY", "")
-    expected = settings.api_key.get_secret_value()
-    return bool(provided) and hmac.compare_digest(provided.encode(), expected.encode())
 
 
 def _media_type(*, header_value: str | None) -> str:
@@ -3936,6 +3935,47 @@ def _serve_ui_asset(
     )
 
 
+def _auth_gate(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    settings: ApiSettings,
+    token_verifier: TokenVerifier | None,
+    method: str,
+    path: str,
+) -> Iterable[bytes] | None:
+    """The PT-2 auth gate: a uniform 401 problem response on rejection, else None.
+
+    On a valid Bearer token the validated claims are exposed to the handlers
+    as ``environ["petrichor.auth_claims"]``; the exact rejection reason goes
+    to the structured log, never to the response body.
+    """
+    decision = authenticate_request(
+        environ=environ, settings=settings, token_verifier=token_verifier
+    )
+    if decision.allowed:
+        if decision.claims is not None:
+            environ[ENVIRON_AUTH_CLAIMS] = decision.claims
+        return None
+    logger.warning(
+        "api_request_unauthorized", method=method, path=path, reason=decision.rejection_reason
+    )
+    problem_reason = (
+        REASON_INVALID_BEARER
+        if decision.rejection_reason not in (None, REASON_MISSING_CREDENTIALS)
+        else REASON_MISSING_CREDENTIALS
+    )
+    return _problem_response(
+        start_response=start_response,
+        environ=environ,
+        payload=_problem(
+            status=HTTPStatus.UNAUTHORIZED,
+            reason=problem_reason,
+            detail=f"Provide a valid Authorization: Bearer token or {HEADER_API_KEY} header.",
+        ),
+    )
+
+
 def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
     *,
     settings: ApiSettings,
@@ -3955,8 +3995,14 @@ def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
     edit_store: FormulaEditStore | None = None,
     catalog: ModelCatalog | None = None,
     url_import: UrlImportConfig | None = None,
+    token_verifier: TokenVerifier | None = None,
 ) -> WSGIApp:
-    """Build the WSGI application: auth first, then routing and negotiation."""
+    """Build the WSGI application: auth first, then routing and negotiation.
+
+    ``token_verifier`` wires the PT-2 middleware: a valid ``Authorization:
+    Bearer`` JWT (validated by the PT-1 brick) is accepted alongside the
+    legacy ``X-API-Key``; without a verifier, only the legacy key is accepted.
+    """
 
     def app(environ: WSGIEnvironment, start_response: StartResponse) -> Iterable[bytes]:
         method = environ.get("REQUEST_METHOD", "GET").upper()
@@ -3968,17 +4014,16 @@ def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
         )
         if routed is not None:
             return routed
-        if not _is_authorized(environ=environ, settings=settings):
-            logger.warning("api_request_unauthorized", method=method, path=path)
-            return _problem_response(
-                start_response=start_response,
-                environ=environ,
-                payload=_problem(
-                    status=HTTPStatus.UNAUTHORIZED,
-                    reason="missing_or_invalid_api_key",
-                    detail=f"Provide a valid {HEADER_API_KEY} header.",
-                ),
-            )
+        rejected = _auth_gate(
+            environ=environ,
+            start_response=start_response,
+            settings=settings,
+            token_verifier=token_verifier,
+            method=method,
+            path=path,
+        )
+        if rejected is not None:
+            return rejected
         routed = _dispatch_models(
             environ=environ,
             start_response=start_response,
