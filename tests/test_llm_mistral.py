@@ -7,7 +7,7 @@
 """
 
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, get_args, get_origin
 
 import httpx
 import pytest
@@ -135,6 +135,87 @@ class TestPromptGuard:
             obj = getattr(schemas, name)
             if isinstance(obj, type) and issubclass(obj, BaseModel):
                 assert "verdict" not in obj.model_fields, f"{name} has a verdict field"
+
+
+# The shape each prompt template advertises, mapped to the pydantic schema that
+# validates the real output (issue #176: the drift between the two made every
+# real call fail validation). The guard is mechanical in both directions: the
+# sample must validate against the schema, and every key of the sample must be
+# named in the prompt - change either side and this test fails.
+USAGE_SCHEMAS: dict[str, type[BaseModel]] = {
+    "semantic-profile": schemas.SemanticProfile,
+    "reading": schemas.FormulaReadings,
+    "clarification": schemas.Clarification,
+    "cluster": schemas.ClusterList,
+    "narration": schemas.NarrationCorpus,
+}
+
+USAGE_SAMPLES: dict[str, dict[str, object]] = {
+    "semantic-profile": {
+        "entries": [
+            {
+                "id": "p1",
+                "elements": "M1",
+                "role": "ressource",
+                "conf": 0.9,
+                "evidence": "place M1 is consumed by takeL",
+                "options": ["jeton"],
+                "wrong": False,
+            }
+        ]
+    },
+    "reading": {
+        "readings": {
+            "AG(philo0 thinking)": {
+                "reading": "toujours vrai",
+                "not_says": "vivacite",
+                "pattern": "safety",
+                "cross": "q2",
+            }
+        }
+    },
+    "clarification": {"reform": "verifier que ...", "options": ["lecture A", "lecture B"]},
+    "cluster": {"clusters": [{"cause": "model", "fix": "ajouter une place", "members": ["c1"]}]},
+    "narration": {"narrations": {"takeL_1": "Le philosophe 1 prend la fourchette."}},
+}
+
+
+def _annotation_keys(annotation: object) -> set[str]:
+    """The nested schema keys reachable through a field annotation."""
+    origin = get_origin(annotation)
+    if origin is not None:
+        keys: set[str] = set()
+        for argument in get_args(annotation):
+            keys |= _annotation_keys(argument)
+        return keys
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return _schema_keys(annotation)
+    return set()
+
+
+def _schema_keys(model: type[BaseModel]) -> set[str]:
+    """Every JSON key of a pydantic model, recursively (validation aliases win)."""
+    keys: set[str] = set()
+    for name, field in model.model_fields.items():
+        alias = field.validation_alias if isinstance(field.validation_alias, str) else name
+        keys.add(alias)
+        keys |= _annotation_keys(field.annotation)
+    return keys
+
+
+class TestPromptSchemaParity:
+    def test_every_usage_prompt_matches_its_pydantic_schema(self) -> None:
+        """Issue #176 guard: the JSON shape advertised by each prompt template
+        validates against the usage's pydantic schema, and the prompt names
+        every key of that schema - prompt/schema drift fails here."""
+        assert set(USAGE_SCHEMAS) == set(PROMPT_TEMPLATES)
+        for usage, schema in USAGE_SCHEMAS.items():
+            schema.model_validate(USAGE_SAMPLES[usage])
+            template = PROMPT_TEMPLATES[usage]
+            for key in _schema_keys(schema):
+                assert f'"{key}"' in template, (
+                    f"prompt {usage!r} does not name the schema key {key!r}"
+                )
 
 
 class TestProviderSelection:
