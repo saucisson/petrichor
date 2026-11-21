@@ -159,7 +159,9 @@ describe("UI v2 parity with the vanilla UI", () => {
     expect(
       screen.getByText(/Clause controversée — remontée à l'ingénieur/),
     ).toBeInTheDocument();
-    expect(screen.getByText("lola 2.0 : verdict true")).toBeInTheDocument();
+    expect(screen.getByText("lola 2.0")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "verdict : true" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "verdict : false" })).toBeInTheDocument();
     fireEvent.click(screen.getAllByRole("button", { name: "C'est normal" })[0]);
     await waitFor(() =>
       expect(
@@ -180,7 +182,9 @@ describe("UI v2 parity with the vanilla UI", () => {
     fireEvent.click(screen.getByRole("button", { name: "3. Vérifications MC" }));
     await waitFor(() => expect(screen.getByText(/Budget MC — consommé 1.500 s/)).toBeInTheDocument());
     expect(screen.getByText(/aucun report/)).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByText("true")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByRole("img", { name: "verdict : true" })).toBeInTheDocument(),
+    );
     expect(screen.getByText(/tire : t1/)).toBeInTheDocument();
     expect(
       screen.getByText(/La transition t1 s'est tirée./),

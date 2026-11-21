@@ -102,7 +102,6 @@
   "questions": {
     "title": "Static questions",
     "intro": "Question cards: arbitrate each question (Impossible / That's normal / Verify first).",
-    "meta": "{{formula}} ({{family}}, triage {{triage}})",
     "status": "Status: {{status}}",
     "decisions": {
       "refuse": "Impossible",
@@ -135,13 +134,28 @@
     "convergencesEmpty": "No arbitrated fusion for this session.",
     "convergenceLine": "{{questionId}} → covered by {{propositionId}}",
     "loading": "Loading questions…",
-    "empty": "No questions for this session."
+    "empty": "No questions for this session.",
+    "filter": {
+      "searchLabel": "Search by formula",
+      "family": "Family",
+      "triage": "Triage",
+      "status": "Status",
+      "sort": "Sort",
+      "all": "All",
+      "sortId": "by id",
+      "sortFamily": "by family",
+      "sortTriage": "by triage"
+    },
+    "counters": "{{shown}} shown / {{total}} — verified {{verified}} — controversial {{controversial}}",
+    "badge": {
+      "verified": "verified ×{{count}}",
+      "controversial": "controversial"
+    }
   },
   "verifications": {
     "title": "MC checks",
     "intro": "Runs available for the session (mock / static) — no verdict is invented here.",
     "budget": "MC budget — consumed {{consumed}} s / cap {{cap}} s — remaining {{remaining}} s (no carry-over).",
-    "runLine": "{{runId}} — {{family}} / {{kind}} — status: {{status}} — triage: {{triage}} — verdict:",
     "witnessUnavailable": "Witness unavailable ({{status}}).",
     "witnessTitle": "Witness {{id}} — {{kind}}",
     "witnessCyclic": " — cyclic (back-edge {{edge}})",
@@ -150,7 +164,8 @@
     "fired": "fires: {{transition}}",
     "narrationProvenance": "(provenance: {{provenance}})",
     "loading": "Loading verifications…",
-    "empty": "No runs for this session."
+    "empty": "No runs for this session.",
+    "witnessToggle": "Witness"
   },
   "synthese": {
     "title": "Summary",
@@ -175,5 +190,8 @@
     },
     "loading": "Loading contract…",
     "journalEmpty": "No entries in the arbitration journal."
+  },
+  "common": {
+    "verdictAria": "verdict: {{verdict}}"
   }
 }
