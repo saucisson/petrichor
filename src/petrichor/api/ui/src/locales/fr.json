@@ -179,7 +179,6 @@
       "proof": {
         "run": "run {{runId}}",
         "tool": "outil {{tool}}",
-        "verdict": "verdict {{verdict}}",
         "technique": "technique {{technique}}",
         "cost": "coût {{cost}} s",
         "witness": "témoin {{witnessId}}",
@@ -188,9 +187,15 @@
       }
     },
     "loading": "Chargement du contrat…",
-    "journalEmpty": "Aucune entrée dans le journal d'arbitrage."
+    "journalEmpty": "Aucune entrée dans le journal d'arbitrage.",
+    "view": {
+      "aria": "Vue du contrat",
+      "preview": "Aperçu",
+      "source": "Markdown"
+    }
   },
   "common": {
-    "verdictAria": "verdict : {{verdict}}"
+    "verdictAria": "verdict : {{verdict}}",
+    "elapsed": "depuis {{seconds}} s"
   }
 }

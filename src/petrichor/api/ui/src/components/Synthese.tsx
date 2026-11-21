@@ -2,6 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { readProblemDetail, type ApiClient } from "../api";
 import type { Contract, ContractProof, ProofDossier } from "../types";
+import Busy from "./Busy";
+import Markdown from "./Markdown";
+import VerdictBadge from "./VerdictBadge";
 import { WitnessReader } from "./Verifications";
 
 const CONTRACT_ACCEPT = "application/contract+json; version=1.0";
@@ -30,7 +33,7 @@ function ProofDossierCard({
           <li key={proof.run_id}>
             <a href={proof.link}>{t("synthese.dossiers.proof.run", { runId: proof.run_id })}</a>{" "}
             — {t("synthese.dossiers.proof.tool", { tool: proof.tool_version })} —{" "}
-            {t("synthese.dossiers.proof.verdict", { verdict: proof.verdict ?? "—" })}
+            <VerdictBadge verdict={proof.verdict ?? null} />
             {proof.technique !== null ? (
               <> — {t("synthese.dossiers.proof.technique", { technique: proof.technique })}</>
             ) : null}
@@ -91,6 +94,9 @@ export default function Synthese({ hidden, client, sessionId, reloadToken }: Syn
   // P76: loading / error are explicit states - never a silent return.
   const [loading, setLoading] = useState(false);
   const [journalError, setJournalError] = useState<string | null>(null);
+  // P79: segmented Aperçu / Markdown toggle - the contract arrives rendered,
+  // the source stays one click away; the export always downloads the source.
+  const [view, setView] = useState<"preview" | "source">("preview");
 
   const loadContractMarkdown = useCallback(async () => {
     if (!sessionId) return;
@@ -144,8 +150,8 @@ export default function Synthese({ hidden, client, sessionId, reloadToken }: Syn
       <h2 id="h-synthese">{t("synthese.title")}</h2>
       <p>{t("synthese.intro")}</p>
       {loading ? (
-        <p className="message message-info" role="status">
-          {t("synthese.loading")}
+        <p className="message message-info">
+          <Busy label={t("synthese.loading")} />
         </p>
       ) : null}
       {markdownError !== null ? (
@@ -158,12 +164,47 @@ export default function Synthese({ hidden, client, sessionId, reloadToken }: Syn
           {journalError}
         </p>
       ) : null}
-      <button id="export-markdown" type="button" className="btn btn-primary" onClick={downloadMarkdown}>
-        {t("synthese.export")}
-      </button>
-      <pre id="contract-preview" aria-live="polite">
-        {markdownError === null ? (markdown ?? "") : ""}
-      </pre>
+      <div className="view-toggle" role="group" aria-label={t("synthese.view.aria")}>
+        <button
+          type="button"
+          className={"btn" + (view === "preview" ? " btn-primary" : "")}
+          aria-pressed={view === "preview"}
+          onClick={() => setView("preview")}
+        >
+          {t("synthese.view.preview")}
+        </button>
+        <button
+          type="button"
+          className={"btn" + (view === "source" ? " btn-primary" : "")}
+          aria-pressed={view === "source"}
+          onClick={() => setView("source")}
+        >
+          {t("synthese.view.source")}
+        </button>
+        <button
+          id="export-markdown"
+          type="button"
+          className="btn btn-primary"
+          onClick={downloadMarkdown}
+        >
+          {t("synthese.export")}
+        </button>
+      </div>
+      <div id="contract-preview" aria-live="polite">
+        {markdownError === null ? (
+          markdown !== null ? (
+            view === "preview" ? (
+              <Markdown source={markdown} />
+            ) : (
+              <pre className="markdown-source">{markdown}</pre>
+            )
+          ) : (
+            ""
+          )
+        ) : (
+          ""
+        )}
+      </div>
       <h3>{t("synthese.dossiers.title")}</h3>
       {contract === null || contract.proof_dossiers === undefined || contract.proof_dossiers.length === 0 ? (
         <p>{t("synthese.dossiers.empty")}</p>
@@ -187,9 +228,9 @@ export default function Synthese({ hidden, client, sessionId, reloadToken }: Syn
                   .join(", ")
               : "";
           return (
-            <li key={index}>
-              {entry.event}
-              {detail !== "" ? ` — ${detail}` : ""}
+            <li key={index} className="journal-entry">
+              <span className="badge journal-event">{entry.event}</span>{" "}
+              {detail !== "" ? <code className="journal-detail">{detail}</code> : null}
             </li>
           );
         })}

@@ -378,3 +378,61 @@
   .question-card .covered-notice {
     @apply font-semibold;
   }
+
+  /* P79: active-wait indicator (mission §2.5) - animated spinner + elapsed
+     seconds inside role="status". */
+  .busy {
+    @apply inline-flex items-center gap-2;
+  }
+
+  .busy-spinner {
+    @apply inline-block h-4 w-4 rounded-full border-2 border-line border-t-primary;
+    animation: p79-spin 0.8s linear infinite;
+  }
+
+  @keyframes p79-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  /* P79: segmented Aperçu / Markdown toggle + rendered contract. */
+  .view-toggle {
+    @apply my-2 flex flex-wrap items-center gap-2;
+  }
+
+  .markdown-body h3,
+  .markdown-body h4,
+  .markdown-body h5,
+  .markdown-body h6 {
+    @apply mt-3 mb-1 font-bold;
+  }
+
+  .markdown-body p {
+    @apply my-1;
+  }
+
+  .markdown-body ul {
+    @apply ml-5 list-disc;
+  }
+
+  .markdown-body code {
+    @apply rounded bg-surface px-1 font-mono text-[0.9em];
+  }
+
+  .markdown-source {
+    @apply overflow-x-auto rounded-card border border-line bg-surface p-3 font-mono text-sm whitespace-pre-wrap;
+  }
+
+  /* P79: arbitration journal - event badge + monospace key=value details. */
+  .journal-entry {
+    @apply my-1 flex flex-wrap items-center gap-2;
+  }
+
+  .journal-event {
+    @apply border-purple-200 bg-purple-50 text-purple-900;
+  }
+
+  .journal-detail {
+    @apply rounded bg-surface px-1 py-0.5 font-mono text-xs;
+  }

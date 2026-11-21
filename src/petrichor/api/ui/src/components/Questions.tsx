@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { readProblemDetail, type ApiClient } from "../api";
+import Busy from "./Busy";
 import VerdictBadge from "./VerdictBadge";
 import type {
   Contract,
@@ -274,8 +275,8 @@ export default function Questions({ hidden, client, sessionId, reloadToken }: Qu
       <h2 id="h-questions">{t("questions.title")}</h2>
       <p>{t("questions.intro")}</p>
       {loading ? (
-        <p className="message message-info" role="status">
-          {t("questions.loading")}
+        <p className="message message-info">
+          <Busy label={t("questions.loading")} />
         </p>
       ) : null}
       {loadError !== null ? (

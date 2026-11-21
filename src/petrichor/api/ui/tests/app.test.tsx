@@ -209,10 +209,15 @@ describe("UI v2 parity with the vanilla UI", () => {
     ]);
     render(<App />);
     fireEvent.click(screen.getByRole("button", { name: "4. Synthèse" }));
+    // P79: the contract arrives rendered (heading), the source is one toggle away.
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Contrat" })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Markdown" }));
     await waitFor(() => expect(screen.getByText(/# Contrat/)).toBeInTheDocument());
-    await waitFor(() =>
-      expect(screen.getByText(/arbitration — question_id=q1, decision=accept/)).toBeInTheDocument(),
-    );
+    // Journal: event badge + monospace key=value details.
+    await waitFor(() => {
+      expect(screen.getByText("arbitration")).toBeInTheDocument();
+      expect(screen.getByText("question_id=q1, decision=accept")).toBeInTheDocument();
+    });
     fireEvent.click(screen.getByRole("button", { name: "Télécharger le contrat (Markdown)" }));
     expect(createObjectURL).toHaveBeenCalledOnce();
   });
