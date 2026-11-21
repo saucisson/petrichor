@@ -34,6 +34,8 @@ ENVIRON_AUTH_CLAIMS = "petrichor.auth_claims"
 
 REASON_MISSING_CREDENTIALS = "missing_or_invalid_api_key"
 REASON_INVALID_BEARER = "invalid_bearer_token"
+REASON_UNSUPPORTED_SCHEME = "unsupported_authorization_scheme"
+REASON_VERIFIER_NOT_CONFIGURED = "bearer_verifier_not_configured"
 
 
 @dataclass(frozen=True)
@@ -60,12 +62,10 @@ def _authenticate_bearer(
     """Authenticate an ``Authorization`` header value as a Bearer JWT."""
     scheme, _, token = authorization.partition(" ")
     if scheme.lower() != BEARER_SCHEME or not token.strip():
-        return AuthDecision(
-            allowed=False, claims=None, rejection_reason="unsupported_authorization_scheme"
-        )
+        return AuthDecision(allowed=False, claims=None, rejection_reason=REASON_UNSUPPORTED_SCHEME)
     if token_verifier is None:
         return AuthDecision(
-            allowed=False, claims=None, rejection_reason="bearer_verifier_not_configured"
+            allowed=False, claims=None, rejection_reason=REASON_VERIFIER_NOT_CONFIGURED
         )
     try:
         claims = token_verifier.verify_access_token(token=token.strip())
@@ -106,6 +106,8 @@ __all__ = [
     "HEADER_AUTHORIZATION",
     "REASON_INVALID_BEARER",
     "REASON_MISSING_CREDENTIALS",
+    "REASON_UNSUPPORTED_SCHEME",
+    "REASON_VERIFIER_NOT_CONFIGURED",
     "AuthDecision",
     "auth_claims_from_environ",
     "authenticate_request",
