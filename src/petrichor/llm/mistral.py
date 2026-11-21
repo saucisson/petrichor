@@ -33,7 +33,6 @@ from petrichor.llm.schemas import (
     ClusterList,
     FormulaReadings,
     NarrationCorpus,
-    Reading,
     SemanticProfile,
 )
 
@@ -45,6 +44,15 @@ logger = structlog.get_logger(__name__)
 MISTRAL_API_URL = "https://api.mistral.ai/v1/chat/completions"
 DEFAULT_MISTRAL_MODEL = "mistral-small-latest"
 """The default Mistral model of the real provider (configurable, spec §8)."""
+
+MAX_TOKENS_PER_USAGE: dict[str, int] = {
+    "semantic-profile": 2000,
+    "reading": 6000,
+    "clarification": 500,
+    "cluster": 2000,
+    "narration": 3000,
+}
+"""The output token budget per usage (annexe B, § B.4 of the 2026-11-20/21 directive)."""
 
 OutputType = TypeVar("OutputType", bound=BaseModel)
 
@@ -110,13 +118,28 @@ class MistralProvider(LLMProvider):
         self._prompt_tokens = 0
         self._completion_tokens = 0
         self._total_tokens = 0
+        self._by_usage_model: dict[tuple[str, str], dict[str, int]] = {}
+        self._archive: list[dict[str, object]] = []
+
+    @property
+    def model_version(self) -> str:
+        """The exact model version fingerprint of this provider (replay P46, P72)."""
+        return self._model
+
+    def archived_calls(self) -> tuple[dict[str, object], ...]:
+        """Archived request/response pairs with their (model, version) fingerprint (P72, P46)."""
+        return tuple(self._archive)
 
     def usage_totals(self) -> dict[str, object]:
-        """The accumulated LLM cost, displayed apart from the tool budget (spec §12.4)."""
+        """The accumulated LLM cost per (usage, model) couple (spec §12.4, P72)."""
         return {
             "provider": "mistral",
             "model": self._model,
             "calls": self._calls,
+            "by_usage_model": {
+                f"{usage}|{model}": dict(stats)
+                for (usage, model), stats in sorted(self._by_usage_model.items())
+            },
             "prompt_tokens": self._prompt_tokens,
             "completion_tokens": self._completion_tokens,
             "total_tokens": self._total_tokens,
@@ -130,30 +153,67 @@ class MistralProvider(LLMProvider):
         last_error: Exception | None = None
         for attempt in range(1, MAX_LLM_ATTEMPTS + 1):
             try:
+                request_body = {
+                    "model": self._model,
+                    "messages": [
+                        {"role": "system", "content": prompt},
+                        {"role": "user", "content": user_content},
+                    ],
+                    # P72 (annexe B §B.1): strict json_schema derived from the
+                    # pydantic schema of the usage, not a bare json_object.
+                    "response_format": {
+                        "type": "json_schema",
+                        "json_schema": {
+                            "name": usage,
+                            "schema": output_type.model_json_schema(),
+                            "strict": True,
+                        },
+                    },
+                    "temperature": 0,
+                    "max_tokens": MAX_TOKENS_PER_USAGE[usage],
+                }
                 response = self._client.post(
                     self._api_url,
                     headers={
                         "Authorization": f"Bearer {self._api_key.get_secret_value()}",
                         "Content-Type": "application/json",
                     },
-                    json={
-                        "model": self._model,
-                        "messages": [
-                            {"role": "system", "content": prompt},
-                            {"role": "user", "content": user_content},
-                        ],
-                        "response_format": {"type": "json_object"},
-                        "temperature": 0,
-                    },
+                    json=request_body,
                 )
                 response.raise_for_status()
                 payload = response.json()
                 content = payload["choices"][0]["message"]["content"]
                 usage_payload = payload.get("usage", {})
                 self._calls += 1
-                self._prompt_tokens += int(usage_payload.get("prompt_tokens", 0))
-                self._completion_tokens += int(usage_payload.get("completion_tokens", 0))
-                self._total_tokens += int(usage_payload.get("total_tokens", 0))
+                prompt_tokens = int(usage_payload.get("prompt_tokens", 0))
+                completion_tokens = int(usage_payload.get("completion_tokens", 0))
+                total_tokens = int(usage_payload.get("total_tokens", 0))
+                self._prompt_tokens += prompt_tokens
+                self._completion_tokens += completion_tokens
+                self._total_tokens += total_tokens
+                couple = self._by_usage_model.setdefault(
+                    (usage, self._model), {"calls": 0, "total_tokens": 0}
+                )
+                couple["calls"] += 1
+                couple["total_tokens"] += total_tokens
+                # P72: archive the request/response with the (model, version)
+                # fingerprint for the replay of P46.
+                self._archive.append(
+                    {
+                        "usage": usage,
+                        "model": self._model,
+                        "version": self._model,
+                        "request": request_body,
+                        "response": payload,
+                    }
+                )
+                logger.debug(
+                    "llm_mistral_call_archived",
+                    usage=usage,
+                    model=self._model,
+                    attempt=attempt,
+                    total_tokens=total_tokens,
+                )
                 return output_type.model_validate(json.loads(content))
             except (
                 httpx.HTTPError,
@@ -184,16 +244,16 @@ class MistralProvider(LLMProvider):
             output_type=SemanticProfile,
         )
 
-    def reading(self, *, model_hash: ContentHash, formula: FormulaText) -> Reading:
-        """Read one formula in natural language via Mistral."""
-        document = self._complete(
+    def reading(
+        self, *, model_hash: ContentHash, formulas: tuple[FormulaText, ...]
+    ) -> FormulaReadings:
+        """Read the whole question grid in ONE call (P72: one HTTP call per document)."""
+        grid = "\n".join(f"- {formula}" for formula in formulas)
+        return self._complete(
             usage="reading",
-            user_content=f"Model {model_hash}. Formula: {formula}",
+            user_content=f"Model {model_hash}. Frozen question grid:\n{grid}",
             output_type=FormulaReadings,
         )
-        if formula not in document.readings:
-            raise LLMDegradationError(f"Mistral returned no reading for formula {formula!r}.")
-        return document.readings[formula]
 
     def clarification(self, *, model_hash: ContentHash, text: HumanMessage) -> Clarification:
         """Reformulate a human proposal via Mistral."""
@@ -212,17 +272,14 @@ class MistralProvider(LLMProvider):
         )
         return document.clusters
 
-    def narrate_transition(self, *, model_hash: ContentHash, transition: str) -> str:
-        """Narrate one fired transition via Mistral (spec §16, issue #32)."""
-        document = self._complete(
+    def narrate(self, *, model_hash: ContentHash, transitions: tuple[str, ...]) -> NarrationCorpus:
+        """Narrate the COMPLETE witness in ONE call (P72: one HTTP call per document, P32)."""
+        trace = "\n".join(f"- {transition}" for transition in transitions)
+        return self._complete(
             usage="narration",
-            user_content=f"Model {model_hash}. Fired transition: {transition}",
+            user_content=f"Model {model_hash}. Fired transitions of the witness:\n{trace}",
             output_type=NarrationCorpus,
         )
-        sentence = document.narrations.get(transition)
-        if sentence is None:
-            raise LLMDegradationError(f"Mistral returned no narration for {transition!r}.")
-        return sentence
 
     def close(self) -> None:
         """Close the owned HTTP client, if any."""
@@ -232,6 +289,7 @@ class MistralProvider(LLMProvider):
 
 __all__ = [
     "DEFAULT_MISTRAL_MODEL",
+    "MAX_TOKENS_PER_USAGE",
     "MISTRAL_API_URL",
     "PROMPT_TEMPLATES",
     "LLMError",

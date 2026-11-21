@@ -191,15 +191,25 @@ def narrate_steps(
     A transition missing from the scripted corpus degrades explicitly (the
     step gets no narration) — the mock never invents a sentence (spec §15).
     """
+    fired = tuple(step.fired for step in steps if step.fired is not None)
+    if not fired:
+        return ()
+    # P72: ONE LLM call for the complete witness (document granularity), the
+    # corpus is stored once (P32). A transition absent from the corpus gets
+    # no narration - never an invented sentence.
+    try:
+        corpus = provider.narrate(model_hash=model_hash, transitions=fired)
+    except LLMDegradationError:
+        logger.warning("witness_narration_degraded", model_hash=model_hash, steps=len(steps))
+        return ()
     narrations: list[Narration] = []
     for step in steps:
         if step.fired is None:
             continue
-        try:
-            text = provider.narrate_transition(model_hash=model_hash, transition=step.fired)
-        except LLMDegradationError:
+        text = corpus.narrations.get(step.fired)
+        if text is None:
             logger.warning(
-                "witness_narration_degraded",
+                "witness_narration_not_scripted",
                 model_hash=model_hash,
                 transition=step.fired,
                 step_index=step.index,

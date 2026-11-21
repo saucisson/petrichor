@@ -16,7 +16,7 @@ from pydantic import BaseModel, SecretStr
 
 from petrichor.api.app import create_app
 from petrichor.api.settings import ApiSettings
-from petrichor.llm import schemas
+from petrichor.llm import FormulaText, schemas
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -59,17 +59,25 @@ class TestMistralProvider:
             )
 
         provider = MistralProvider(api_key=SecretStr("sk-test"), http_client=fake_client(handler))
-        sentence = provider.narrate_transition(model_hash=MODEL_HASH, transition="takeL_1")
-        assert sentence == "Le philosophe 1 prend la fourchette."
+        corpus = provider.narrate(model_hash=MODEL_HASH, transitions=("takeL_1",))
+        assert corpus.narrations["takeL_1"] == "Le philosophe 1 prend la fourchette."
         assert len(requests) == 1
         body = json.loads(requests[0].content.decode("utf-8"))
         assert body["temperature"] == 0
-        assert body["response_format"] == {"type": "json_object"}
+        # P72 (annexe B §B.1): strict json_schema derived from the pydantic schema.
+        assert body["response_format"]["type"] == "json_schema"
+        assert body["response_format"]["json_schema"]["name"] == "narration"
+        assert body["response_format"]["json_schema"]["strict"] is True
+        expected_schema = schemas.NarrationCorpus.model_json_schema()
+        assert body["response_format"]["json_schema"]["schema"] == expected_schema
+        assert body["max_tokens"] == 3000  # annexe B §B.4, narration output budget
         assert requests[0].headers["Authorization"] == "Bearer sk-test"
         totals = provider.usage_totals()
         assert totals["provider"] == "mistral"
         assert totals["calls"] == 1
         assert totals["total_tokens"] == 42
+        couple = totals["by_usage_model"]
+        assert couple == {"narration|mistral-small-latest": {"calls": 1, "total_tokens": 42}}
 
     def test_invalid_output_degrades_after_exactly_two_attempts(self) -> None:
         calls = 0
@@ -81,7 +89,7 @@ class TestMistralProvider:
 
         provider = MistralProvider(api_key=SecretStr("sk-test"), http_client=fake_client(handler))
         with pytest.raises(LLMDegradationError):
-            provider.narrate_transition(model_hash=MODEL_HASH, transition="takeL_1")
+            provider.narrate(model_hash=MODEL_HASH, transitions=("takeL_1",))
         assert calls == 2
 
     def test_verdict_laden_output_fails_schema_validation_and_degrades(self) -> None:
@@ -97,7 +105,7 @@ class TestMistralProvider:
 
         provider = MistralProvider(api_key=SecretStr("sk-test"), http_client=fake_client(handler))
         with pytest.raises(LLMDegradationError):
-            provider.narrate_transition(model_hash=MODEL_HASH, transition="takeL_1")
+            provider.narrate(model_hash=MODEL_HASH, transitions=("takeL_1",))
 
     def test_http_error_is_retried_then_degrades(self) -> None:
         calls = 0
@@ -111,6 +119,82 @@ class TestMistralProvider:
         with pytest.raises(LLMDegradationError):
             provider.semantic_profile(model_hash=MODEL_HASH)
         assert calls == 2
+
+
+class TestOneDocumentOneCall:
+    """P72 guard: one HTTP call per document, never one per element."""
+
+    def test_one_reading_call_for_the_whole_grid_is_one_http_request(self) -> None:
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            readings = {
+                formula: {
+                    "reading": "r",
+                    "not_says": "n",
+                    "pattern": "p",
+                    "cross": "c",
+                }
+                for formula in ("EF (eat_1)", "AG EF (fork_1 = 1)", "EF DEADLOCK")
+            }
+            return httpx.Response(200, json=mistral_response(json.dumps({"readings": readings})))
+
+        provider = MistralProvider(api_key=SecretStr("sk-test"), http_client=fake_client(handler))
+        document = provider.reading(
+            model_hash=MODEL_HASH,
+            formulas=tuple(
+                FormulaText(f) for f in ("EF (eat_1)", "AG EF (fork_1 = 1)", "EF DEADLOCK")
+            ),
+        )
+        assert len(document.readings) == 3
+        assert len(requests) == 1
+        body = json.loads(requests[0].content.decode("utf-8"))
+        assert body["max_tokens"] == 6000  # annexe B §B.4, reading output budget
+        assert body["response_format"]["json_schema"]["name"] == "reading"
+        totals = provider.usage_totals()
+        couple = totals["by_usage_model"]
+        assert couple == {"reading|mistral-small-latest": {"calls": 1, "total_tokens": 42}}
+
+    def test_one_narrate_call_for_the_whole_witness_is_one_http_request(self) -> None:
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            narrations = {f"t{i}": f"step {i}" for i in range(5)}
+            payload = mistral_response(json.dumps({"narrations": narrations}))
+            return httpx.Response(200, json=payload)
+
+        provider = MistralProvider(api_key=SecretStr("sk-test"), http_client=fake_client(handler))
+        corpus = provider.narrate(
+            model_hash=MODEL_HASH, transitions=tuple(f"t{i}" for i in range(5))
+        )
+        assert len(corpus.narrations) == 5
+        assert len(requests) == 1
+
+    def test_every_request_and_response_is_archived_with_the_model_fingerprint(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json=mistral_response(
+                    json.dumps({"narrations": {"takeL_1": "Le philosophe 1 prend la fourchette."}})
+                ),
+            )
+
+        provider = MistralProvider(
+            api_key=SecretStr("sk-test"),
+            model="mistral-small-2603",
+            http_client=fake_client(handler),
+        )
+        provider.narrate(model_hash=MODEL_HASH, transitions=("takeL_1",))
+        archive = provider.archived_calls()
+        assert len(archive) == 1
+        entry = archive[0]
+        assert entry["usage"] == "narration"
+        assert entry["model"] == "mistral-small-2603"
+        assert entry["version"] == provider.model_version == "mistral-small-2603"
+        assert "request" in entry and "response" in entry
+        assert entry["request"]["model"] == "mistral-small-2603"  # rejeu P46
 
 
 class TestPromptGuard:
@@ -276,7 +360,7 @@ class TestLlmLogNarration:
 
         provider = MistralProvider(api_key=SecretStr("sk-test"), http_client=fake_client(handler))
         with structlog.testing.capture_logs() as logs, pytest.raises(LLMDegradationError):
-            provider.narrate_transition(model_hash=MODEL_HASH, transition="takeL_1")
+            provider.narrate(model_hash=MODEL_HASH, transitions=("takeL_1",))
         events = [event["event"] for event in logs]
         assert events.count("llm_mistral_call_failed") == 2
         assert "llm_degraded" in events

@@ -88,13 +88,16 @@ class TestSemanticProfile:
 
 
 class TestReadings:
-    def test_all_seven_catalogue_formulas_are_scripted(
+    def test_all_seven_catalogue_formulas_are_scripted_in_one_document(
         self, provider: DeterministicMockProvider
     ) -> None:
+        document = provider.reading(
+            model_hash=PHILOSOPHES3_CONTENT_HASH,
+            formulas=tuple(FormulaText(formula) for formula in CATALOGUE_FORMULAS),
+        )
+        assert len(document.readings) == len(CATALOGUE_FORMULAS)
         for formula in CATALOGUE_FORMULAS:
-            reading = provider.reading(
-                model_hash=PHILOSOPHES3_CONTENT_HASH, formula=FormulaText(formula)
-            )
+            reading = document.readings[formula]
             assert reading.reading
             assert reading.not_says
             assert reading.pattern
@@ -103,16 +106,30 @@ class TestReadings:
     def test_deadlock_reading_matches_the_maquette(
         self, provider: DeterministicMockProvider
     ) -> None:
-        reading = provider.reading(
-            model_hash=PHILOSOPHES3_CONTENT_HASH, formula=FormulaText("EF DEADLOCK")
+        document = provider.reading(
+            model_hash=PHILOSOPHES3_CONTENT_HASH, formulas=(FormulaText("EF DEADLOCK"),)
         )
+        reading = document.readings["EF DEADLOCK"]
         assert reading.pattern == "atteignabilité d'impasse"
         assert "plus aucune transition n'est activable" in reading.reading
 
-    def test_unknown_formula_degrades_explicitly(self, provider: DeterministicMockProvider) -> None:
-        with pytest.raises(LLMDegradationError, match="No scripted reading"):
-            provider.reading(
-                model_hash=PHILOSOPHES3_CONTENT_HASH, formula=FormulaText("AG (eat_1)")
+    def test_unknown_formula_is_absent_from_the_served_document(
+        self, provider: DeterministicMockProvider
+    ) -> None:
+        """The mock serves the document verbatim and never invents a reading."""
+        document = provider.reading(
+            model_hash=PHILOSOPHES3_CONTENT_HASH, formulas=(FormulaText("AG (eat_1)"),)
+        )
+        assert "AG (eat_1)" not in document.readings
+
+    def test_unknown_formula_degrades_explicitly_at_session_level(
+        self, provider: DeterministicMockProvider
+    ) -> None:
+        with pytest.raises(LLMDegradationError, match="No reading for formula"):
+            run_session(
+                provider=provider,
+                model_hash=PHILOSOPHES3_CONTENT_HASH,
+                requests=(SessionRequest(usage="reading", formula=FormulaText("AG (eat_1)")),),
             )
 
 

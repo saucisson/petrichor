@@ -11,7 +11,13 @@ from typing import TYPE_CHECKING
 
 import structlog
 
-from petrichor.llm.provider import FormulaText, HumanMessage, LLMError, LLMProvider
+from petrichor.llm.provider import (
+    FormulaText,
+    HumanMessage,
+    LLMDegradationError,
+    LLMError,
+    LLMProvider,
+)
 from petrichor.petri_canonical import canonical_json
 
 if TYPE_CHECKING:
@@ -43,6 +49,37 @@ def run_session(
     return tuple(journal)
 
 
+def _dispatch_reading(
+    *, provider: LLMProvider, model_hash: ContentHash, formula: FormulaText
+) -> JsonValue:
+    """One document call for the reading; the journal entry stays the single reading (§19.4).
+
+    A formula absent from the served document degrades explicitly - never an
+    invented reading.
+    """
+    document = provider.reading(model_hash=model_hash, formulas=(formula,))
+    try:
+        return document.readings[formula].model_dump(mode="json")
+    except KeyError:
+        raise LLMDegradationError(
+            f"No reading for formula {formula!r} in the served document."
+        ) from None
+
+
+def _dispatch_narration(
+    *, provider: LLMProvider, model_hash: ContentHash, transition: str
+) -> JsonValue:
+    """One document call for the witness; the journal entry stays the pair (§19.4)."""
+    corpus = provider.narrate(model_hash=model_hash, transitions=(transition,))
+    try:
+        narration = corpus.narrations[transition]
+    except KeyError:
+        raise LLMDegradationError(
+            f"No narration for transition {transition!r} in the served document."
+        ) from None
+    return {"transition": transition, "narration": narration}
+
+
 def _dispatch(
     *, provider: LLMProvider, model_hash: ContentHash, request: SessionRequest
 ) -> JsonValue:
@@ -53,8 +90,9 @@ def _dispatch(
         case "reading":
             if request.formula is None:
                 raise LLMError("A reading request requires a formula.")
-            return provider.reading(model_hash=model_hash, formula=request.formula).model_dump(
-                mode="json"
+            # P72: the provider reads the document (one call).
+            return _dispatch_reading(
+                provider=provider, model_hash=model_hash, formula=request.formula
             )
         case "clarification":
             if request.text is None:
@@ -68,9 +106,7 @@ def _dispatch(
         case "narration":
             if request.text is None:
                 raise LLMError("A narration request requires a transition text.")
-            return {
-                "transition": str(request.text),
-                "narration": provider.narrate_transition(
-                    model_hash=model_hash, transition=str(request.text)
-                ),
-            }
+            # P72: one document call for the witness.
+            return _dispatch_narration(
+                provider=provider, model_hash=model_hash, transition=str(request.text)
+            )
