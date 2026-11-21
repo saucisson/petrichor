@@ -618,7 +618,9 @@ paths:
         Polled by the UI while a real LLM call may be in flight, to show the
         active waiting indicator (animated hourglass, usage, elapsed) — never
         a frozen screen without information. The deterministic mock is
-        instantaneous: no call is ever in progress with it.
+        instantaneous: no call is ever in progress with it. Only the most
+        recent call states are kept (bounded history), so the payload stays
+        small on a long-lived server.
       responses:
         "200":
           description: The call states of the configured provider.
