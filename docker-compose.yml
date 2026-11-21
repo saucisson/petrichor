@@ -24,6 +24,15 @@ services:
       - "127.0.0.1:${API_HOST_PORT:-8080}:8080"
     environment:
       PETRICHOR_API_KEY: ${PETRICHOR_API_KEY:?PETRICHOR_API_KEY is required}
+      # OIDC Bearer layer (PT-1/PT-2, issues #182-#183): forwarded only when
+      # set in the host .env; when AUTH_ISSUER is empty the API falls back to
+      # the legacy X-API-Key alone (never open) and logs auth_bearer_not_configured.
+      AUTH_ISSUER: ${AUTH_ISSUER:-}
+      AUTH_CLIENT_ID: ${AUTH_CLIENT_ID:-}
+      AUTH_CLIENT_SECRET: ${AUTH_CLIENT_SECRET:-}
+      AUTH_ALLOWED_AUDIENCES: ${AUTH_ALLOWED_AUDIENCES:-}
+      AUTH_DISABLED: ${AUTH_DISABLED:-}
+      PETRICHOR_ENV: ${PETRICHOR_ENV:-}
       PYTHONDONTWRITEBYTECODE: "1"
     volumes:
       - petrichor-data:/app/.petrichor

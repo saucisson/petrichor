@@ -212,4 +212,31 @@ class TestL3Guard:
         verifier = build_token_verifier(
             environment={"AUTH_ISSUER": ISSUER, "AUTH_CLIENT_ID": CLIENT_ID}
         )
+        assert verifier is not None
         assert verifier.enabled is True
+
+
+class TestBearerFallback:
+    def test_missing_auth_issuer_falls_back_to_legacy_key_only(self) -> None:
+        # 2026-11-21: a missing AUTH_ISSUER must never crash the server (the
+        # 502 on petrichor.linard.fr); the legacy X-API-Key still gates /v1/.
+        with structlog.testing.capture_logs() as logs:
+            verifier = build_token_verifier(environment={"PETRICHOR_API_KEY": TEST_API_KEY})
+        assert verifier is None
+        events = [event["event"] for event in logs]
+        assert "auth_bearer_not_configured" in events
+
+    def test_empty_auth_issuer_falls_back_to_legacy_key_only(self) -> None:
+        verifier = build_token_verifier(environment={"AUTH_ISSUER": "  "})
+        assert verifier is None
+
+    def test_fallback_app_still_rejects_requests_without_credentials(self) -> None:
+        client = make_app(build_token_verifier(environment={}))
+        response = client.get(PROBE_PATH)
+        assert response.status_code == 401
+        assert response.json()["extensions"]["reason"] == REASON_MISSING_CREDENTIALS
+
+    def test_fallback_app_still_accepts_the_legacy_key(self) -> None:
+        client = make_app(build_token_verifier(environment={}))
+        response = client.get(PROBE_PATH, headers={"X-API-Key": TEST_API_KEY})
+        assert response.status_code == 200

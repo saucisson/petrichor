@@ -36,6 +36,14 @@ if [ ! -f .env ] || ! grep -q '^PETRICHOR_API_KEY=' .env; then
   exit 1
 fi
 
+# The OIDC Bearer layer is optional at deploy time: without AUTH_ISSUER the
+# API falls back to the legacy X-API-Key alone (still protected, never open).
+if grep -q '^AUTH_ISSUER=' .env && [ -n "$(sed -n 's/^AUTH_ISSUER=//p' .env)" ]; then
+  echo "deploy: AUTH_ISSUER is set, Bearer JWT validation will be active"
+else
+  echo "deploy: AUTH_ISSUER is not set, Bearer JWT validation is OFF (X-API-Key only)" >&2
+fi
+
 echo "deploy: updating the clone to origin/$DEPLOY_REF"
 git fetch --quiet origin "$DEPLOY_REF"
 git checkout --quiet --force "$DEPLOY_REF"
