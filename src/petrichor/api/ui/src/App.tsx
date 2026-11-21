@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ApiClient } from "./api";
 import { applyLanguage, SUPPORTED_LANGUAGES, type Language } from "./i18n";
@@ -25,7 +25,9 @@ export default function App() {
   const [reloadToken, setReloadToken] = useState(0);
   const [resumeError, setResumeError] = useState<string | null>(null);
 
-  const client = new ApiClient(apiKey);
+  // P76: the client is memoized on the key - recreating it every render
+  // invalidated every useCallback depending on it and caused a fetch loop.
+  const client = useMemo(() => new ApiClient(apiKey), [apiKey]);
   const bumpReload = useCallback(() => setReloadToken((token) => token + 1), []);
 
   const onApiKeyChange = (value: string) => {

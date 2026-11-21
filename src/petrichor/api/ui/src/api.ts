@@ -36,6 +36,10 @@ export class ApiClient {
       path,
       accept === undefined ? undefined : { headers: { Accept: accept } },
     );
+    if (!response.ok) {
+      // P76: never parse an error body as data - the problem detail is the message.
+      throw new ApiError(response.status, await readProblemDetail(response));
+    }
     return (await response.json()) as T;
   }
 
@@ -45,6 +49,10 @@ export class ApiClient {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
+    if (!response.ok) {
+      // P76: a failed mutation (e.g. session creation) must surface explicitly.
+      throw new ApiError(response.status, await readProblemDetail(response));
+    }
     return (await response.json()) as T;
   }
 
@@ -98,13 +106,18 @@ export class ApiClient {
   }
 }
 
-async function problemDetail(response: Response): Promise<string> {
+export async function readProblemDetail(response: Response): Promise<string> {
+  // The server-produced problem detail, verbatim; falls back to the status.
   try {
     const payload = (await response.json()) as { detail?: string };
     return payload.detail ?? `HTTP ${response.status}`;
   } catch {
     return `HTTP ${response.status}`;
   }
+}
+
+async function problemDetail(response: Response): Promise<string> {
+  return readProblemDetail(response);
 }
 
 async function parseImportResponse(

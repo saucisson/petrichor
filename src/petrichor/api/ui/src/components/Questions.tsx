@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { ApiClient } from "../api";
+import { readProblemDetail, type ApiClient } from "../api";
 import type {
   Contract,
   ConvergenceList,
@@ -162,18 +162,35 @@ export default function Questions({ hidden, client, sessionId, reloadToken }: Qu
   const [convergences, setConvergences] = useState<ConvergenceList | null>(null);
   const [fusionMessage, setFusionMessage] = useState<string | null>(null);
   const [refusedIds, setRefusedIds] = useState<Set<string>>(new Set());
+  // P76: loading / error / empty are explicit states - never a silent return.
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const loadQuestions = useCallback(async () => {
     if (!sessionId) return;
-    const response = await client.request("/v1/sessions/" + sessionId + "/contract", {
-      headers: { Accept: CONTRACT_ACCEPT },
-    });
-    if (response.status !== 200) return;
-    setContract((await response.json()) as Contract);
-    // P34: the arbitrated fusions of the session (human-only, append-only).
-    const fusions = await client.request("/v1/sessions/" + sessionId + "/convergences");
-    if (fusions.status === 200) {
-      setConvergences((await fusions.json()) as ConvergenceList);
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const response = await client.request("/v1/sessions/" + sessionId + "/contract", {
+        headers: { Accept: CONTRACT_ACCEPT },
+      });
+      if (response.status !== 200) {
+        // The problem detail is server-produced text: displayed verbatim.
+        setLoadError(await readProblemDetail(response));
+        setContract(null);
+        return;
+      }
+      setContract((await response.json()) as Contract);
+      // P34: the arbitrated fusions of the session (human-only, append-only).
+      const fusions = await client.request("/v1/sessions/" + sessionId + "/convergences");
+      if (fusions.status === 200) {
+        setConvergences((await fusions.json()) as ConvergenceList);
+      }
+    } catch (loadFailure) {
+      setLoadError(loadFailure instanceof Error ? loadFailure.message : String(loadFailure));
+      setContract(null);
+    } finally {
+      setLoading(false);
     }
   }, [client, sessionId]);
 
@@ -228,6 +245,19 @@ export default function Questions({ hidden, client, sessionId, reloadToken }: Qu
     <section id="step-questions" hidden={hidden} aria-labelledby="h-questions">
       <h2 id="h-questions">{t("questions.title")}</h2>
       <p>{t("questions.intro")}</p>
+      {loading ? (
+        <p className="message message-info" role="status">
+          {t("questions.loading")}
+        </p>
+      ) : null}
+      {loadError !== null ? (
+        <p className="message message-error" role="alert">
+          {loadError}
+        </p>
+      ) : null}
+      {!loading && loadError === null && (contract === null || contract.questions.length === 0) ? (
+        <p className="message message-info">{t("questions.empty")}</p>
+      ) : null}
       <ul id="question-cards">
         {contract?.questions.map((question) => (
           <li className="question-card" key={question.question_id}>

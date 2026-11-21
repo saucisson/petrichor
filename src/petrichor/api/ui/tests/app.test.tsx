@@ -230,6 +230,43 @@ describe("UI v2 parity with the vanilla UI", () => {
     render(<App />);
     await waitFor(() => expect(screen.getByText(/Clé API invalide \(401\)/)).toBeInTheDocument());
   });
+
+  // P76 regression: a non-200 on the contract shows an alert with the server
+  // detail verbatim - never a silent blank step.
+  it("shows the contract 404 detail verbatim in a role=alert banner", async () => {
+    localStorage.setItem("petrichor.sessionId", "s1");
+    mockFetch([
+      {
+        match: (call) =>
+          call.url === "/v1/sessions/s1/contract" &&
+          (call.accept !== undefined && call.accept.includes("contract+json")),
+        respond: () => jsonResponse(404, { detail: "session inconnue: s1" }),
+      },
+    ]);
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "2. Questions statiques" }));
+    await waitFor(() => {
+      const alert = screen.getByRole("alert");
+      expect(alert).toHaveTextContent("session inconnue: s1");
+    });
+  });
+
+  // P76 regression: a 500 on the runs list shows an alert with the server
+  // detail verbatim - never a silent blank step.
+  it("shows the runs 500 detail verbatim in a role=alert banner", async () => {
+    localStorage.setItem("petrichor.sessionId", "s1");
+    mockFetch([
+      { match: (call) => call.url === "/v1/sessions/s1", respond: () => jsonResponse(200, SESSION) },
+      { match: (call) => call.url === "/v1/sessions/s1/budget", respond: () => jsonResponse(200, BUDGET) },
+      { match: (call) => call.url === "/v1/runs/r1", respond: () => jsonResponse(500, { detail: "moteur indisponible" }) },
+    ]);
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "3. Vérifications MC" }));
+    await waitFor(() => {
+      const alert = screen.getByRole("alert");
+      expect(alert).toHaveTextContent("moteur indisponible");
+    });
+  });
 });
 
 describe("UI v3 chrome (issue #162)", () => {

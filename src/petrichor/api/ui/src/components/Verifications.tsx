@@ -87,20 +87,35 @@ export default function Verifications({ hidden, client, sessionId, reloadToken }
   const [session, setSession] = useState<Session | null>(null);
   const [runs, setRuns] = useState<Run[]>([]);
   const [budget, setBudget] = useState<Budget | null>(null);
+  // P76: loading / error / empty are explicit states - never a silent return.
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const loadRuns = useCallback(async () => {
     if (!sessionId) return;
-    const sessionData = await client.getJson<Session>("/v1/sessions/" + sessionId);
-    setSession(sessionData);
-    const budgetResponse = await client.request("/v1/sessions/" + sessionId + "/budget");
-    if (budgetResponse.status === 200) {
-      setBudget((await budgetResponse.json()) as Budget);
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const sessionData = await client.getJson<Session>("/v1/sessions/" + sessionId);
+      setSession(sessionData);
+      const budgetResponse = await client.request("/v1/sessions/" + sessionId + "/budget");
+      if (budgetResponse.status === 200) {
+        setBudget((await budgetResponse.json()) as Budget);
+      } else {
+        setBudget(null);
+      }
+      const loadedRuns: Run[] = [];
+      for (const runId of sessionData.run_ids) {
+        loadedRuns.push(await client.getJson<Run>("/v1/runs/" + runId));
+      }
+      setRuns(loadedRuns);
+    } catch (loadFailure) {
+      // The problem detail is server-produced text: displayed verbatim.
+      setLoadError(loadFailure instanceof Error ? loadFailure.message : String(loadFailure));
+      setRuns([]);
+    } finally {
+      setLoading(false);
     }
-    const loadedRuns: Run[] = [];
-    for (const runId of sessionData.run_ids) {
-      loadedRuns.push(await client.getJson<Run>("/v1/runs/" + runId));
-    }
-    setRuns(loadedRuns);
   }, [client, sessionId]);
 
   useEffect(() => {
@@ -113,6 +128,19 @@ export default function Verifications({ hidden, client, sessionId, reloadToken }
     <section id="step-verifications" hidden={hidden} aria-labelledby="h-verifications">
       <h2 id="h-verifications">{t("verifications.title")}</h2>
       <p>{t("verifications.intro")}</p>
+      {loading ? (
+        <p className="message message-info" role="status">
+          {t("verifications.loading")}
+        </p>
+      ) : null}
+      {loadError !== null ? (
+        <p className="message message-error" role="alert">
+          {loadError}
+        </p>
+      ) : null}
+      {!loading && loadError === null && runs.length === 0 ? (
+        <p className="message message-info">{t("verifications.empty")}</p>
+      ) : null}
       <ul id="run-list">
         {budget !== null ? (
           <li className="budget-line">

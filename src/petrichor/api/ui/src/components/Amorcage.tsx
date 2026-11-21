@@ -122,7 +122,8 @@ export default function Amorcage({
         const params: Record<string, string> = {};
         const merged = { ...catalogFacets, ...overrides };
         const effectiveQuery = query ?? catalogQuery;
-        if (effectiveQuery.trim() !== "") params.q = effectiveQuery.trim();
+        // P76: the backend contract reads `search`, never `q`.
+        if (effectiveQuery.trim() !== "") params.search = effectiveQuery.trim();
         for (const key of FACET_KEYS) {
           if (merged[key] !== "") params[key] = merged[key];
         }
@@ -154,6 +155,10 @@ export default function Amorcage({
     const created = await client.postJson<{ session_id: string }>("/v1/sessions", {
       model_id: model.id,
     });
+    // P76: an empty session id is an explicit failure, never a silent one.
+    if (typeof created.session_id !== "string" || created.session_id === "") {
+      throw new Error(t("amorcage.sessionCreateFailed"));
+    }
     setCreatedId(created.session_id);
     onSessionCreated(created.session_id);
   };
