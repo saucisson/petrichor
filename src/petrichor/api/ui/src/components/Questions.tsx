@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { readProblemDetail, type ApiClient } from "../api";
+import VerdictBadge from "./VerdictBadge";
 import type {
   Contract,
   ConvergenceList,
@@ -39,10 +40,7 @@ function CrossStatus({ question }: { question: Question }) {
             .filter((proof) => proof.status === "done" && proof.verdict)
             .map((proof) => (
               <li key={proof.tool_version}>
-                {t("questions.cross.proofLine", {
-                  tool: proof.tool_version,
-                  verdict: proof.verdict,
-                })}
+                {proof.tool_version} <VerdictBadge verdict={proof.verdict} />
               </li>
             ))}
         </ul>
@@ -165,6 +163,14 @@ export default function Questions({ hidden, client, sessionId, reloadToken }: Qu
   // P76: loading / error / empty are explicit states - never a silent return.
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // P78: presentation-only filter bar (search by formula, family, triage,
+  // status, sort by id/family/triage). The filtering never hides data from
+  // the server - it only narrows the view of the already-loaded contract.
+  const [query, setQuery] = useState("");
+  const [familyFilter, setFamilyFilter] = useState("");
+  const [triageFilter, setTriageFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
+  const [sortKey, setSortKey] = useState<"id" | "family" | "triage">("id");
 
   const loadQuestions = useCallback(async () => {
     if (!sessionId) return;
@@ -241,6 +247,28 @@ export default function Questions({ hidden, client, sessionId, reloadToken }: Qu
     setFusionMessage(t("questions.fusionRefused"));
   };
 
+  /* P78: the filter/sort pipeline is presentation-only. Counters are computed
+     on the full contract (shown/total, verified, controversial). */
+  const allQuestions = contract?.questions ?? [];
+  const uniqueValues = (pick: (question: Question) => string) =>
+    [...new Set(allQuestions.map(pick))].sort((a, b) => a.localeCompare(b));
+  const visibleQuestions = allQuestions
+    .filter((question) => query.trim() === "" || question.formula.includes(query.trim()))
+    .filter((question) => familyFilter === "" || question.family === familyFilter)
+    .filter((question) => triageFilter === "" || question.triage === triageFilter)
+    .filter((question) => statusFilter === "" || question.status === statusFilter)
+    .sort((a, b) => {
+      const left = sortKey === "id" ? a.question_id : sortKey === "family" ? a.family : a.triage;
+      const right = sortKey === "id" ? b.question_id : sortKey === "family" ? b.family : b.triage;
+      return left.localeCompare(right);
+    });
+  const verifiedCount = allQuestions.filter(
+    (question) => question.cross_status === "verified_by_n",
+  ).length;
+  const controversialCount = allQuestions.filter(
+    (question) => question.cross_status === "controversial",
+  ).length;
+
   return (
     <section id="step-questions" hidden={hidden} aria-labelledby="h-questions">
       <h2 id="h-questions">{t("questions.title")}</h2>
@@ -258,15 +286,99 @@ export default function Questions({ hidden, client, sessionId, reloadToken }: Qu
       {!loading && loadError === null && (contract === null || contract.questions.length === 0) ? (
         <p className="message message-info">{t("questions.empty")}</p>
       ) : null}
+      {contract !== null && contract.questions.length > 0 ? (
+        <div className="filter-bar">
+          <label htmlFor="question-search">{t("questions.filter.searchLabel")}</label>
+          <input
+            id="question-search"
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+          <label htmlFor="filter-family">{t("questions.filter.family")}</label>
+          <select
+            id="filter-family"
+            value={familyFilter}
+            onChange={(event) => setFamilyFilter(event.target.value)}
+          >
+            <option value="">{t("questions.filter.all")}</option>
+            {uniqueValues((question) => question.family).map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+          </select>
+          <label htmlFor="filter-triage">{t("questions.filter.triage")}</label>
+          <select
+            id="filter-triage"
+            value={triageFilter}
+            onChange={(event) => setTriageFilter(event.target.value)}
+          >
+            <option value="">{t("questions.filter.all")}</option>
+            {uniqueValues((question) => question.triage).map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+          </select>
+          <label htmlFor="filter-status">{t("questions.filter.status")}</label>
+          <select
+            id="filter-status"
+            value={statusFilter}
+            onChange={(event) => setStatusFilter(event.target.value)}
+          >
+            <option value="">{t("questions.filter.all")}</option>
+            {uniqueValues((question) => question.status).map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
+            ))}
+          </select>
+          <label htmlFor="filter-sort">{t("questions.filter.sort")}</label>
+          <select
+            id="filter-sort"
+            value={sortKey}
+            onChange={(event) =>
+              setSortKey(event.target.value as "id" | "family" | "triage")
+            }
+          >
+            <option value="id">{t("questions.filter.sortId")}</option>
+            <option value="family">{t("questions.filter.sortFamily")}</option>
+            <option value="triage">{t("questions.filter.sortTriage")}</option>
+          </select>
+          <p className="filter-counters" role="status">
+            {t("questions.counters", {
+              shown: visibleQuestions.length,
+              total: allQuestions.length,
+              verified: verifiedCount,
+              controversial: controversialCount,
+            })}
+          </p>
+        </div>
+      ) : null}
       <ul id="question-cards">
-        {contract?.questions.map((question) => (
-          <li className="question-card" key={question.question_id}>
-            <p>
-              {t("questions.meta", {
-                formula: question.formula,
-                family: question.family,
-                triage: question.triage,
-              })}
+        {visibleQuestions.map((question) => (
+          <li
+            className={
+              "question-card" + (question.covered_by !== undefined && question.covered_by !== null ? " covered" : "")
+            }
+            key={question.question_id}
+          >
+            <p className="question-formula">{question.formula}</p>
+            <p className="badge-row">
+              <span className="badge badge-family">{question.family}</span>
+              <span className="badge badge-triage">{question.triage}</span>
+              <span className="badge badge-status">{question.status}</span>
+              {question.cross_status === "verified_by_n" ? (
+                <span className="badge badge-verified">
+                  {t("questions.badge.verified", { count: question.verified_by ?? 0 })}
+                </span>
+              ) : null}
+              {question.cross_status === "controversial" ? (
+                <span className="badge badge-controversial">
+                  {t("questions.badge.controversial")}
+                </span>
+              ) : null}
             </p>
             <p className="status">{t("questions.status", { status: question.status })}</p>
             <CrossStatus question={question} />

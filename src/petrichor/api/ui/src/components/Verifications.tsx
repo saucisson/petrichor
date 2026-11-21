@@ -1,7 +1,12 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { ApiClient } from "../api";
+import VerdictBadge from "./VerdictBadge";
 import type { Budget, Run, Session, Witness } from "../types";
+
+/* P78: runs in these statuses are polled every 3 s (see below). */
+const ACTIVE_RUN_STATUSES = new Set(["running", "pending", "queued"]);
+const POLL_INTERVAL_MS = 3000;
 
 interface VerificationsProps {
   hidden: boolean;
@@ -36,17 +41,22 @@ export function WitnessReader({ client, runId }: { client: ApiClient; runId: str
       <div className="witness-reader">{t("verifications.witnessUnavailable", { status: unavailable })}</div>
     );
   }
-  if (witness === null) return null;
-  const narrations = new Map((witness.narrations ?? []).map((n) => [n.step_index, n]));
+  const narrations = new Map((witness?.narrations ?? []).map((n) => [n.step_index, n]));
+  // P78: the witness is folded in a <details>; the summary carries the
+  // witness title (id, kind, cyclicity) once loaded.
   return (
-    <div className="witness-reader">
-      <p className="witness-title">
-        {t("verifications.witnessTitle", { id: witness.witness_id, kind: witness.kind })}
-        {witness.cyclic
-          ? t("verifications.witnessCyclic", { edge: witness.back_edge ?? "" })
-          : t("verifications.witnessAcyclic")}
-      </p>
-      <ol className="witness-steps">
+    <details className="witness-details">
+      <summary className="witness-summary">
+        {witness === null
+          ? t("verifications.loading")
+          : t("verifications.witnessTitle", { id: witness.witness_id, kind: witness.kind }) +
+            (witness.cyclic
+              ? t("verifications.witnessCyclic", { edge: witness.back_edge ?? "" })
+              : t("verifications.witnessAcyclic"))}
+      </summary>
+      {witness === null ? null : (
+        <div className="witness-reader">
+          <ol className="witness-steps">
         {witness.steps.map((step) => {
           const narration = narrations.get(step.index);
           return (
@@ -73,8 +83,10 @@ export function WitnessReader({ client, runId }: { client: ApiClient; runId: str
             </li>
           );
         })}
-      </ol>
-    </div>
+          </ol>
+        </div>
+      )}
+    </details>
   );
 }
 
@@ -91,10 +103,14 @@ export default function Verifications({ hidden, client, sessionId, reloadToken }
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  const loadRuns = useCallback(async () => {
+  /* `silent` is used by the 3 s polling of active runs: no loading flash,
+     and a poll failure keeps the last known data instead of blanking the
+     step. */
+  const loadRuns = useCallback(
+    async (silent: boolean) => {
     if (!sessionId) return;
-    setLoading(true);
-    setLoadError(null);
+    if (!silent) setLoading(true);
+    if (!silent) setLoadError(null);
     try {
       const sessionData = await client.getJson<Session>("/v1/sessions/" + sessionId);
       setSession(sessionData);
@@ -111,18 +127,38 @@ export default function Verifications({ hidden, client, sessionId, reloadToken }
       setRuns(loadedRuns);
     } catch (loadFailure) {
       // The problem detail is server-produced text: displayed verbatim.
-      setLoadError(loadFailure instanceof Error ? loadFailure.message : String(loadFailure));
-      setRuns([]);
+      if (!silent) {
+        setLoadError(loadFailure instanceof Error ? loadFailure.message : String(loadFailure));
+        setRuns([]);
+      }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
-  }, [client, sessionId]);
+  },
+    [client, sessionId],
+  );
 
   useEffect(() => {
     if (!hidden) {
-      void loadRuns();
+      void loadRuns(false);
     }
   }, [hidden, loadRuns, reloadToken]);
+
+  /* P78: poll the active runs (running/pending/queued) every 3 s. App keeps
+     every step mounted (hidden prop), so the polling continues while the
+     user navigates to another step. */
+  const activeRef = useRef(false);
+  useEffect(() => {
+    activeRef.current = runs.some((run) => ACTIVE_RUN_STATUSES.has(run.status));
+  }, [runs]);
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (activeRef.current) {
+        void loadRuns(true);
+      }
+    }, POLL_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [loadRuns]);
 
   return (
     <section id="step-verifications" hidden={hidden} aria-labelledby="h-verifications">
@@ -143,7 +179,7 @@ export default function Verifications({ hidden, client, sessionId, reloadToken }
       ) : null}
       <ul id="run-list">
         {budget !== null ? (
-          <li className="budget-line">
+          <li className="budget-line budget-card">
             {t("verifications.budget", {
               consumed: budget.consumed_seconds.toFixed(3),
               cap: budget.budget_seconds.toFixed(3),
@@ -152,20 +188,14 @@ export default function Verifications({ hidden, client, sessionId, reloadToken }
           </li>
         ) : null}
         {runs.map((run) => (
-          <li key={run.run_id}>
-            <span>
-              {t("verifications.runLine", {
-                runId: run.run_id,
-                family: run.family,
-                kind: run.kind,
-                status: run.status,
-                triage: run.triage.kind,
-              })}{" "}
-            </span>
+          <li key={run.run_id} className="run-row">
+            <span className="run-id">{run.run_id}</span>
+            <span className="badge badge-family">{run.family}</span>
+            <span className="badge badge-kind">{run.kind}</span>
+            <span className="badge badge-triage">{run.triage.kind}</span>
+            <span className={"badge run-status st-" + run.status}>{run.status}</span>
             <span className="run-verdict">
-              {run.output?.verdict !== undefined && run.output?.verdict !== null
-                ? String(run.output.verdict)
-                : "—"}
+              <VerdictBadge verdict={run.output?.verdict ?? null} />
             </span>
             {run.output?.witness !== undefined && run.output?.witness !== null ? (
               <WitnessReader client={client} runId={run.run_id} />

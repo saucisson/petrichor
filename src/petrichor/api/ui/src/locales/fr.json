@@ -102,7 +102,6 @@
   "questions": {
     "title": "Questions statiques",
     "intro": "Cartes-question : arbitrez chaque question (Impossible / C'est normal / Vérifier d'abord).",
-    "meta": "{{formula}} ({{family}}, triage {{triage}})",
     "status": "Statut : {{status}}",
     "decisions": {
       "refuse": "Impossible",
@@ -135,13 +134,28 @@
     "convergencesEmpty": "Aucune fusion arbitrée pour cette session.",
     "convergenceLine": "{{questionId}} → couverte par {{propositionId}}",
     "loading": "Chargement des questions…",
-    "empty": "Aucune question pour cette session."
+    "empty": "Aucune question pour cette session.",
+    "filter": {
+      "searchLabel": "Recherche par formule",
+      "family": "Famille",
+      "triage": "Triage",
+      "status": "Statut",
+      "sort": "Tri",
+      "all": "Toutes",
+      "sortId": "par id",
+      "sortFamily": "par famille",
+      "sortTriage": "par triage"
+    },
+    "counters": "{{shown}} affichées / {{total}} — vérifiées {{verified}} — controversées {{controversial}}",
+    "badge": {
+      "verified": "vérifiée ×{{count}}",
+      "controversial": "controversée"
+    }
   },
   "verifications": {
     "title": "Vérifications MC",
     "intro": "Runs disponibles de la session (mock / statiques) — aucun verdict n'est inventé ici.",
     "budget": "Budget MC — consommé {{consumed}} s / plafond {{cap}} s — restant {{remaining}} s (aucun report).",
-    "runLine": "{{runId}} — {{family}} / {{kind}} — statut : {{status}} — triage : {{triage}} — verdict :",
     "witnessUnavailable": "Témoin indisponible ({{status}}).",
     "witnessTitle": "Témoin {{id}} — {{kind}}",
     "witnessCyclic": " — cyclique (back-edge {{edge}})",
@@ -150,7 +164,8 @@
     "fired": "tire : {{transition}}",
     "narrationProvenance": "(provenance : {{provenance}})",
     "loading": "Chargement des vérifications…",
-    "empty": "Aucun run pour cette session."
+    "empty": "Aucun run pour cette session.",
+    "witnessToggle": "Témoin"
   },
   "synthese": {
     "title": "Synthèse",
@@ -175,5 +190,8 @@
     },
     "loading": "Chargement du contrat…",
     "journalEmpty": "Aucune entrée dans le journal d'arbitrage."
+  },
+  "common": {
+    "verdictAria": "verdict : {{verdict}}"
   }
 }
