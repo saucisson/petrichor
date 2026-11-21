@@ -2368,11 +2368,9 @@ def _read_formula(
         return None
     document_formulas = grid if grid else (FormulaText(formula),)
     try:
-        document = llm_provider.reading(
-            model_hash=model.content_hash, formulas=document_formulas
-        )
+        document = llm_provider.reading(model_hash=model.content_hash, formulas=document_formulas)
         reading = document.readings[FormulaText(formula)]
-    except (LLMDegradationError, KeyError):
+    except LLMDegradationError, KeyError:
         logger.warning("api_formula_reading_degraded", formula=formula)
         return {"degraded": True, "note": "Aucune lecture scriptée pour cette formule."}
     return {**reading.model_dump(mode="json"), "provenance": "llm", "degraded": False}
