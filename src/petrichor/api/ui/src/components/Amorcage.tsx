@@ -205,9 +205,15 @@ export default function Amorcage({
      only reverses the already-fetched rows client-side (presentation only,
      no server data is hidden). */
   const toggleSort = (key: SortKey) => {
-    const nextDir: SortDir = sortKey === key && sortDir === "asc" ? "desc" : "asc";
+    if (sortKey === key) {
+      // Same column: flip the direction only. Desc is a presentation-only
+      // reversal of the already-loaded rows - no server round-trip, no
+      // refetch that would discard pages accumulated with "Afficher plus".
+      setSortDir(sortDir === "asc" ? "desc" : "asc");
+      return;
+    }
     setSortKey(key);
-    setSortDir(nextDir);
+    setSortDir("asc");
     void fetchCatalogPage(0, true, { sort: key });
   };
 

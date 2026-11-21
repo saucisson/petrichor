@@ -218,6 +218,50 @@ describe("amorçage catalog panel (issue #166)", () => {
     expect(last?.url).toContain("offset=1");
   });
 
+  // P77 guard: toggling the active column to desc is a presentation-only
+  // client reversal - no refetch, and rows accumulated via "Afficher plus"
+  // are never discarded.
+  it("desc on the active column reverses loaded rows without refetching", async () => {
+    const page1 = { ...CATALOG_PAGE, items: [CATALOG_PAGE.items[0]], total: 2, limit: 1, offset: 0 };
+    const page2 = { ...CATALOG_PAGE, items: [CATALOG_PAGE.items[1]], total: 2, limit: 1, offset: 1 };
+    let fetched = 0;
+    mockFetch([
+      {
+        match: (call: { url: string; method: string }) =>
+          call.url.startsWith("/v1/catalog/models") && call.method === "GET",
+        respond: () => {
+          fetched += 1;
+          return jsonResponse(200, fetched === 1 ? page1 : page2);
+        },
+      },
+    ]);
+    render(<App />);
+    openCatalog();
+    fireEvent.click(screen.getByRole("button", { name: "Rechercher" }));
+    await waitFor(() => expect(screen.getByText("philosophes-COL-v3")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Afficher plus" }));
+    await waitFor(() => expect(screen.getByText("philosophes-PT-v3")).toBeInTheDocument());
+    const fetchesBefore = calls.filter((call) =>
+      call.url.startsWith("/v1/catalog/models"),
+    ).length;
+    // The default sort key is "name": clicking its header flips to desc.
+    fireEvent.click(screen.getByRole("button", { name: /^Nom/ }));
+    await waitFor(() =>
+      expect(screen.getByRole("columnheader", { name: /^Nom/ })).toHaveAttribute(
+        "aria-sort",
+        "descending",
+      ),
+    );
+    // No server round-trip for the direction flip, and both accumulated
+    // rows are still displayed.
+    const fetchesAfter = calls.filter((call) =>
+      call.url.startsWith("/v1/catalog/models"),
+    ).length;
+    expect(fetchesAfter).toBe(fetchesBefore);
+    expect(screen.getByText("philosophes-COL-v3")).toBeInTheDocument();
+    expect(screen.getByText("philosophes-PT-v3")).toBeInTheDocument();
+  });
+
   it("warns on COL entries and proposes the -PT- twin", async () => {
     mockFetch(BASE_ROUTES);
     render(<App />);
