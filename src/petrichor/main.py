@@ -52,6 +52,11 @@ PRODUCTION_ENVIRONMENT = "production"
 """Production indicator: AUTH_DISABLED=1 must never combine with it (L3 guard)."""
 
 
+def _env_flag_enabled(value: str | None) -> bool:
+    """Parse a boolean env flag the way pydantic-settings does (1/true/yes/on)."""
+    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def build_token_verifier(*, environment: dict[str, str] | None = None) -> TokenVerifier | None:
     """Build the PT-1 verifier from the environment, with the L3 guard (PT-2).
 
@@ -66,6 +71,16 @@ def build_token_verifier(*, environment: dict[str, str] | None = None) -> TokenV
     narrates the fallback.
     """
     env = os.environ if environment is None else environment
+    # The L3 guard runs FIRST, on the raw environment: AUTH_DISABLED=1 in
+    # production is fatal even when AUTH_ISSUER is unset (the fallback below
+    # must never swallow it).
+    if _env_flag_enabled(env.get("AUTH_DISABLED")) and (
+        env.get(ENVIRONMENT_VARIABLE) == PRODUCTION_ENVIRONMENT
+    ):
+        raise ConfigurationError(
+            f"AUTH_DISABLED=1 must never be combined with {ENVIRONMENT_VARIABLE}="
+            f"{PRODUCTION_ENVIRONMENT}."
+        )
     if not env.get("AUTH_ISSUER", "").strip():
         structlog.get_logger(__name__).warning(
             "auth_bearer_not_configured",
@@ -74,11 +89,6 @@ def build_token_verifier(*, environment: dict[str, str] | None = None) -> TokenV
         )
         return None
     auth_settings = AuthSettings.model_validate(env)
-    if auth_settings.auth_disabled and env.get(ENVIRONMENT_VARIABLE) == PRODUCTION_ENVIRONMENT:
-        raise ConfigurationError(
-            f"AUTH_DISABLED=1 must never be combined with {ENVIRONMENT_VARIABLE}="
-            f"{PRODUCTION_ENVIRONMENT}."
-        )
     return TokenVerifier(settings=auth_settings)
 
 
