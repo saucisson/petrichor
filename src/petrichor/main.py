@@ -109,7 +109,8 @@ def select_llm_provider(*, settings: ApiSettings) -> LLMProvider:
     if settings.llm_provider == "mistral":
         if settings.mistral_api_key is None:
             raise SystemExit("PETRICHOR_LLM_PROVIDER=mistral requires MISTRAL_API_KEY to be set.")
-        return MistralProvider(api_key=settings.mistral_api_key, model=settings.llm_model)
+        # P74 (ADR-0108): the model is routed per usage from the pinned table.
+        return MistralProvider(api_key=settings.mistral_api_key)
     return DeterministicMockProvider()
 
 
