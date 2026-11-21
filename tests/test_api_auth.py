@@ -197,6 +197,11 @@ class TestL3Guard:
                 }
             )
 
+    def test_l3_guard_also_fires_without_auth_issuer(self) -> None:
+        # The guard must run before the AUTH_ISSUER fallback, never swallowed by it.
+        with pytest.raises(ConfigurationError, match="AUTH_DISABLED=1"):
+            build_token_verifier(environment={"AUTH_DISABLED": "1", "PETRICHOR_ENV": "production"})
+
     def test_auth_disabled_outside_production_builds_a_disabled_verifier(self) -> None:
         verifier = build_token_verifier(
             environment={
