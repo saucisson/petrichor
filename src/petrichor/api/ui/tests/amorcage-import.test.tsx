@@ -57,6 +57,12 @@ const IMPORT_ROUTES = (modelStatus: number) => [
 beforeEach(() => {
   localStorage.clear();
 });
+/* P77 wizard navigation helpers: the import paths live behind the source
+   cards (local file / remote source -> catalog or direct URL). */
+function openLocalImport() {
+  fireEvent.click(screen.getByRole("button", { name: /^Fichier local/ }));
+}
+
 
 afterEach(() => {
   cleanup();
@@ -68,6 +74,7 @@ describe("amorçage import zone (issue #163)", () => {
     mockFetch(IMPORT_ROUTES(201));
     render(<App />);
     const file = new File(["<pnml/>"], "philosophes.pnml", { type: "application/pnml+xml" });
+    openLocalImport();
     fireEvent.change(screen.getByLabelText("Fichier PNML"), { target: { files: [file] } });
     expect(screen.getByText(/Fichier sélectionné : philosophes\.pnml/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Importer le modèle et créer la session" }));
@@ -82,6 +89,7 @@ describe("amorçage import zone (issue #163)", () => {
     mockFetch(IMPORT_ROUTES(200));
     render(<App />);
     const file = new File(["<pnml/>"], "philosophes.pnml", { type: "application/pnml+xml" });
+    openLocalImport();
     fireEvent.change(screen.getByLabelText("Fichier PNML"), { target: { files: [file] } });
     fireEvent.click(screen.getByRole("button", { name: "Importer le modèle et créer la session" }));
     await waitFor(() =>
@@ -93,6 +101,7 @@ describe("amorçage import zone (issue #163)", () => {
     mockFetch(IMPORT_ROUTES(201));
     render(<App />);
     const file = new File(["hello"], "notes.txt", { type: "text/plain" });
+    openLocalImport();
     fireEvent.change(screen.getByLabelText("Fichier PNML"), { target: { files: [file] } });
     fireEvent.click(screen.getByRole("button", { name: "Importer le modèle et créer la session" }));
     expect(screen.getByRole("alert")).toHaveTextContent(
@@ -104,6 +113,7 @@ describe("amorçage import zone (issue #163)", () => {
   it("requires a file before sending", () => {
     mockFetch(IMPORT_ROUTES(201));
     render(<App />);
+    openLocalImport();
     fireEvent.click(screen.getByRole("button", { name: "Importer le modèle et créer la session" }));
     expect(screen.getByRole("alert")).toHaveTextContent("Aucun fichier sélectionné.");
     expect(calls.find((call) => call.url === "/v1/models")).toBeUndefined();
@@ -112,6 +122,7 @@ describe("amorçage import zone (issue #163)", () => {
   it("accepts a dropped file in the import zone", () => {
     mockFetch(IMPORT_ROUTES(201));
     const { container } = render(<App />);
+    openLocalImport();
     const zone = container.querySelector(".import-zone");
     expect(zone).not.toBeNull();
     const file = new File(["<pnml/>"], "dropped.xml", { type: "application/xml" });
@@ -128,6 +139,7 @@ describe("amorçage import zone (issue #163)", () => {
     ]);
     render(<App />);
     const file = new File(["<pnml/>"], "broken.pnml", { type: "application/pnml+xml" });
+    openLocalImport();
     fireEvent.change(screen.getByLabelText("Fichier PNML"), { target: { files: [file] } });
     fireEvent.click(screen.getByRole("button", { name: "Importer le modèle et créer la session" }));
     await waitFor(() =>

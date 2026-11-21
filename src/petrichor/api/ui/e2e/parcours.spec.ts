@@ -23,6 +23,8 @@ test("parcours complet des 4 étapes + arbitrage + langue + édition + dossier +
 
   // Étape 1 - amorçage: clé API, import PNML, création de session.
   await page.locator("#api-key").fill(API_KEY);
+  // P77 wizard: the local file import lives behind the "Fichier local" card.
+  await page.getByRole("button", { name: "Fichier local" }).click();
   await page.locator("#pnml-file").setInputFiles(PNML_FIXTURE);
   await page.locator("#import-model").click();
   await expect(page.locator("#session-id")).not.toHaveValue("");

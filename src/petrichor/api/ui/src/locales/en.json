@@ -69,7 +69,35 @@
       "source": "Source",
       "size": "Size"
     },
-    "sessionCreateFailed": "Session creation failed: the server returned an empty session id."
+    "sessionCreateFailed": "Session creation failed: the server returned an empty session id.",
+    "wizard": {
+      "back": "← Back",
+      "breadcrumbAria": "Breadcrumb",
+      "crumbLocal": "Source: local file",
+      "crumbDistant": "Source: remote",
+      "crumbCatalog": "catalog",
+      "crumbUrl": "direct URL",
+      "localCard": "Local file",
+      "localCardHint": "PNML or archive ({{extensions}})",
+      "distantCard": "Remote source",
+      "distantCardHint": "Integrated catalog or direct URL",
+      "catalogCard": "Integrated catalog",
+      "catalogCardHint": "Search and import a model from the catalog",
+      "urlCard": "Direct URL",
+      "urlCardHint": "Paste the https URL of a model or an archive",
+      "extensionsHint": "Accepted extensions: {{extensions}}"
+    },
+    "col": {
+      "name": "Name",
+      "family": "Family",
+      "formalism": "Formalism",
+      "edition": "Edition",
+      "source": "Source",
+      "size": "Size",
+      "action": "Action"
+    },
+    "shownCount": "({{shown}} shown)",
+    "showMore": "Show more"
   },
   "questions": {
     "title": "Static questions",

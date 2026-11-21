@@ -69,7 +69,35 @@
       "source": "Source",
       "size": "Taille"
     },
-    "sessionCreateFailed": "Échec de la création de session : identifiant de session vide reçu du serveur."
+    "sessionCreateFailed": "Échec de la création de session : identifiant de session vide reçu du serveur.",
+    "wizard": {
+      "back": "← Retour",
+      "breadcrumbAria": "Fil d'Ariane",
+      "crumbLocal": "Source : fichier local",
+      "crumbDistant": "Source : distante",
+      "crumbCatalog": "catalogue",
+      "crumbUrl": "URL directe",
+      "localCard": "Fichier local",
+      "localCardHint": "PNML ou archive ({{extensions}})",
+      "distantCard": "Source distante",
+      "distantCardHint": "Catalogue intégré ou URL directe",
+      "catalogCard": "Catalogue intégré",
+      "catalogCardHint": "Rechercher et importer un modèle du catalogue",
+      "urlCard": "URL directe",
+      "urlCardHint": "Coller l'URL https d'un modèle ou d'une archive",
+      "extensionsHint": "Extensions acceptées : {{extensions}}"
+    },
+    "col": {
+      "name": "Nom",
+      "family": "Famille",
+      "formalism": "Formalisme",
+      "edition": "Édition",
+      "source": "Source",
+      "size": "Taille",
+      "action": "Action"
+    },
+    "shownCount": "({{shown}} affichés)",
+    "showMore": "Afficher plus"
   },
   "questions": {
     "title": "Questions statiques",

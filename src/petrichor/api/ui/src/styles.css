@@ -201,3 +201,57 @@
     @apply my-2 rounded-card border border-line p-2;
   }
 }
+
+/* P77: import wizard (cards, breadcrumb) and catalog data grid. */
+@layer components {
+  .wizard-nav {
+    @apply mb-2 flex items-center gap-3;
+  }
+
+  .breadcrumb {
+    @apply m-0 text-sm text-muted;
+  }
+
+  .wizard-cards {
+    @apply flex flex-wrap gap-3;
+  }
+
+  .wizard-card {
+    @apply flex w-64 flex-col gap-1 rounded-card border border-line bg-surface p-3 text-left hover:border-primary;
+  }
+
+  .wizard-card strong {
+    @apply text-primary;
+  }
+
+  .wizard-card span {
+    @apply text-sm text-muted;
+  }
+
+  .catalog-table {
+    @apply w-full border-collapse text-sm;
+  }
+
+  .catalog-table th,
+  .catalog-table td {
+    @apply border border-line px-2 py-1 text-left align-top;
+  }
+
+  .catalog-table thead th {
+    @apply bg-surface;
+  }
+
+  .catalog-sort {
+    @apply border-0 bg-transparent p-0 font-semibold text-ink hover:bg-transparent;
+  }
+
+  .catalog-filters input,
+  .catalog-filters select {
+    @apply w-full max-w-40 text-sm;
+  }
+
+  .sr-only {
+    @apply absolute h-px w-px overflow-hidden whitespace-nowrap;
+    clip: rect(0 0 0 0);
+  }
+}
