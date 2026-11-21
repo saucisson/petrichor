@@ -164,8 +164,7 @@
     "fired": "tire : {{transition}}",
     "narrationProvenance": "(provenance : {{provenance}})",
     "loading": "Chargement des vérifications…",
-    "empty": "Aucun run pour cette session.",
-    "witnessToggle": "Témoin"
+    "empty": "Aucun run pour cette session."
   },
   "synthese": {
     "title": "Synthèse",

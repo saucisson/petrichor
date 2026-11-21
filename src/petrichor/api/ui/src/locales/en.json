@@ -164,8 +164,7 @@
     "fired": "fires: {{transition}}",
     "narrationProvenance": "(provenance: {{provenance}})",
     "loading": "Loading verifications…",
-    "empty": "No runs for this session.",
-    "witnessToggle": "Witness"
+    "empty": "No runs for this session."
   },
   "synthese": {
     "title": "Summary",
