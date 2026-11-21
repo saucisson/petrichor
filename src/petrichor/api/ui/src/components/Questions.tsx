@@ -383,7 +383,7 @@ export default function Questions({ hidden, client, sessionId, reloadToken }: Qu
             <p className="status">{t("questions.status", { status: question.status })}</p>
             <CrossStatus question={question} />
             {question.covered_by !== undefined && question.covered_by !== null ? (
-              <p className="convergence covered">
+              <p className="convergence covered covered-notice">
                 {t("questions.coveredBy", { survivor: question.covered_by })}
               </p>
             ) : null}
