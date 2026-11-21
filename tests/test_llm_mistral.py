@@ -17,7 +17,7 @@ from pydantic import BaseModel, SecretStr, ValidationError
 
 from petrichor.api.app import create_app
 from petrichor.api.settings import ApiSettings
-from petrichor.llm import FormulaText, schemas
+from petrichor.llm import FormulaText, HumanMessage, schemas
 from petrichor.llm.mistral import PROMPT_TEMPLATES, MistralProvider
 from petrichor.llm.provider import DeterministicMockProvider, LLMDegradationError
 from petrichor.main import select_llm_provider
@@ -439,6 +439,35 @@ class TestPromptSchemaParity:
         """P73: the real provider validates `semantic-profile` against the schema
         WITHOUT the mock-only `wrong` field."""
         assert USAGE_SCHEMAS["semantic-profile"] is schemas.SemanticProfilePublic
+
+    def test_every_usage_sends_its_pydantic_schema_in_the_strict_response_format(
+        self,
+    ) -> None:
+        """Issue #176 drift guard, P73 form: the schema travels in the strict
+        `response_format.json_schema` of every request - prompt/schema drift
+        fails validation on the real API, and this test pins the wiring."""
+        calls: dict[str, dict] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            body = json.loads(request.content.decode("utf-8"))
+            usage = body["response_format"]["json_schema"]["name"]
+            calls[usage] = body
+            return httpx.Response(200, json=mistral_response(json.dumps(USAGE_SAMPLES[usage])))
+
+        provider = MistralProvider(api_key=SecretStr("sk-test"), http_client=fake_client(handler))
+        provider.semantic_profile(model=PHILOSOPHES3_MODEL)
+        provider.reading(model=PHILOSOPHES3_MODEL, formulas=(FormulaText("AG(philo0 thinking)"),))
+        provider.clarification(model=PHILOSOPHES3_MODEL, text=HumanMessage("un texte"))
+        provider.cluster(model=PHILOSOPHES3_MODEL)
+        provider.narrate(model=PHILOSOPHES3_MODEL, transitions=("takeL_1",))
+        assert set(calls) == set(USAGE_SCHEMAS)
+        for usage, body in calls.items():
+            response_format = body["response_format"]
+            assert response_format["type"] == "json_schema"
+            assert response_format["json_schema"]["strict"] is True
+            assert response_format["json_schema"]["name"] == usage
+            expected_schema = USAGE_SCHEMAS[usage].model_json_schema()
+            assert response_format["json_schema"]["schema"] == expected_schema
 
 
 class TestProviderSelection:
