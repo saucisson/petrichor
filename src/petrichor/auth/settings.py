@@ -16,11 +16,9 @@ class AuthSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="", extra="ignore")
 
-    auth_issuer: str = Field(
-        default="https://auth.linard.fr",
-        validation_alias="AUTH_ISSUER",
-    )
-    """The IdP issuer (``iss``); discovery is read from its well-known URL."""
+    auth_issuer: str = Field(validation_alias="AUTH_ISSUER")
+    """The IdP issuer (``iss``), required from the environment — never a hard-coded
+    default; discovery is read from its well-known URL."""
     auth_client_id: str = Field(default="", validation_alias="AUTH_CLIENT_ID")
     """The OIDC client id of this app; default accepted audience."""
     auth_client_secret: SecretStr | None = Field(

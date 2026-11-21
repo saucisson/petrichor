@@ -16,12 +16,19 @@ import base64
 import binascii
 import json
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import httpx
 import structlog
 from joserfc import jwk, jwt
-from joserfc.errors import InvalidKeyIdError, JoseError
+from joserfc.errors import (
+    BadSignatureError,
+    ExpiredTokenError,
+    InvalidClaimError,
+    InvalidKeyIdError,
+    JoseError,
+    MissingClaimError,
+)
 from joserfc.jwt import JWTClaimsRegistry
 from pydantic import BaseModel, ConfigDict
 
@@ -46,13 +53,52 @@ ACCEPTED_ALGORITHMS = ("RS256",)
 """The only accepted signing algorithm (cadrage §2 decision 4)."""
 
 
+RejectionReason = Literal[
+    "auth_disabled",
+    "malformed_token",
+    "bad_signature",
+    "unknown_kid",
+    "invalid_token",
+    "expired",
+    "invalid_issuer",
+    "invalid_audience",
+    "invalid_not_before",
+    "invalid_claims",
+    "missing_claims",
+    "discovery_unavailable",
+    "discovery_without_jwks_uri",
+    "jwks_unavailable",
+]
+"""The closed set of rejection reasons (ADR-0006): one exact reason per failure type."""
+
+_CLAIM_REASONS: dict[str, RejectionReason] = {
+    "iss": "invalid_issuer",
+    "aud": "invalid_audience",
+    "exp": "expired",
+    "nbf": "invalid_not_before",
+}
+
+
+def _claim_rejection_reason(error: JoseError) -> RejectionReason:
+    """Map a claims-registry failure to its exact reason."""
+    if isinstance(error, ExpiredTokenError):
+        return "expired"
+    if isinstance(error, MissingClaimError):
+        return "missing_claims"
+    if isinstance(error, InvalidClaimError):
+        claim = getattr(error, "claim", "")
+        reason = _CLAIM_REASONS.get(claim)
+        return reason if reason is not None else "invalid_claims"
+    return "invalid_claims"
+
+
 class TokenRejectedError(Exception):
     """A typed rejection of an access token, with the exact reason."""
 
-    def __init__(self, *, reason: str) -> None:
+    def __init__(self, *, reason: RejectionReason) -> None:
         """A typed rejection carrying the exact reason (signature, expiration, audience)."""
         super().__init__(f"Access token rejected: {reason}.")
-        self.reason = reason
+        self.reason: RejectionReason = reason
 
 
 class TokenClaims(BaseModel):
@@ -113,13 +159,22 @@ class TokenVerifier:
         try:
             response = self._client.get(url)
             response.raise_for_status()
-            document = {key: str(value) for key, value in response.json().items()}
+            payload = response.json()
+            if not isinstance(payload, dict):
+                kind = type(payload).__name__
+                raise ValueError(f"discovery document is not a JSON object: {kind}")
+            document = {key: str(value) for key, value in payload.items()}
         except (httpx.HTTPError, ValueError) as error:
             logger.warning(
                 "auth_discovery_failed", issuer=self._settings.auth_issuer, reason=repr(error)
             )
             raise TokenRejectedError(reason="discovery_unavailable") from error
         if "jwks_uri" not in document:
+            logger.warning(
+                "auth_discovery_failed",
+                issuer=self._settings.auth_issuer,
+                reason="missing_jwks_uri",
+            )
             raise TokenRejectedError(reason="discovery_without_jwks_uri")
         self._discovery_cache = (now, document)
         return document
@@ -159,16 +214,19 @@ class TokenVerifier:
             decoded = jwt.decode(token, keyset, algorithms=list(ACCEPTED_ALGORITHMS))
         except InvalidKeyIdError:
             # Unknown kid: refresh the JWKS once, then re-try.
-            logger.info("auth_jwks_refresh_on_unknown_kid", kid=header_kid)
+            logger.debug("auth_jwks_refresh_on_unknown_kid", kid=header_kid)
             try:
                 keyset = self._jwks(force_refresh=True)
                 decoded = jwt.decode(token, keyset, algorithms=list(ACCEPTED_ALGORITHMS))
             except JoseError as retry_error:
                 logger.warning("auth_token_rejected", reason=repr(retry_error))
                 raise TokenRejectedError(reason="unknown_kid") from retry_error
-        except JoseError as error:
+        except BadSignatureError as error:
             logger.warning("auth_token_rejected", reason=repr(error))
-            raise TokenRejectedError(reason="bad_signature_or_key") from error
+            raise TokenRejectedError(reason="bad_signature") from error
+        except (JoseError, ValueError) as error:
+            logger.warning("auth_token_rejected", reason=repr(error))
+            raise TokenRejectedError(reason="invalid_token") from error
         registry = JWTClaimsRegistry(
             leeway=CLOCK_LEEWAY_SECONDS,
             iss={"essential": True, "value": self._settings.auth_issuer},
@@ -179,8 +237,9 @@ class TokenVerifier:
         try:
             registry.validate(decoded.claims)
         except JoseError as error:
-            logger.warning("auth_token_rejected", reason=repr(error))
-            raise TokenRejectedError(reason="invalid_claims") from error
+            reason = _claim_rejection_reason(error)
+            logger.warning("auth_token_rejected", reason=repr(error), rejection=reason)
+            raise TokenRejectedError(reason=reason) from error
         claims = decoded.claims
         aud = claims.get("aud")
         aud_list = [aud] if isinstance(aud, str) else list(aud or [])
@@ -208,6 +267,7 @@ __all__ = [
     "DEFAULT_HTTP_TIMEOUT_SECONDS",
     "DISCOVERY_CACHE_TTL_SECONDS",
     "JWKS_CACHE_TTL_SECONDS",
+    "RejectionReason",
     "TokenClaims",
     "TokenRejectedError",
     "TokenVerifier",
