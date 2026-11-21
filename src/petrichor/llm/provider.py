@@ -36,6 +36,10 @@ logger = structlog.get_logger(__name__)
 MAX_LLM_ATTEMPTS = 2
 """Bounded re-request count before explicit degradation (spec §15: 2 tentatives max)."""
 
+MAX_RECORDED_CALL_STATES = 100
+"""Bound on the recorded call states (P75): only the most recent calls are kept,
+so the /v1/llm/calls payload and the memory stay bounded on a long-lived server."""
+
 DEFAULT_GOLDEN_ROOT = Path(__file__).parent / "golden"
 """The golden corpus shipped with the product, keyed by model content hash."""
 
@@ -54,6 +58,12 @@ class LLMError(Exception):
 
 class LLMDegradationError(LLMError):
     """Explicit degradation: no valid scripted answer after the bounded re-requests."""
+
+
+def record_call_state(states: list[CallState], state: CallState) -> None:
+    """Append a call state, keeping only the most recent ``MAX_RECORDED_CALL_STATES``."""
+    states.append(state)
+    del states[:-MAX_RECORDED_CALL_STATES]
 
 
 class CallState(BaseModel):
@@ -228,24 +238,26 @@ class DeterministicMockProvider(LLMProvider):
                 )
                 continue
             logger.debug("llm_golden_served", usage=usage, model_hash=model_hash, attempt=attempt)
-            self._call_states.append(
+            record_call_state(
+                self._call_states,
                 CallState(
                     usage=usage,
                     model="mock",
                     started_at=started_at,
                     ended_at=datetime.now(UTC),
-                )
+                ),
             )
             return output
         logger.error("llm_degraded", usage=usage, model_hash=model_hash, attempts=MAX_LLM_ATTEMPTS)
-        self._call_states.append(
+        record_call_state(
+            self._call_states,
             CallState(
                 usage=usage,
                 model="mock",
                 started_at=started_at,
                 ended_at=datetime.now(UTC),
                 error="degraded",
-            )
+            ),
         )
         raise LLMDegradationError(
             f"No valid golden file for usage {usage!r} of model {model_hash}"

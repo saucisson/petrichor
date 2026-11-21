@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 import httpx
 import pytest
+import structlog
 from pydantic import SecretStr
 from tests.test_llm_mistral import fake_client, mistral_response
 
@@ -21,12 +22,14 @@ from petrichor.api.app import create_app
 from petrichor.api.settings import ApiSettings
 from petrichor.llm.mistral import MistralProvider
 from petrichor.llm.provider import (
+    MAX_RECORDED_CALL_STATES,
     CallState,
     DeterministicMockProvider,
     FormulaText,
     HumanMessage,
     LLMDegradationError,
     LLMProvider,
+    record_call_state,
 )
 from petrichor.llm.routing import USAGE_MODEL_ROUTING, ModelRoute
 from petrichor.llm.schemas import (
@@ -171,6 +174,22 @@ class TestCallState:
         assert states[0].in_progress is False
         assert states[0].ended_at is not None
 
+    def test_recorded_call_states_are_bounded(self) -> None:
+        """The /v1/llm/calls history keeps only the most recent calls (bounded payload)."""
+        states: list[CallState] = []
+        now = datetime.now(UTC)
+        for _index in range(MAX_RECORDED_CALL_STATES + 10):
+            record_call_state(
+                states,
+                CallState(
+                    usage="narration",
+                    model="mock",
+                    started_at=now,
+                    ended_at=now,
+                ),
+            )
+            assert len(states) <= MAX_RECORDED_CALL_STATES
+
 
 class TestLlmCallsEndpoint:
     def test_calls_are_exposed_with_in_progress_flags(self) -> None:
@@ -203,6 +222,23 @@ class TestLlmCallsEndpoint:
         response = client.get("/v1/llm/calls", headers=AUTH_HEADERS)
         assert response.status_code == 503
         assert response.json()["extensions"]["reason"] == "llm_not_configured"
+
+    def test_calls_endpoint_debug_event_is_pinned(self) -> None:
+        """ADR-0005: the api_llm_calls_read event is part of the narration contract."""
+        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+        app = create_app(
+            settings=settings,
+            store=ModelStore(),
+            run_store=RunStore(),
+            runner=None,
+            llm_provider=DeterministicMockProvider(),
+        )
+        client = httpx.Client(transport=httpx.WSGITransport(app=app), base_url="http://testserver")
+        with structlog.testing.capture_logs() as logs:
+            response = client.get("/v1/llm/calls", headers=AUTH_HEADERS)
+        assert response.status_code == 200
+        events = [event["event"] for event in logs]
+        assert "api_llm_calls_read" in events
 
     def test_calls_requires_the_api_key(self) -> None:
         settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))

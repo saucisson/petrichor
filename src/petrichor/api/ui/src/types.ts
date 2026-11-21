@@ -1,8 +1,15 @@
 // API payload types (spec §19.4): the server is the source of truth - these
 // are read-only views of its responses, never verdicts computed client-side.
 
+export type LlmUsage =
+  | "semantic-profile"
+  | "reading"
+  | "clarification"
+  | "cluster"
+  | "narration";
+
 export interface LlmCallState {
-  usage: string;
+  usage: LlmUsage;
   model: string;
   started_at: string;
   ended_at: string | null;

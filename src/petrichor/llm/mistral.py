@@ -41,6 +41,7 @@ from petrichor.llm.provider import (
     LLMDegradationError,
     LLMError,
     LLMProvider,
+    record_call_state,
 )
 from petrichor.llm.routing import (
     USAGE_MODEL_ROUTING,
@@ -242,7 +243,9 @@ class MistralProvider(LLMProvider):
         route = route or route_for(self._routing, usage=usage)
         # P75: the call state is observable while the request is in flight.
         started_at = datetime.now(UTC)
-        self._call_states.append(CallState(usage=usage, model=route.model, started_at=started_at))
+        record_call_state(
+            self._call_states, CallState(usage=usage, model=route.model, started_at=started_at)
+        )
         state_index = len(self._call_states) - 1
         prompt = PROMPT_TEMPLATES[usage]
         user_content = json.dumps(
