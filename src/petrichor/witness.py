@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from petrichor.llm.provider import LLMProvider
-    from petrichor.petri_canonical import ContentHash, JsonValue
+    from petrichor.petri_canonical import CanonicalModel, JsonValue
 
 logger = structlog.get_logger(__name__)
 
@@ -183,7 +183,7 @@ def witness_record_of(*, document: WitnessDocument) -> WitnessRecord:
 def narrate_steps(
     *,
     provider: LLMProvider,
-    model_hash: ContentHash,
+    model: CanonicalModel,
     steps: tuple[WitnessStep, ...],
 ) -> tuple[Narration, ...]:
     """One LLM narration per fired step, labeled ``provenance: llm`` (spec §16).
@@ -198,9 +198,11 @@ def narrate_steps(
     # corpus is stored once (P32). A transition absent from the corpus gets
     # no narration - never an invented sentence.
     try:
-        corpus = provider.narrate(model_hash=model_hash, transitions=fired)
+        corpus = provider.narrate(model=model, transitions=fired)
     except LLMDegradationError:
-        logger.warning("witness_narration_degraded", model_hash=model_hash, steps=len(steps))
+        logger.warning(
+            "witness_narration_degraded", model_hash=model.content_hash, steps=len(steps)
+        )
         return ()
     narrations: list[Narration] = []
     for step in steps:
@@ -210,7 +212,7 @@ def narrate_steps(
         if text is None:
             logger.warning(
                 "witness_narration_not_scripted",
-                model_hash=model_hash,
+                model_hash=model.content_hash,
                 transition=step.fired,
                 step_index=step.index,
             )
@@ -218,7 +220,7 @@ def narrate_steps(
         narrations.append(Narration(step_index=step.index, text=text, provenance="llm"))
     logger.debug(
         "witness_narrated",
-        model_hash=model_hash,
+        model_hash=model.content_hash,
         steps=len(steps),
         narrations=len(narrations),
     )
