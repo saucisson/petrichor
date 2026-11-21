@@ -15,6 +15,10 @@ verdict (spec §19.4).
 The real provider's `semantic-profile` schema excludes the mock-only
 ``wrong`` field (annexe B §B.5): an answer carrying it fails validation.
 
+P74 (ADR-0108): the model is routed per usage from a pinned, versioned
+routing table (``petrichor.llm.routing.USAGE_MODEL_ROUTING``) — every
+version is exact, ``-latest`` aliases are rejected explicitly (replay P46).
+
 Token usage is accumulated per (usage, model) couple and exposed via
 ``usage_totals``: the LLM cost is displayed apart from the tool-time
 budget, which counts only tool seconds (spec §12.4).
@@ -36,23 +40,30 @@ from petrichor.llm.provider import (
     LLMError,
     LLMProvider,
 )
+from petrichor.llm.routing import (
+    USAGE_MODEL_ROUTING,
+    ModelRoute,
+    route_for,
+    validate_routing,
+)
 from petrichor.llm.schemas import (
     Clarification,
     Cluster,
     ClusterList,
     FormulaReadings,
+    LlmUsage,
     NarrationCorpus,
     SemanticProfilePublic,
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from petrichor.petri_canonical import CanonicalModel, JsonValue
 
 logger = structlog.get_logger(__name__)
 
 MISTRAL_API_URL = "https://api.mistral.ai/v1/chat/completions"
-DEFAULT_MISTRAL_MODEL = "mistral-small-latest"
-"""The default Mistral model of the real provider (configurable, spec §8)."""
 
 DEFAULT_SESSION_LANGUAGE = "fr"
 """The default session language of the payloads (annexe B §B.1: ``language: "fr"``)."""
@@ -156,14 +167,20 @@ class MistralProvider(LLMProvider):
         self,
         *,
         api_key: SecretStr,
-        model: str = DEFAULT_MISTRAL_MODEL,
         http_client: httpx.Client | None = None,
         api_url: str = MISTRAL_API_URL,
         language: str = DEFAULT_SESSION_LANGUAGE,
+        routing: Mapping[LlmUsage, ModelRoute] | None = None,
     ) -> None:
-        """Bind the provider to a key, a model, an HTTP client and a session language."""
+        """Bind the provider to a key, an HTTP client, a session language and a routing.
+
+        P74 (ADR-0108): the model is routed per usage from the pinned,
+        versioned routing table; any ``-latest`` alias in the configuration
+        is rejected explicitly (guard test, replay P46).
+        """
         self._api_key = api_key
-        self._model = model
+        self._routing: dict[LlmUsage, ModelRoute] = dict(routing or USAGE_MODEL_ROUTING)
+        validate_routing(self._routing)
         self._api_url = api_url
         self._language = language
         self._client = http_client or httpx.Client(timeout=60.0)
@@ -175,10 +192,9 @@ class MistralProvider(LLMProvider):
         self._by_usage_model: dict[tuple[str, str], dict[str, int]] = {}
         self._archive: list[dict[str, object]] = []
 
-    @property
-    def model_version(self) -> str:
-        """The exact model version fingerprint of this provider (replay P46, P72)."""
-        return self._model
+    def routing_fingerprint(self) -> dict[str, str]:
+        """The exact pinned version per usage (replay P46, P74/ADR-0108)."""
+        return {usage: route.version for usage, route in sorted(self._routing.items())}
 
     def archived_calls(self) -> tuple[dict[str, object], ...]:
         """Archived request/response pairs with their (model, version) fingerprint (P72, P46)."""
@@ -188,7 +204,7 @@ class MistralProvider(LLMProvider):
         """The accumulated LLM cost per (usage, model) couple (spec §12.4, P72)."""
         return {
             "provider": "mistral",
-            "model": self._model,
+            "routing": self.routing_fingerprint(),
             "calls": self._calls,
             "by_usage_model": {
                 f"{usage}|{model}": dict(stats)
@@ -202,17 +218,21 @@ class MistralProvider(LLMProvider):
     def _complete(
         self,
         *,
-        usage: str,
+        usage: LlmUsage,
         digest: dict[str, JsonValue],
         data: dict[str, JsonValue],
         output_type: type[OutputType],
+        route: ModelRoute | None = None,
     ) -> OutputType:
         """One chat completion (two messages) with bounded re-request and schema validation.
 
         P73 (annexe B §B.1): message 1 is the system prompt of the usage,
         verbatim; message 2 is the canonical JSON payload
         ``{"digest": ..., "data": ..., "language": ...}``.
+        P74 (ADR-0108): the model of the request is the pinned route of the
+        usage, and the archive carries its exact (model, version).
         """
+        route = route or route_for(self._routing, usage=usage)
         prompt = PROMPT_TEMPLATES[usage]
         user_content = json.dumps(
             {"digest": digest, "data": data, "language": self._language},
@@ -223,7 +243,7 @@ class MistralProvider(LLMProvider):
         for attempt in range(1, MAX_LLM_ATTEMPTS + 1):
             try:
                 request_body = {
-                    "model": self._model,
+                    "model": route.model,
                     "messages": [
                         {"role": "system", "content": prompt},
                         {"role": "user", "content": user_content},
@@ -261,7 +281,7 @@ class MistralProvider(LLMProvider):
                 self._completion_tokens += completion_tokens
                 self._total_tokens += total_tokens
                 couple = self._by_usage_model.setdefault(
-                    (usage, self._model), {"calls": 0, "total_tokens": 0}
+                    (usage, route.model), {"calls": 0, "total_tokens": 0}
                 )
                 couple["calls"] += 1
                 couple["total_tokens"] += total_tokens
@@ -270,8 +290,8 @@ class MistralProvider(LLMProvider):
                 self._archive.append(
                     {
                         "usage": usage,
-                        "model": self._model,
-                        "version": self._model,
+                        "model": route.model,
+                        "version": route.version,
                         "request": request_body,
                         "response": payload,
                     }
@@ -279,7 +299,8 @@ class MistralProvider(LLMProvider):
                 logger.debug(
                     "llm_mistral_call_archived",
                     usage=usage,
-                    model=self._model,
+                    model=route.model,
+                    version=route.version,
                     attempt=attempt,
                     total_tokens=total_tokens,
                 )
@@ -367,9 +388,30 @@ class MistralProvider(LLMProvider):
         """
         digest = net_digest(model, "trace", trace=transitions)
         data: dict[str, JsonValue] = {"transitions": list(transitions)}
-        corpus = self._complete(
-            usage="narration", digest=digest, data=data, output_type=NarrationCorpus
-        )
+        route = route_for(self._routing, usage="narration")
+        try:
+            corpus = self._complete(
+                usage="narration",
+                digest=digest,
+                data=data,
+                output_type=NarrationCorpus,
+                route=route,
+            )
+        except LLMDegradationError:
+            if route.fallback is None:
+                raise
+            logger.warning(
+                "llm_narration_fallback",
+                primary=route.model,
+                fallback=route.fallback.model,
+            )
+            corpus = self._complete(
+                usage="narration",
+                digest=digest,
+                data=data,
+                output_type=NarrationCorpus,
+                route=route.fallback,
+            )
         invented = set(corpus.narrations) - set(transitions)
         if invented:
             raise LLMDegradationError(
@@ -384,7 +426,6 @@ class MistralProvider(LLMProvider):
 
 
 __all__ = [
-    "DEFAULT_MISTRAL_MODEL",
     "DEFAULT_SESSION_LANGUAGE",
     "MAX_TOKENS_PER_USAGE",
     "MISTRAL_API_URL",

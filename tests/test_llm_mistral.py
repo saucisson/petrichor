@@ -20,6 +20,7 @@ from petrichor.api.settings import ApiSettings
 from petrichor.llm import FormulaText, HumanMessage, schemas
 from petrichor.llm.mistral import PROMPT_TEMPLATES, MistralProvider
 from petrichor.llm.provider import DeterministicMockProvider, LLMDegradationError
+from petrichor.llm.routing import USAGE_MODEL_ROUTING, ModelRoute
 from petrichor.main import select_llm_provider
 from petrichor.model_store import ModelStore
 from petrichor.pnml_import import import_pnml
@@ -48,6 +49,14 @@ def mistral_response(content: str, *, total_tokens: int = 42) -> dict:
 def fake_client(handler: Callable[[httpx.Request], httpx.Response]) -> httpx.Client:
     """An httpx client whose POST is served by the handler."""
     return httpx.Client(transport=httpx.MockTransport(handler))
+
+
+NO_FALLBACK_ROUTING: dict = {
+    **USAGE_MODEL_ROUTING,
+    "narration": ModelRoute(model="ministral-14b-2512", version="ministral-14b-2512"),
+}
+"""The pinned routing with the narration fallback removed, to pin the bounded
+re-request (2 attempts per document per model) in isolation (P74)."""
 
 
 class TestMistralProvider:
@@ -82,7 +91,7 @@ class TestMistralProvider:
         assert totals["calls"] == 1
         assert totals["total_tokens"] == 42
         couple = totals["by_usage_model"]
-        assert couple == {"narration|mistral-small-latest": {"calls": 1, "total_tokens": 42}}
+        assert couple == {"narration|ministral-14b-2512": {"calls": 1, "total_tokens": 42}}
 
     def test_invalid_output_degrades_after_exactly_two_attempts(self) -> None:
         calls = 0
@@ -92,7 +101,11 @@ class TestMistralProvider:
             calls += 1
             return httpx.Response(200, json=mistral_response("not json at all"))
 
-        provider = MistralProvider(api_key=SecretStr("sk-test"), http_client=fake_client(handler))
+        provider = MistralProvider(
+            api_key=SecretStr("sk-test"),
+            http_client=fake_client(handler),
+            routing=NO_FALLBACK_ROUTING,
+        )
         with pytest.raises(LLMDegradationError):
             provider.narrate(model=PHILOSOPHES3_MODEL, transitions=("takeL_1",))
         assert calls == 2
@@ -159,7 +172,7 @@ class TestOneDocumentOneCall:
         assert body["response_format"]["json_schema"]["name"] == "reading"
         totals = provider.usage_totals()
         couple = totals["by_usage_model"]
-        assert couple == {"reading|mistral-small-latest": {"calls": 1, "total_tokens": 42}}
+        assert couple == {"reading|mistral-small-2603": {"calls": 1, "total_tokens": 42}}
 
     def test_one_narrate_call_for_the_whole_witness_is_one_http_request(self) -> None:
         requests: list[httpx.Request] = []
@@ -188,7 +201,6 @@ class TestOneDocumentOneCall:
 
         provider = MistralProvider(
             api_key=SecretStr("sk-test"),
-            model="mistral-small-2603",
             http_client=fake_client(handler),
         )
         provider.narrate(model=PHILOSOPHES3_MODEL, transitions=("takeL_1",))
@@ -196,10 +208,12 @@ class TestOneDocumentOneCall:
         assert len(archive) == 1
         entry = archive[0]
         assert entry["usage"] == "narration"
-        assert entry["model"] == "mistral-small-2603"
-        assert entry["version"] == provider.model_version == "mistral-small-2603"
+        # P74 (ADR-0108): the routed pinned model of the narration usage.
+        assert entry["model"] == "ministral-14b-2512"
+        fingerprint = provider.routing_fingerprint()
+        assert entry["version"] == fingerprint["narration"] == "ministral-14b-2512"
         assert "request" in entry and "response" in entry
-        assert entry["request"]["model"] == "mistral-small-2603"  # rejeu P46
+        assert entry["request"]["model"] == "ministral-14b-2512"  # rejeu P46
 
 
 FORBIDDEN_VERDICT_WORDS = (
@@ -526,7 +540,11 @@ class TestLlmLogNarration:
         def handler(request: httpx.Request) -> httpx.Response:
             return httpx.Response(200, json=mistral_response("not json"))
 
-        provider = MistralProvider(api_key=SecretStr("sk-test"), http_client=fake_client(handler))
+        provider = MistralProvider(
+            api_key=SecretStr("sk-test"),
+            http_client=fake_client(handler),
+            routing=NO_FALLBACK_ROUTING,
+        )
         with structlog.testing.capture_logs() as logs, pytest.raises(LLMDegradationError):
             provider.narrate(model=PHILOSOPHES3_MODEL, transitions=("takeL_1",))
         events = [event["event"] for event in logs]
