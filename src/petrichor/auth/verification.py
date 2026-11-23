@@ -111,6 +111,8 @@ class TokenClaims(BaseModel):
     aud: list[str]
     exp: int
     nbf: int | None = None
+    nonce: str | None = None
+    """The OIDC ``nonce`` claim, when the token carries one (web v1 login, #207)."""
 
 
 def _header_kid(token: str) -> str | None:
@@ -250,6 +252,7 @@ class TokenVerifier:
                 aud=aud_list,
                 exp=int(claims["exp"]),
                 nbf=int(claims["nbf"]) if claims.get("nbf") is not None else None,
+                nonce=str(claims["nonce"]) if claims.get("nonce") is not None else None,
             )
         except (KeyError, TypeError, ValueError) as error:
             logger.warning("auth_token_rejected", reason=repr(error))

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import httpx
 import structlog.testing
-from pydantic import SecretStr
+from api_test_support import accepting_verifier
 
 from petrichor.api.app import create_app
 from petrichor.api.settings import ApiSettings
@@ -15,20 +15,21 @@ from petrichor.session_store import SessionStore
 FIXTURES = Path(__file__).parent / "fixtures"
 PHILOSOPHES3_PNML = (FIXTURES / "philosophes3.pnml").read_text(encoding="utf-8")
 
-TEST_API_KEY = "test-key"
-AUTH_HEADERS = {"X-API-Key": TEST_API_KEY}
+TEST_PAT = "test-pat"
+AUTH_HEADERS = {"Authorization": f"Bearer {TEST_PAT}"}
 JSON_HEADERS = {**AUTH_HEADERS, "Content-Type": "application/json"}
 PNML_HEADERS = {**AUTH_HEADERS, "Content-Type": "application/pnml+xml"}
 
 
 def build_client(tmp_path: Path, *, session_store: SessionStore | None = None) -> httpx.Client:
     """Build a test client with a session store bound to tmp_path."""
-    settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+    settings = ApiSettings()
     store = ModelStore()
     run_store = RunStore()
     if session_store is None:
         session_store = SessionStore(directory=tmp_path / "sessions")
     app = create_app(
+        token_verifier=accepting_verifier(),
         settings=settings,
         store=store,
         run_store=run_store,

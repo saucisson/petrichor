@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 import httpx
 import pytest
 import structlog
+from api_test_support import accepting_verifier
 from pydantic import SecretStr
 from tests.test_llm_mistral import fake_client, mistral_response
 
@@ -52,8 +53,8 @@ PHILOSOPHES3_MODEL = import_pnml(
     text=(FIXTURES / "philosophes3-maquette.pnml").read_text(encoding="utf-8")
 )
 
-TEST_API_KEY = "test-key"
-AUTH_HEADERS = {"X-API-Key": TEST_API_KEY}
+TEST_PAT = "test-pat"
+AUTH_HEADERS = {"Authorization": f"Bearer {TEST_PAT}"}
 
 NARRATION_SAMPLE = {"narrations": {"takeL_1": "Le philosophe 1 prend la fourchette."}}
 
@@ -195,8 +196,9 @@ class TestLlmCallsEndpoint:
     def test_calls_are_exposed_with_in_progress_flags(self) -> None:
         provider = DeterministicMockProvider()
         provider.narrate(model=PHILOSOPHES3_MODEL, transitions=("takeL_1",))
-        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+        settings = ApiSettings()
         app = create_app(
+            token_verifier=accepting_verifier(),
             settings=settings,
             store=ModelStore(),
             run_store=RunStore(),
@@ -216,8 +218,14 @@ class TestLlmCallsEndpoint:
         assert call["error"] is None
 
     def test_calls_without_provider_is_503(self) -> None:
-        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
-        app = create_app(settings=settings, store=ModelStore(), run_store=RunStore(), runner=None)
+        settings = ApiSettings()
+        app = create_app(
+            token_verifier=accepting_verifier(),
+            settings=settings,
+            store=ModelStore(),
+            run_store=RunStore(),
+            runner=None,
+        )
         client = httpx.Client(transport=httpx.WSGITransport(app=app), base_url="http://testserver")
         response = client.get("/v1/llm/calls", headers=AUTH_HEADERS)
         assert response.status_code == 503
@@ -225,8 +233,9 @@ class TestLlmCallsEndpoint:
 
     def test_calls_endpoint_debug_event_is_pinned(self) -> None:
         """ADR-0005: the api_llm_calls_read event is part of the narration contract."""
-        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+        settings = ApiSettings()
         app = create_app(
+            token_verifier=accepting_verifier(),
             settings=settings,
             store=ModelStore(),
             run_store=RunStore(),
@@ -241,8 +250,9 @@ class TestLlmCallsEndpoint:
         assert "api_llm_calls_read" in events
 
     def test_calls_requires_the_api_key(self) -> None:
-        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+        settings = ApiSettings()
         app = create_app(
+            token_verifier=accepting_verifier(),
             settings=settings,
             store=ModelStore(),
             run_store=RunStore(),

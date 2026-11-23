@@ -12,7 +12,7 @@ from pathlib import Path
 
 import httpx
 import structlog.testing
-from pydantic import SecretStr
+from api_test_support import accepting_verifier
 
 from petrichor.api import create_app
 from petrichor.api.settings import ApiSettings
@@ -28,8 +28,8 @@ from petrichor.pnml_import import import_pnml
 from petrichor.run_store import RunStore
 
 FIXTURES = Path(__file__).parent / "fixtures"
-TEST_API_KEY = "test-key"
-AUTH_HEADERS = {"X-API-Key": TEST_API_KEY}
+TEST_PAT = "test-pat"
+AUTH_HEADERS = {"Authorization": f"Bearer {TEST_PAT}"}
 JSON_HEADERS = {**AUTH_HEADERS, "Content-Type": "application/json"}
 PROBLEM_JSON_CONTENT_TYPE = "application/problem+json"
 TERMINAL_POLL_SECONDS = 5.0
@@ -72,12 +72,13 @@ class FakeQualificationLookup:
 
 def build_client(qualification: FakeQualificationLookup | None) -> tuple[httpx.Client, str]:
     """Wire the WSGI app with a known key, the Philosophes-3 model and a runner."""
-    settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+    settings = ApiSettings()
     store = ModelStore()
     model, _ = store.save(
         model=import_pnml(text=(FIXTURES / "philosophes3.pnml").read_text(encoding="utf-8"))
     )
     app = create_app(
+        token_verifier=accepting_verifier(),
         settings=settings,
         store=store,
         run_store=RunStore(),

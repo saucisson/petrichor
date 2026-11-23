@@ -12,7 +12,7 @@ from pathlib import Path
 import httpx
 import pytest
 import structlog.testing
-from pydantic import SecretStr
+from api_test_support import accepting_verifier
 
 from petrichor.api import create_app
 from petrichor.api.settings import ApiSettings
@@ -32,8 +32,8 @@ from petrichor.run_store import RunStore
 
 FIXTURES = Path(__file__).parent / "fixtures"
 PHILOSOPHES_PNML = (FIXTURES / "philosophes3.pnml").read_text(encoding="utf-8")
-TEST_API_KEY = "test-key"
-AUTH_HEADERS = {"X-API-Key": TEST_API_KEY}
+TEST_PAT = "test-pat"
+AUTH_HEADERS = {"Authorization": f"Bearer {TEST_PAT}"}
 
 
 def make_entry(*, name: str, source: str = "pnmcc-2026") -> CatalogEntry:
@@ -108,8 +108,9 @@ class FakeCatalog:
 @pytest.fixture
 def client() -> httpx.Client:
     """An HTTP client wired to the WSGI app with a fake catalog."""
-    settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+    settings = ApiSettings()
     app = create_app(
+        token_verifier=accepting_verifier(),
         settings=settings,
         store=ModelStore(),
         run_store=RunStore(),
@@ -122,8 +123,9 @@ def client() -> httpx.Client:
 @pytest.fixture
 def unavailable_client() -> httpx.Client:
     """An HTTP client wired to an unavailable catalog."""
-    settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+    settings = ApiSettings()
     app = create_app(
+        token_verifier=accepting_verifier(),
         settings=settings,
         store=ModelStore(),
         run_store=RunStore(),
@@ -273,7 +275,7 @@ class TestCatalogQueryDecoding:
         assert response.json()["total"] == 1
 
     def test_plus_decodes_to_space_in_search(self) -> None:
-        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+        settings = ApiSettings()
         spaced = FakeCatalog()
         spaced._entries.append(
             CatalogEntry(
@@ -287,6 +289,7 @@ class TestCatalogQueryDecoding:
             )
         )
         app = create_app(
+            token_verifier=accepting_verifier(),
             settings=settings,
             store=ModelStore(),
             run_store=RunStore(),

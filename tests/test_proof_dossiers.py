@@ -9,7 +9,7 @@
 from pathlib import Path
 
 import httpx
-from pydantic import SecretStr
+from api_test_support import accepting_verifier
 
 from petrichor.api.app import create_app
 from petrichor.api.settings import ApiSettings
@@ -30,8 +30,8 @@ from petrichor.triage import QuestionTriage
 FIXTURES = Path(__file__).parent / "fixtures"
 PHILOSOPHES3_PNML = (FIXTURES / "philosophes3.pnml").read_text(encoding="utf-8")
 
-TEST_API_KEY = "test-key"
-AUTH_HEADERS = {"X-API-Key": TEST_API_KEY}
+TEST_PAT = "test-pat"
+AUTH_HEADERS = {"Authorization": f"Bearer {TEST_PAT}"}
 JSON_HEADERS = {**AUTH_HEADERS, "Content-Type": "application/json"}
 PNML_HEADERS = {**AUTH_HEADERS, "Content-Type": "application/pnml+xml"}
 CONTRACT_HEADERS = {**AUTH_HEADERS, "Accept": "application/contract+json; version=1.0"}
@@ -50,11 +50,12 @@ WITNESS = {
 
 def build_client(tmp_path: Path) -> tuple[httpx.Client, RunStore, SessionStore, ProfileArbitrator]:
     """Wire the app with every session-scoped store bound to tmp_path."""
-    settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+    settings = ApiSettings()
     session_store = SessionStore(directory=tmp_path / "sessions")
     run_store = RunStore()
     arbitrator = ProfileArbitrator()
     app = create_app(
+        token_verifier=accepting_verifier(),
         settings=settings,
         store=ModelStore(),
         run_store=run_store,

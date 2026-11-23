@@ -29,19 +29,19 @@ if TYPE_CHECKING:
 import httpx
 import pytest
 import structlog
-from pydantic import SecretStr
+from api_test_support import VALID_CLAIMS, accepting_verifier
 from test_e2e_p2 import (
     AUTH_HEADERS,
     CONTRACT_HEADERS,
     E2E_ENGINE_TIMEOUT,
     JSON_HEADERS,
-    TEST_API_KEY,
     _prebuild_engine_images,
     sample_profile,
 )
 
 from petrichor.api.app import WSGIApp, create_app
 from petrichor.api.settings import ApiSettings
+from petrichor.api.web_auth import WebSessionStore
 from petrichor.arbitration import ArbitrationStore
 from petrichor.convergence import ConvergenceStore
 from petrichor.engines.api_runner import VerifypnCheckRunner
@@ -72,11 +72,15 @@ CHECK_TERMINAL_TIMEOUT = 360.0
 PLAYWRIGHT_TIMEOUT = 900.0
 
 
-def _build_ui_app(*, tmp_path: Path, arbitrator: ProfileArbitrator) -> WSGIApp:
+def _build_ui_app(
+    *, tmp_path: Path, arbitrator: ProfileArbitrator, web_sessions: WebSessionStore
+) -> WSGIApp:
     """The real API wired to the real verifypn compose engine, serving /ui/."""
-    settings = ApiSettings(api_key=SecretStr(TEST_API_KEY), check_timeout_seconds=300)
+    settings = ApiSettings(check_timeout_seconds=300)
     return create_app(
         settings=settings,
+        token_verifier=accepting_verifier(),
+        web_sessions=web_sessions,
         store=ModelStore(),
         run_store=RunStore(),
         runner=VerifypnCheckRunner(archive=RunArchive(directory=tmp_path / "runs-verifypn")),
@@ -184,7 +188,12 @@ def test_ui_e2e_full_parcours_in_a_real_browser(
     _prebuild_engine_images()
 
     arbitrator = ProfileArbitrator()
-    app = _build_ui_app(tmp_path=tmp_path, arbitrator=arbitrator)
+    web_sessions = WebSessionStore()
+    app = _build_ui_app(tmp_path=tmp_path, arbitrator=arbitrator, web_sessions=web_sessions)
+    # Web v1 (issue #207): the browser authenticates with the session cookie,
+    # minted server-side here (no IdP in the e2e harness).
+    browser_session = web_sessions.create(claims=VALID_CLAIMS)
+    monkeypatch.setenv("PETRICHOR_UI_SESSION_COOKIE", browser_session.session_id)
     server: WSGIServer = make_server(UI_HOST, UI_PORT, app)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
@@ -201,7 +210,7 @@ def test_ui_e2e_full_parcours_in_a_real_browser(
                 **os.environ,
                 "PATH": os.pathsep.join([str(Path(node).parent), os.environ.get("PATH", "")]),
                 "PETRICHOR_UI_BASE_URL": UI_BASE_URL,
-                "PETRICHOR_UI_API_KEY": TEST_API_KEY,
+                "PETRICHOR_UI_SESSION_COOKIE": os.environ.get("PETRICHOR_UI_SESSION_COOKIE", ""),
                 "PETRICHOR_PNML_FIXTURE": str(PNML_FIXTURE),
             }
             result = subprocess.run(  # noqa: S603 - fixed argv, no shell

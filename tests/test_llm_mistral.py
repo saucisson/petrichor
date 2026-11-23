@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 import httpx
 import pytest
 import structlog.testing
+from api_test_support import accepting_verifier
 from pydantic import BaseModel, SecretStr, ValidationError
 
 from petrichor.api.app import create_app
@@ -29,8 +30,8 @@ from petrichor.run_store import RunStore
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-TEST_API_KEY = "test-key"
-AUTH_HEADERS = {"X-API-Key": TEST_API_KEY}
+TEST_PAT = "test-pat"
+AUTH_HEADERS = {"Authorization": f"Bearer {TEST_PAT}"}
 FIXTURES = Path(__file__).parent / "fixtures"
 PHILOSOPHES3_MODEL = import_pnml(
     text=(FIXTURES / "philosophes3-maquette.pnml").read_text(encoding="utf-8")
@@ -486,19 +487,16 @@ class TestPromptSchemaParity:
 
 class TestProviderSelection:
     def test_mock_is_the_default(self) -> None:
-        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+        settings = ApiSettings()
         assert isinstance(select_llm_provider(settings=settings), DeterministicMockProvider)
 
     def test_mistral_without_key_fails_at_startup(self) -> None:
-        settings = ApiSettings(
-            api_key=SecretStr(TEST_API_KEY), llm_provider="mistral", mistral_api_key=None
-        )
+        settings = ApiSettings(llm_provider="mistral", mistral_api_key=None)
         with pytest.raises(SystemExit):
             select_llm_provider(settings=settings)
 
     def test_mistral_with_key_is_selected(self) -> None:
         settings = ApiSettings(
-            api_key=SecretStr(TEST_API_KEY),
             llm_provider="mistral",
             mistral_api_key=SecretStr("sk-test"),
         )
@@ -509,8 +507,9 @@ class TestProviderSelection:
 
 class TestLlmUsageEndpoint:
     def test_llm_usage_is_exposed_apart_from_the_tool_budget(self) -> None:
-        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+        settings = ApiSettings()
         app = create_app(
+            token_verifier=accepting_verifier(),
             settings=settings,
             store=ModelStore(),
             run_store=RunStore(),
@@ -541,8 +540,9 @@ class TestLlmUsageEndpoint:
             ),
         )
         provider.narrate(model=PHILOSOPHES3_MODEL, transitions=("takeL_1",))
-        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+        settings = ApiSettings()
         app = create_app(
+            token_verifier=accepting_verifier(),
             settings=settings,
             store=ModelStore(),
             run_store=RunStore(),
@@ -561,8 +561,14 @@ class TestLlmUsageEndpoint:
         }
 
     def test_llm_usage_without_provider_is_503(self) -> None:
-        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
-        app = create_app(settings=settings, store=ModelStore(), run_store=RunStore(), runner=None)
+        settings = ApiSettings()
+        app = create_app(
+            token_verifier=accepting_verifier(),
+            settings=settings,
+            store=ModelStore(),
+            run_store=RunStore(),
+            runner=None,
+        )
         client = httpx.Client(transport=httpx.WSGITransport(app=app), base_url="http://testserver")
         response = client.get("/v1/llm/usage", headers=AUTH_HEADERS)
         assert response.status_code == 503
@@ -588,8 +594,9 @@ class TestLlmLogNarration:
         assert "llm_degraded" in events
 
     def test_llm_usage_endpoint_event_is_pinned(self) -> None:
-        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+        settings = ApiSettings()
         app = create_app(
+            token_verifier=accepting_verifier(),
             settings=settings,
             store=ModelStore(),
             run_store=RunStore(),

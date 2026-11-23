@@ -2,7 +2,7 @@
 
 The acceptance criteria are pinned over real HTTP semantics through httpx's
 WSGI transport: 201/200 idempotent PNML import with the computed hash, 401
-without X-API-Key, 415 on wrong media type, 422 problem+json on invalid or
+without a session/PAT, 415 on wrong media type, 422 problem+json on invalid or
 unsupported PNML (nothing stored), 404/405/406 truthful statuses, Symmetric
 stored non-unfolded, and log narration (ADR-0005, ADR-0016).
 """
@@ -17,11 +17,12 @@ from wsgiref.simple_server import WSGIServer
 import httpx
 import pytest
 import structlog.testing
-from pydantic import SecretStr
+from api_test_support import StubVerifier, accepting_verifier, make_auth_settings
 
 from petrichor.api import WSGIApp, create_app
 from petrichor.api.settings import ApiSettings
 from petrichor.arbitration import ArbitrationStore
+from petrichor.auth import TokenRejectedError
 from petrichor.convergence import ConvergenceStore
 from petrichor.llm.provider import DeterministicMockProvider
 from petrichor.main import ConfigurationError, build_server, main
@@ -38,8 +39,8 @@ if TYPE_CHECKING:
     from wsgiref.types import WSGIEnvironment
 
 FIXTURES = Path(__file__).parent / "fixtures"
-TEST_API_KEY = "test-key"
-AUTH_HEADERS = {"X-API-Key": TEST_API_KEY}
+TEST_PAT = "test-pat"
+AUTH_HEADERS = {"Authorization": f"Bearer {TEST_PAT}"}
 PNML_HEADERS = {**AUTH_HEADERS, "Content-Type": "application/pnml+xml"}
 PETRI_JSON_CONTENT_TYPE = "application/petri+json; version=1.0"
 PROBLEM_JSON_CONTENT_TYPE = "application/problem+json"
@@ -58,8 +59,14 @@ def philosophes3_symmetric_pnml() -> str:
 @pytest.fixture
 def client() -> httpx.Client:
     """An HTTP client wired to the WSGI app with a known API key."""
-    settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
-    app = create_app(settings=settings, store=ModelStore(), run_store=RunStore(), runner=None)
+    settings = ApiSettings()
+    app = create_app(
+        token_verifier=accepting_verifier(),
+        settings=settings,
+        store=ModelStore(),
+        run_store=RunStore(),
+        runner=None,
+    )
     return httpx.Client(transport=httpx.WSGITransport(app=app), base_url="http://testserver")
 
 
@@ -71,7 +78,7 @@ def post_model(
 
 
 class TestAuthentication:
-    def test_post_without_api_key_returns_401_problem(self, client: httpx.Client) -> None:
+    def test_post_without_credentials_returns_401_problem(self, client: httpx.Client) -> None:
         response = client.post(
             "/v1/models",
             content=philosophes3_pnml(),
@@ -83,8 +90,19 @@ class TestAuthentication:
         assert problem["status"] == 401
         assert problem["extensions"]["reason"] == "session_required"
 
-    def test_post_with_wrong_api_key_returns_401(self, client: httpx.Client) -> None:
-        headers = {**PNML_HEADERS, "X-API-Key": "wrong"}
+    def test_post_with_wrong_bearer_token_returns_401(self) -> None:
+        rejecting = StubVerifier(
+            settings=make_auth_settings(), outcome=TokenRejectedError(reason="expired")
+        )
+        app = create_app(
+            settings=ApiSettings(),
+            store=ModelStore(),
+            run_store=RunStore(),
+            runner=None,
+            token_verifier=rejecting,
+        )
+        client = httpx.Client(transport=httpx.WSGITransport(app=app), base_url="http://testserver")
+        headers = {**PNML_HEADERS, "Authorization": "Bearer wrong-token"}
         response = post_model(client, philosophes3_pnml(), headers=headers)
         assert response.status_code == 401
 
@@ -241,18 +259,6 @@ class TestRouting:
         assert isinstance(json.dumps(problem), str)
 
 
-class TestSettings:
-    def test_api_key_is_read_from_the_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("PETRICHOR_API_KEY", "env-key")
-        settings = ApiSettings()
-        assert settings.api_key.get_secret_value() == "env-key"
-
-    def test_missing_api_key_fails_at_startup(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("PETRICHOR_API_KEY", raising=False)
-        with pytest.raises(Exception, match="api_key"):
-            ApiSettings()
-
-
 def call_app(
     app: WSGIApp,
     *,
@@ -267,7 +273,7 @@ def call_app(
         "REQUEST_METHOD": method,
         "PATH_INFO": path,
         "CONTENT_LENGTH": content_length if content_length is not None else str(len(body)),
-        "HTTP_X_API_KEY": TEST_API_KEY,
+        "HTTP_AUTHORIZATION": f"Bearer {TEST_PAT}",
         "wsgi.input": io.BytesIO(body),
     }
     if content_type is not None:
@@ -287,8 +293,14 @@ def call_app(
 @pytest.fixture
 def app() -> WSGIApp:
     """The WSGI app with a known API key and a fresh store."""
-    settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
-    return create_app(settings=settings, store=ModelStore(), run_store=RunStore(), runner=None)
+    settings = ApiSettings()
+    return create_app(
+        token_verifier=accepting_verifier(),
+        settings=settings,
+        store=ModelStore(),
+        run_store=RunStore(),
+        runner=None,
+    )
 
 
 class TestEdgeBranches:
@@ -333,7 +345,7 @@ class TestEdgeBranches:
 
 class TestCompositionRoot:
     def test_build_server_wires_the_app(self, tmp_path: Path) -> None:
-        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+        settings = ApiSettings()
         server = build_server(
             settings=settings,
             store=ModelStore(),
@@ -351,14 +363,13 @@ class TestCompositionRoot:
         server.server_close()
 
     def test_main_builds_and_serves_until_stopped(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("PETRICHOR_API_KEY", TEST_API_KEY)
         monkeypatch.setenv("AUTH_ISSUER", "https://auth.test")
         monkeypatch.setenv("AUTH_CLIENT_ID", "petrichor-test")
         monkeypatch.setattr(WSGIServer, "serve_forever", lambda self: self.server_close())
         main()
 
     def test_build_server_uses_host_and_port_parameters(self, tmp_path: Path) -> None:
-        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+        settings = ApiSettings()
         server = build_server(
             settings=settings,
             store=ModelStore(),
@@ -379,7 +390,6 @@ class TestCompositionRoot:
     def test_main_reads_host_and_port_from_environment(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        monkeypatch.setenv("PETRICHOR_API_KEY", TEST_API_KEY)
         monkeypatch.setenv("PETRICHOR_HOST", "127.0.0.2")
         monkeypatch.setenv("PETRICHOR_PORT", "9998")
         monkeypatch.setenv("AUTH_ISSUER", "https://auth.test")
@@ -397,7 +407,6 @@ class TestCompositionRoot:
     def test_main_rejects_non_integer_port_with_typed_error(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("PETRICHOR_API_KEY", TEST_API_KEY)
         monkeypatch.setenv("PETRICHOR_PORT", "not-a-number")
         with pytest.raises(ConfigurationError, match="PETRICHOR_PORT"):
             main()

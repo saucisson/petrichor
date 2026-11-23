@@ -16,7 +16,7 @@ from pathlib import Path
 import httpx
 import pytest
 import structlog.testing
-from pydantic import SecretStr
+from api_test_support import accepting_verifier
 
 import petrichor.api.app as app_module
 import petrichor.url_import as url_import_module
@@ -28,8 +28,8 @@ from petrichor.run_store import RunStore
 from petrichor.url_import import QuotaExceededError, UrlImportConfig
 
 FIXTURES = Path(__file__).parent / "fixtures"
-TEST_API_KEY = "test-key"
-AUTH_HEADERS = {"X-API-Key": TEST_API_KEY}
+TEST_PAT = "test-pat"
+AUTH_HEADERS = {"Authorization": f"Bearer {TEST_PAT}"}
 PHILOSOPHES_PNML = (FIXTURES / "philosophes3.pnml").read_text(encoding="utf-8")
 SYMMETRIC_PNML = (FIXTURES / "philosophes3-symmetric.pnml").read_text(encoding="utf-8")
 
@@ -57,8 +57,9 @@ def make_zip(*, members: dict[str, bytes]) -> bytes:
 @pytest.fixture
 def client() -> httpx.Client:
     """An HTTP client wired to the WSGI app with a URL-import config."""
-    settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+    settings = ApiSettings()
     app = create_app(
+        token_verifier=accepting_verifier(),
         settings=settings,
         store=ModelStore(),
         run_store=RunStore(),
@@ -101,8 +102,9 @@ class TestArchiveUpload:
         # Guard test: the store is inspected, so an implementation that stored
         # every candidate while still answering 409 would fail here.
         store = ModelStore()
-        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+        settings = ApiSettings()
         app = create_app(
+            token_verifier=accepting_verifier(),
             settings=settings,
             store=store,
             run_store=RunStore(),

@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 
 import httpx
 import structlog.testing
-from pydantic import SecretStr
+from api_test_support import accepting_verifier
 
 from petrichor.api.app import create_app
 from petrichor.api.settings import ApiSettings
@@ -33,8 +33,8 @@ if TYPE_CHECKING:
 FIXTURES = Path(__file__).parent / "fixtures"
 PHILOSOPHES3_PNML = (FIXTURES / "philosophes3.pnml").read_text(encoding="utf-8")
 
-TEST_API_KEY = "test-key"
-AUTH_HEADERS = {"X-API-Key": TEST_API_KEY}
+TEST_PAT = "test-pat"
+AUTH_HEADERS = {"Authorization": f"Bearer {TEST_PAT}"}
 JSON_HEADERS = {**AUTH_HEADERS, "Content-Type": "application/json"}
 PNML_HEADERS = {**AUTH_HEADERS, "Content-Type": "application/pnml+xml"}
 
@@ -73,10 +73,11 @@ def build_client(
     *, runner: CheckRunner | None = None, with_resolver: bool = True, pnml: str = PHILOSOPHES3_PNML
 ) -> tuple[httpx.Client, str]:
     """Wire the app with the Philosophes-3 model, a runner and the static resolver."""
-    settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+    settings = ApiSettings()
     store = ModelStore()
     model, _ = store.save(model=import_pnml(text=pnml))
     app = create_app(
+        token_verifier=accepting_verifier(),
         settings=settings,
         store=store,
         run_store=RunStore(),
@@ -216,10 +217,11 @@ class TestTriageOnRuns:
             ],
             "metadata": {},
         }
-        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+        settings = ApiSettings()
         store = ModelStore()
         model, _ = store.save(model=build_canonical_model(payload=payload))
         app = create_app(
+            token_verifier=accepting_verifier(),
             settings=settings,
             store=store,
             run_store=RunStore(),

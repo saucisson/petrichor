@@ -8,7 +8,7 @@ import type { CatalogEntry } from "../types";
    route GET /v1/catalog/models - no session, no API key, no write. The client
    is built with an empty key so no credential header is ever sent. */
 
-const PUBLIC_CLIENT = new ApiClient("");
+const PUBLIC_CLIENT = new ApiClient();
 
 export default function Decouvrir() {
   const { t } = useTranslation();

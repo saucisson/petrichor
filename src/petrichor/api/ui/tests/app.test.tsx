@@ -117,7 +117,7 @@ describe("UI v2 parity with the vanilla UI", () => {
     expect(screen.getByRole("button", { name: "4. Synthèse" })).not.toHaveAttribute(
       "aria-current",
     );
-    expect(screen.getByLabelText("Clé API")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Se connecter" })).toBeInTheDocument();
     expect(screen.getByLabelText("Identifiant de session (reprise)")).toBeInTheDocument();
   });
 
@@ -238,13 +238,18 @@ describe("UI v2 parity with the vanilla UI", () => {
     expect(localStorage.getItem("petrichor.sessionId")).toBe("s9");
   });
 
-  it("surfaces a 401 as an explicit API-key error, never a silent failure", async () => {
+  it("redirects to the OIDC login on a 401 session_required, never a silent failure", async () => {
+    const assign = vi.fn();
+    vi.stubGlobal("location", { ...window.location, assign });
     mockFetch([
-      { match: (call) => call.url === "/v1/sessions/s1/profile", respond: () => jsonResponse(401, {}) },
+      {
+        match: (call) => call.url === "/v1/sessions/s1/profile",
+        respond: () => jsonResponse(401, { extensions: { reason: "session_required" } }),
+      },
     ]);
     localStorage.setItem("petrichor.sessionId", "s1");
     renderAtelier();
-    await waitFor(() => expect(screen.getByText(/Clé API invalide \(401\)/)).toBeInTheDocument());
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("/auth/login?returnTo=%2F"));
   });
 
   // P76 regression: a non-200 on the contract shows an alert with the server
@@ -289,7 +294,7 @@ describe("UI v3 chrome (issue #162)", () => {
   it("groups the header into visible connection / session / language groups", () => {
     mockFetch([]);
     renderAtelier();
-    expect(screen.getByText("Connexion")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Se connecter" })).toBeInTheDocument();
     expect(screen.getAllByText("Session").length).toBeGreaterThanOrEqual(2);
     // Web v1 (issue #205): the language selector moved to the common site
     // header - one visible label remains.
@@ -335,14 +340,15 @@ describe("UI v3 chrome (issue #162)", () => {
     });
   });
 
-  it("renders a server error as a role=alert message, verbatim and never translated", async () => {
+  it("renders a non-session 401 as a role=alert message, never a silent failure", async () => {
     mockFetch([
-      { match: (call) => call.url === "/v1/sessions/s1/profile", respond: () => jsonResponse(401, {}) },
+      {
+        match: (call) => call.url === "/v1/sessions/s1/profile",
+        respond: () => jsonResponse(401, { extensions: { reason: "invalid_bearer_token" }, detail: "jeton rejeté" }),
+      },
     ]);
     localStorage.setItem("petrichor.sessionId", "s1");
     renderAtelier();
-    await waitFor(() =>
-      expect(screen.getByRole("alert")).toHaveTextContent("Clé API invalide (401)."),
-    );
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Accès refusé (401)."));
   });
 });

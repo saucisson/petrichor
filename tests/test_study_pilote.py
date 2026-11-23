@@ -16,9 +16,9 @@ from pathlib import Path
 import httpx
 import pytest
 import structlog.testing
+from api_test_support import accepting_verifier
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from pydantic import SecretStr
 
 from petrichor.api.app import create_app
 from petrichor.api.settings import ApiSettings
@@ -29,8 +29,8 @@ from petrichor.run_store import RunStore
 from petrichor.session_store import SessionStore
 from petrichor.study import pilote
 
-TEST_API_KEY = "test-key"
-AUTH_HEADERS = {"X-API-Key": TEST_API_KEY}
+TEST_PAT = "test-pat"
+AUTH_HEADERS = {"Authorization": f"Bearer {TEST_PAT}"}
 JSON_HEADERS = {**AUTH_HEADERS, "Content-Type": "application/json"}
 PNML_HEADERS = {**AUTH_HEADERS, "Content-Type": "application/pnml+xml"}
 
@@ -50,8 +50,9 @@ class FakeRunner:
 
 def build_client(tmp_path: Path) -> httpx.Client:
     """Wire the app with fresh stores and a runner that never runs."""
-    settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+    settings = ApiSettings()
     app = create_app(
+        token_verifier=accepting_verifier(),
         settings=settings,
         store=ModelStore(),
         run_store=RunStore(),

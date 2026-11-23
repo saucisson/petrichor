@@ -16,9 +16,9 @@ from pathlib import Path
 import httpx
 import pytest
 import structlog.testing
+from api_test_support import accepting_verifier
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from pydantic import SecretStr
 
 from petrichor.api.app import create_app
 from petrichor.api.settings import ApiSettings
@@ -38,8 +38,8 @@ from petrichor.triage import QuestionTriage
 FIXTURES = Path(__file__).parent / "fixtures"
 PHILOSOPHES3_PNML = (FIXTURES / "philosophes3.pnml").read_text(encoding="utf-8")
 
-TEST_API_KEY = "test-key"
-AUTH_HEADERS = {"X-API-Key": TEST_API_KEY}
+TEST_PAT = "test-pat"
+AUTH_HEADERS = {"Authorization": f"Bearer {TEST_PAT}"}
 JSON_HEADERS = {**AUTH_HEADERS, "Content-Type": "application/json"}
 PNML_HEADERS = {**AUTH_HEADERS, "Content-Type": "application/pnml+xml"}
 CONTRACT_HEADERS = {**AUTH_HEADERS, "Accept": "application/contract+json; version=1.0"}
@@ -66,12 +66,13 @@ class FakeRunner:
 
 def build_client(tmp_path: Path) -> tuple[httpx.Client, RunStore, ProfileArbitrator]:
     """Wire the app with every session-scoped store and a fake runner."""
-    settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+    settings = ApiSettings()
     store = ModelStore()
     run_store = RunStore()
     session_store = SessionStore(directory=tmp_path / "sessions")
     arbitrator = ProfileArbitrator()
     app = create_app(
+        token_verifier=accepting_verifier(),
         settings=settings,
         store=store,
         run_store=run_store,

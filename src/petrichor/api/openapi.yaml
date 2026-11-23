@@ -18,7 +18,13 @@ info:
 servers:
   - url: /v1
 security:
-  - apiKey: []
+  - sessionCookie: []
+  - bearerAuth: []
+# Web v1 browser login (issue #207, contract §2) lives outside the /v1 prefix:
+#   GET  /auth/login?returnTo=...   302 to the IdP authorize endpoint (PKCE S256)
+#   GET  /auth/callback?state&code   302 to returnTo + Set-Cookie petrichor-session
+#   POST /auth/logout                302 to /ui/ + expired cookie
+#   GET  /auth/me                    200 {sub, iss} with a session, else 401
 paths:
   /:
     get:
@@ -1372,10 +1378,20 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
 components:
   securitySchemes:
-    apiKey:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        A PAT or OIDC access token, validated locally against the issuer JWKS
+        (PT-1). The legacy X-API-Key header is removed (issue #207).
+    sessionCookie:
       type: apiKey
-      in: header
-      name: X-API-Key
+      in: cookie
+      name: petrichor-session
+      description: >-
+        The HttpOnly applicative session cookie set by /auth/callback
+        (web v1, issue #207); a JWT is never put in a cookie.
   schemas:
     PnmlCandidate:
       type: object

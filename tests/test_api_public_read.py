@@ -12,7 +12,7 @@ from pathlib import Path
 import httpx
 import pytest
 import structlog.testing
-from pydantic import SecretStr
+from api_test_support import accepting_verifier
 
 from petrichor.api import create_app
 from petrichor.api.settings import ApiSettings
@@ -22,8 +22,8 @@ from petrichor.model_store import ModelStore
 from petrichor.run_store import RunStore
 
 FIXTURES = Path(__file__).parent / "fixtures"
-TEST_API_KEY = "test-key"
-AUTH_HEADERS = {"X-API-Key": TEST_API_KEY}
+TEST_PAT = "test-pat"
+AUTH_HEADERS = {"Authorization": f"Bearer {TEST_PAT}"}
 PNML_HEADERS = {**AUTH_HEADERS, "Content-Type": "application/pnml+xml"}
 PETRI_JSON_ACCEPT = "application/petri+json"
 PROBLEM_JSON_CONTENT_TYPE = "application/problem+json"
@@ -57,8 +57,9 @@ class FakeCatalog:
 
 @pytest.fixture
 def client() -> httpx.Client:
-    settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+    settings = ApiSettings()
     app = create_app(
+        token_verifier=accepting_verifier(),
         settings=settings,
         store=ModelStore(),
         run_store=RunStore(),

@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 
 import httpx
 import structlog.testing
-from pydantic import SecretStr
+from api_test_support import accepting_verifier
 
 from petrichor.api import create_app
 from petrichor.api.settings import ApiSettings
@@ -40,8 +40,8 @@ if TYPE_CHECKING:
     import pytest
 
 FIXTURES = Path(__file__).parent / "fixtures"
-TEST_API_KEY = "test-key"
-AUTH_HEADERS = {"X-API-Key": TEST_API_KEY}
+TEST_PAT = "test-pat"
+AUTH_HEADERS = {"Authorization": f"Bearer {TEST_PAT}"}
 JSON_HEADERS = {**AUTH_HEADERS, "Content-Type": "application/json"}
 PROBLEM_JSON_CONTENT_TYPE = "application/problem+json"
 TERMINAL_POLL_SECONDS = 5.0
@@ -116,19 +116,22 @@ def build_client(
 ) -> tuple[httpx.Client, str, RunStore]:
     """Wire the WSGI app with a known key, the Philosophes-3 model and a runner."""
     if session_budget_seconds is None:
-        settings = ApiSettings(
-            api_key=SecretStr(TEST_API_KEY), check_timeout_seconds=timeout_seconds
-        )
+        settings = ApiSettings(check_timeout_seconds=timeout_seconds)
     else:
         settings = ApiSettings(
-            api_key=SecretStr(TEST_API_KEY),
             check_timeout_seconds=timeout_seconds,
             session_budget_seconds=session_budget_seconds,
         )
     store = ModelStore()
     model, _ = store.save(model=import_pnml(text=philosophes3_pnml()))
     run_store = RunStore()
-    app = create_app(settings=settings, store=store, run_store=run_store, runner=runner)
+    app = create_app(
+        token_verifier=accepting_verifier(),
+        settings=settings,
+        store=store,
+        run_store=run_store,
+        runner=runner,
+    )
     client = httpx.Client(transport=httpx.WSGITransport(app=app), base_url="http://testserver")
     return client, str(model.id), run_store
 
@@ -255,9 +258,9 @@ class TestSessionBudget:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.delenv("PETRICHOR_SESSION_BUDGET_SECONDS", raising=False)
-        assert ApiSettings(api_key=SecretStr(TEST_API_KEY)).session_budget_seconds == 3600.0
+        assert ApiSettings().session_budget_seconds == 3600.0
         monkeypatch.setenv("PETRICHOR_SESSION_BUDGET_SECONDS", "120.5")
-        assert ApiSettings(api_key=SecretStr(TEST_API_KEY)).session_budget_seconds == 120.5
+        assert ApiSettings().session_budget_seconds == 120.5
 
     def test_run_that_does_not_fit_the_remaining_budget_is_refused_with_the_rest(self) -> None:
         runner = SleepingRunner(delay_seconds=0.05)
@@ -356,14 +359,17 @@ class TestSessionBudget:
         # A second app over the same store with an exhausted budget: the replay
         # of the known (model, question) still returns the existing run.
         starved_settings = ApiSettings(
-            api_key=SecretStr(TEST_API_KEY),
             check_timeout_seconds=30,
             session_budget_seconds=5.0,
         )
         store = ModelStore()
         store.save(model=import_pnml(text=philosophes3_pnml()))
         starved_app = create_app(
-            settings=starved_settings, store=store, run_store=run_store, runner=runner
+            token_verifier=accepting_verifier(),
+            settings=starved_settings,
+            store=store,
+            run_store=run_store,
+            runner=runner,
         )
         starved_client = httpx.Client(
             transport=httpx.WSGITransport(app=starved_app), base_url="http://testserver"

@@ -14,9 +14,9 @@ from pathlib import Path
 import httpx
 import pytest
 import structlog.testing
+from api_test_support import accepting_verifier
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
-from pydantic import SecretStr
 
 from conftest import fetch_ui_bundle
 from petrichor.api.app import create_app
@@ -42,8 +42,8 @@ FIXTURES = Path(__file__).parent / "fixtures"
 PHILOSOPHES3_PNML = (FIXTURES / "philosophes3-maquette.pnml").read_text(encoding="utf-8")
 GOLDEN_ROOT = Path(__file__).parent.parent / "src" / "petrichor" / "llm" / "golden"
 
-TEST_API_KEY = "test-key"
-AUTH_HEADERS = {"X-API-Key": TEST_API_KEY}
+TEST_PAT = "test-pat"
+AUTH_HEADERS = {"Authorization": f"Bearer {TEST_PAT}"}
 JSON_HEADERS = {**AUTH_HEADERS, "Content-Type": "application/json"}
 PNML_HEADERS = {**AUTH_HEADERS, "Content-Type": "application/pnml+xml"}
 
@@ -90,12 +90,13 @@ class FakeRunner:
 
 def build_client(tmp_path: Path, output: dict) -> tuple[httpx.Client, RunStore, WitnessStore, str]:
     """Wire the app with the witness store and the mock LLM provider."""
-    settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+    settings = ApiSettings()
     store = ModelStore()
     model, _ = store.save(model=import_pnml(text=PHILOSOPHES3_PNML))
     run_store = RunStore()
     witness_store = WitnessStore(directory=tmp_path / "witnesses")
     app = create_app(
+        token_verifier=accepting_verifier(),
         settings=settings,
         store=store,
         run_store=run_store,

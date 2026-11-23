@@ -50,6 +50,14 @@ from petrichor.api.auth import (
     REASON_SESSION_REQUIRED,
     authenticate_request,
 )
+from petrichor.api.web_auth import (
+    SESSION_COOKIE,
+    OidcFlowClient,
+    PendingLoginStore,
+    WebSessionStore,
+    code_challenge_s256,
+    is_internal_path,
+)
 from petrichor.arbitration import ArbitrationDecisionKind, ArbitrationStore
 from petrichor.archive_ingest import (
     ARCHIVE_CONTENT_TYPES,
@@ -59,6 +67,7 @@ from petrichor.archive_ingest import (
     UnsafeArchiveError,
     extract_pnml_candidates,
 )
+from petrichor.auth import TokenRejectedError
 from petrichor.catalog import (
     CatalogQuery,
     CatalogUnavailableError,
@@ -229,6 +238,10 @@ CONTENT_TYPE_CONTRACT_JSON = "application/contract+json; version=1.0"
 CONTENT_TYPE_MARKDOWN = "text/markdown; charset=utf-8"
 UI_PATH = "/ui/"
 UI_INDEX = "index.html"
+AUTH_LOGIN_PATH = "/auth/login"
+AUTH_CALLBACK_PATH = "/auth/callback"
+AUTH_LOGOUT_PATH = "/auth/logout"
+AUTH_ME_PATH = "/auth/me"
 CONTENT_TYPE_HTML = "text/html; charset=utf-8"
 CONTENT_TYPE_JAVASCRIPT = "text/javascript; charset=utf-8"
 CONTENT_TYPE_CSS = "text/css; charset=utf-8"
@@ -3937,6 +3950,284 @@ def _serve_ui_asset(
     )
 
 
+def _session_id_from_cookie(*, environ: WSGIEnvironment) -> str | None:
+    """The ``petrichor-session`` cookie value of the request, if any."""
+    raw: str = environ.get("HTTP_COOKIE", "")
+    for part in raw.split(";"):
+        name, _, value = part.strip().partition("=")
+        if name == SESSION_COOKIE and value:
+            return str(value)
+    return None
+
+
+def _session_cookie_header(*, session_id: str, max_age_seconds: int) -> str:
+    """The Set-Cookie header of the applicative session (contract §2)."""
+    return (
+        f"{SESSION_COOKIE}={session_id}; Path=/; HttpOnly; Secure; "
+        f"SameSite=Lax; Max-Age={max_age_seconds}"
+    )
+
+
+def _clear_session_cookie_header() -> str:
+    """The Set-Cookie header expiring the session cookie."""
+    return f"{SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0"
+
+
+def _redirect_uri(*, environ: WSGIEnvironment) -> str:
+    """The callback URL of this app, from the request host (or its Host header)."""
+    scheme = environ.get("wsgi.url_scheme", "http")
+    host = environ.get("HTTP_HOST") or environ.get("SERVER_NAME", "localhost")
+    return f"{scheme}://{host}{AUTH_CALLBACK_PATH}"
+
+
+def _dispatch_auth(  # noqa: PLR0911 - one typed response per /auth route
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    method: str,
+    path: str,
+    oidc_flow: OidcFlowClient | None,
+    pending_logins: PendingLoginStore,
+    web_sessions: WebSessionStore,
+    token_verifier: TokenVerifier | None,
+) -> Iterable[bytes] | None:
+    """Route the /auth/* endpoints of the web v1 browser login (issue #207).
+
+    These routes are public by design (the login page must be reachable
+    without a session); they never carry data of the workshop.
+    """
+    if path == AUTH_LOGIN_PATH and method == "GET":
+        return _auth_login(
+            environ=environ,
+            start_response=start_response,
+            oidc_flow=oidc_flow,
+            pending_logins=pending_logins,
+        )
+    if path == AUTH_CALLBACK_PATH and method == "GET":
+        return _auth_callback(
+            environ=environ,
+            start_response=start_response,
+            oidc_flow=oidc_flow,
+            pending_logins=pending_logins,
+            web_sessions=web_sessions,
+            token_verifier=token_verifier,
+        )
+    if path == AUTH_LOGOUT_PATH and method == "POST":
+        return _auth_logout(
+            environ=environ,
+            start_response=start_response,
+            oidc_flow=oidc_flow,
+            web_sessions=web_sessions,
+        )
+    if path == AUTH_ME_PATH and method == "GET":
+        session_id = _session_id_from_cookie(environ=environ)
+        session = web_sessions.get(session_id=session_id) if session_id else None
+        if session is None:
+            return _problem_response(
+                start_response=start_response,
+                environ=environ,
+                payload=_problem(
+                    status=HTTPStatus.UNAUTHORIZED,
+                    reason=REASON_SESSION_REQUIRED,
+                    detail="No active session.",
+                ),
+            )
+        body = json.dumps({"sub": session.claims.sub, "iss": session.claims.iss}).encode()
+        return _respond(
+            start_response=start_response,
+            status=HTTPStatus.OK,
+            content_type=CONTENT_TYPE_JSON,
+            body=body,
+        )
+    if path.startswith("/auth/"):
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND, reason="not_found", detail=f"No resource at {path}."
+            ),
+        )
+    return None
+
+
+def _auth_login(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    oidc_flow: OidcFlowClient | None,
+    pending_logins: PendingLoginStore,
+) -> Iterable[bytes]:
+    """GET /auth/login?returnTo=… — start the OIDC flow (issue #207)."""
+    if oidc_flow is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+                reason="oidc_not_configured",
+                detail="OIDC login is not configured on this server (AUTH_ISSUER unset).",
+            ),
+        )
+    params = parse_qs(environ.get("QUERY_STRING", ""), keep_blank_values=True)
+    return_to = params.get("returnTo", [UI_PATH])[0]
+    if not is_internal_path(path=return_to):
+        return_to = UI_PATH
+    ui_locales = "fr" if "fr" in environ.get("HTTP_ACCEPT_LANGUAGE", "fr") else "en"
+    pending = pending_logins.create(return_to=return_to)
+    url = oidc_flow.authorize_url(
+        redirect_uri=_redirect_uri(environ=environ),
+        state=pending.state,
+        nonce=pending.nonce,
+        code_challenge=code_challenge_s256(code_verifier=pending.code_verifier),
+        ui_locales=ui_locales,
+    )
+    logger.debug("web_auth_login_redirect", return_to=return_to, ui_locales=ui_locales)
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.FOUND,
+        content_type=CONTENT_TYPE_HTML,
+        body=b"",
+        extra_headers=[("Location", url)],
+    )
+
+
+def _auth_callback(  # noqa: PLR0911 - one typed response per failure mode
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    oidc_flow: OidcFlowClient | None,
+    pending_logins: PendingLoginStore,
+    web_sessions: WebSessionStore,
+    token_verifier: TokenVerifier | None,
+) -> Iterable[bytes]:
+    """GET /auth/callback — verify state/nonce, exchange the code, open a session."""
+    if oidc_flow is None or token_verifier is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+                reason="oidc_not_configured",
+                detail="OIDC login is not configured on this server.",
+            ),
+        )
+    params = parse_qs(environ.get("QUERY_STRING", ""), keep_blank_values=True)
+    state = params.get("state", [""])[0]
+    code = params.get("code", [""])[0]
+    pending = pending_logins.pop(state=state)
+    if pending is None or not code:
+        logger.warning("web_auth_callback_rejected", reason="unknown_or_expired_state")
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.UNAUTHORIZED,
+                reason="invalid_state",
+                detail="Unknown or expired login state.",
+            ),
+        )
+    try:
+        tokens = oidc_flow.exchange_code(
+            code=code,
+            redirect_uri=_redirect_uri(environ=environ),
+            code_verifier=pending.code_verifier,
+        )
+    except Exception as error:  # noqa: BLE001 - the IdP failure is narrated, never swallowed
+        logger.warning("web_auth_code_exchange_failed", reason=repr(error))
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.UNAUTHORIZED,
+                reason="code_exchange_failed",
+                detail="The authorization code could not be exchanged.",
+            ),
+        )
+    id_token = tokens.get("id_token")
+    access_token = tokens.get("access_token")
+    if not isinstance(id_token, str) or not isinstance(access_token, str):
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.UNAUTHORIZED,
+                reason="incomplete_token_response",
+                detail="The token response carries no id_token/access_token pair.",
+            ),
+        )
+    try:
+        claims = token_verifier.verify_access_token(token=id_token)
+    except TokenRejectedError as error:
+        logger.warning("web_auth_id_token_rejected", reason=error.reason)
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.UNAUTHORIZED,
+                reason=REASON_INVALID_BEARER,
+                detail="The id_token was rejected.",
+            ),
+        )
+    if claims.nonce is not None and claims.nonce != pending.nonce:
+        logger.warning("web_auth_callback_rejected", reason="nonce_mismatch")
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.UNAUTHORIZED,
+                reason="nonce_mismatch",
+                detail="The id_token nonce does not match the pending login.",
+            ),
+        )
+    session = web_sessions.create(claims=claims)
+    logger.info("web_auth_login_succeeded", sub=claims.sub)
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.FOUND,
+        content_type=CONTENT_TYPE_HTML,
+        body=b"",
+        extra_headers=[
+            ("Location", pending.return_to),
+            (
+                "Set-Cookie",
+                _session_cookie_header(
+                    session_id=session.session_id,
+                    max_age_seconds=int(session.expires_at - session.created_at),
+                ),
+            ),
+        ],
+    )
+
+
+def _auth_logout(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    oidc_flow: OidcFlowClient | None,
+    web_sessions: WebSessionStore,
+) -> Iterable[bytes]:
+    """POST /auth/logout — revoke, destroy the session, expire the cookie."""
+    session_id = _session_id_from_cookie(environ=environ)
+    if session_id is not None:
+        web_sessions.destroy(session_id=session_id)
+    scheme = environ.get("wsgi.url_scheme", "http")
+    host = environ.get("HTTP_HOST") or environ.get("SERVER_NAME", "localhost")
+    post_logout = f"{scheme}://{host}{UI_PATH}"
+    if oidc_flow is not None:
+        oidc_flow.revoke(token=session_id or "")
+    logger.debug("web_auth_logout", had_session=session_id is not None)
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.FOUND,
+        content_type=CONTENT_TYPE_HTML,
+        body=b"",
+        extra_headers=[
+            ("Location", post_logout),
+            ("Set-Cookie", _clear_session_cookie_header()),
+        ],
+    )
+
+
 def _is_public_read_route(*, method: str, path: str) -> bool:
     """The web v1 public read-only routes (issue #206, contract §1/§5).
 
@@ -3960,6 +4251,7 @@ def _auth_gate(
     start_response: StartResponse,
     settings: ApiSettings,
     token_verifier: TokenVerifier | None,
+    web_sessions: WebSessionStore,
     method: str,
     path: str,
 ) -> Iterable[bytes] | None:
@@ -3974,6 +4266,15 @@ def _auth_gate(
     if _is_public_read_route(method=method, path=path):
         logger.debug("api_public_read_allowed", method=method, path=path)
         return None
+    # Web v1 (issue #207): the server-side session cookie authenticates the
+    # browser; its claims are exposed like a validated Bearer token.
+    cookie_session_id = _session_id_from_cookie(environ=environ)
+    if cookie_session_id is not None:
+        cookie_session = web_sessions.get(session_id=cookie_session_id)
+        if cookie_session is not None:
+            environ[ENVIRON_AUTH_CLAIMS] = cookie_session.claims
+            logger.debug("api_session_cookie_allowed", path=path)
+            return None
     decision = authenticate_request(
         environ=environ, settings=settings, token_verifier=token_verifier
     )
@@ -4000,7 +4301,7 @@ def _auth_gate(
     )
 
 
-def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
+def create_app(  # noqa: PLR0913, C901 - one keyword per wired dependency (ADR-0003), one dispatch per resource family
     *,
     settings: ApiSettings,
     store: ModelStore,
@@ -4020,13 +4321,20 @@ def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
     catalog: ModelCatalog | None = None,
     url_import: UrlImportConfig | None = None,
     token_verifier: TokenVerifier | None = None,
+    oidc_flow: OidcFlowClient | None = None,
+    pending_logins: PendingLoginStore | None = None,
+    web_sessions: WebSessionStore | None = None,
 ) -> WSGIApp:
     """Build the WSGI application: auth first, then routing and negotiation.
 
     ``token_verifier`` wires the PT-2 middleware: a valid ``Authorization:
-    Bearer`` JWT (validated by the PT-1 brick) is accepted alongside the
-    legacy ``X-API-Key``; without a verifier, only the legacy key is accepted.
+    Bearer`` JWT (PAT, validated by the PT-1 brick) is accepted; the web
+    session cookie is checked by the gate from ``web_sessions``. The legacy
+    ``X-API-Key`` is gone (issue #207). ``oidc_flow``/``pending_logins`` wire
+    the browser login routes ``/auth/*``.
     """
+    pending_logins = pending_logins if pending_logins is not None else PendingLoginStore()
+    web_sessions = web_sessions if web_sessions is not None else WebSessionStore()
 
     def app(environ: WSGIEnvironment, start_response: StartResponse) -> Iterable[bytes]:
         method = environ.get("REQUEST_METHOD", "GET").upper()
@@ -4038,11 +4346,25 @@ def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
         )
         if routed is not None:
             return routed
+        # The web v1 login routes are public by design (issue #207).
+        routed = _dispatch_auth(
+            environ=environ,
+            start_response=start_response,
+            method=method,
+            path=path,
+            oidc_flow=oidc_flow,
+            pending_logins=pending_logins,
+            web_sessions=web_sessions,
+            token_verifier=token_verifier,
+        )
+        if routed is not None:
+            return routed
         rejected = _auth_gate(
             environ=environ,
             start_response=start_response,
             settings=settings,
             token_verifier=token_verifier,
+            web_sessions=web_sessions,
             method=method,
             path=path,
         )

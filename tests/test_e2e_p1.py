@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, TypedDict
 
 import httpx
-from pydantic import SecretStr
+from api_test_support import accepting_verifier
 
 from petrichor.api.app import create_app
 from petrichor.api.settings import ApiSettings
@@ -47,8 +47,8 @@ if TYPE_CHECKING:
 FIXTURES = Path(__file__).parent / "fixtures"
 PHILOSOPHES3_PNML = (FIXTURES / "philosophes3.pnml").read_text(encoding="utf-8")
 
-TEST_API_KEY = "test-key"
-AUTH_HEADERS = {"X-API-Key": TEST_API_KEY}
+TEST_PAT = "test-pat"
+AUTH_HEADERS = {"Authorization": f"Bearer {TEST_PAT}"}
 JSON_HEADERS = {**AUTH_HEADERS, "Content-Type": "application/json"}
 PNML_HEADERS = {**AUTH_HEADERS, "Content-Type": "application/pnml+xml"}
 MARKDOWN_HEADERS = {**AUTH_HEADERS, "Accept": "text/markdown"}
@@ -139,10 +139,11 @@ def build_client(
     tmp_path: Path,
 ) -> tuple[httpx.Client, SessionStore, ProfileArbitrator]:
     """Wire the full app: mock runner, mini-engine static resolver, persisted stores."""
-    settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+    settings = ApiSettings()
     session_store = SessionStore(directory=tmp_path / "sessions")
     arbitrator = ProfileArbitrator()
     app = create_app(
+        token_verifier=accepting_verifier(),
         settings=settings,
         store=ModelStore(),
         run_store=RunStore(),
