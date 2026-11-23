@@ -1,7 +1,7 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, screen } from "@testing-library/react";
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import App from "../src/App";
+import { renderAtelier } from "./render-atelier";
 import { applyLanguage } from "../src/i18n";
 import { THEME_STORAGE } from "../src/theme";
 
@@ -36,7 +36,7 @@ afterEach(() => {
 describe("P81 — mode sombre", () => {
   it("bascule data-theme sur <html>, color-scheme et persiste le choix", () => {
     mockFetchEmpty();
-    render(<App />);
+    renderAtelier();
     const toggle = screen.getByRole("button", { name: "Basculer en mode sombre / clair" });
     expect(document.documentElement.dataset.theme).not.toBe("dark");
     fireEvent.click(toggle);
@@ -60,7 +60,7 @@ describe("P81 — mode sombre", () => {
       })),
     );
     mockFetchEmpty();
-    render(<App />);
+    renderAtelier();
     expect(document.documentElement.dataset.theme).toBe("dark");
   });
 
@@ -76,7 +76,7 @@ describe("P81 — mode sombre", () => {
       })),
     );
     mockFetchEmpty();
-    render(<App />);
+    renderAtelier();
     expect(document.documentElement.dataset.theme).toBe("light");
   });
 

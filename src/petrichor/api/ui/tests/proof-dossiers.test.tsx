@@ -1,6 +1,6 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import App from "../src/App";
+import { renderAtelier } from "./render-atelier";
 import { applyLanguage } from "../src/i18n";
 
 /* Clickable proof dossiers in the contract view (issue #126, P38, spec
@@ -98,7 +98,7 @@ describe("dossiers de preuve cliquables (issue #126)", () => {
         return jsonResponse(404, { status: 404 });
       }),
     );
-    render(<App />);
+    renderAtelier();
     fireEvent.click(screen.getByRole("button", { name: "4. Synthèse" }));
     // The dossier is clickable (details/summary) and shows the clause pieces.
     await waitFor(() => expect(screen.getByText(/AG\(philo0 thinking\)/)).toBeInTheDocument());

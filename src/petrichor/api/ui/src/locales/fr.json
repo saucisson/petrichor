@@ -206,5 +206,23 @@
     "clarification": "Clarification de la proposition…",
     "cluster": "Tri des clauses violées…",
     "narration": "Narration du témoin…"
+  },
+  "zones": {
+    "aria": "Zones du site",
+    "accueil": "Accueil",
+    "decouvrir": "Découvrir",
+    "atelier": "Atelier"
+  },
+  "landing": {
+    "title": "Petrichor — élicitation de propriétés sur réseaux de Petri",
+    "tagline": "Vérifiez des propriétés de vos modèles PNML par élicitation guidée et model checking.",
+    "description": "Petrichor accompagne l'analyste depuis l'import du modèle jusqu'à la synthèse des preuves : amorçage du modèle, questions statiques, vérifications par model checking multi-outils, et dossier de preuve. La zone Découvrir permet de consulter librement les catalogues et exemples ; l'atelier, réservé aux comptes, lance les calculs.",
+    "ctaExplore": "Explorer la zone Découvrir",
+    "ctaWorkshop": "Ouvrir l'atelier",
+    "hintNoAuth": "Aucun compte requis sur cette page ni sur la zone Découvrir."
+  },
+  "decouvrir": {
+    "title": "Découvrir",
+    "placeholder": "Cette zone publique présentera en lecture seule les catalogues de modèles et les exemples. Aucun compte requis."
   }
 }
