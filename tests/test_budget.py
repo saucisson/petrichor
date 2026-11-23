@@ -11,7 +11,7 @@ from pathlib import Path
 
 import httpx
 import structlog.testing
-from pydantic import SecretStr
+from api_test_support import accepting_verifier
 
 from conftest import fetch_ui_bundle
 from petrichor.api.app import create_app
@@ -28,8 +28,8 @@ from petrichor.session_store import SessionId, SessionStore
 FIXTURES = Path(__file__).parent / "fixtures"
 PHILOSOPHES3_PNML = (FIXTURES / "philosophes3.pnml").read_text(encoding="utf-8")
 
-TEST_API_KEY = "test-key"
-AUTH_HEADERS = {"X-API-Key": TEST_API_KEY}
+TEST_PAT = "test-pat"
+AUTH_HEADERS = {"Authorization": f"Bearer {TEST_PAT}"}
 JSON_HEADERS = {**AUTH_HEADERS, "Content-Type": "application/json"}
 PNML_HEADERS = {**AUTH_HEADERS, "Content-Type": "application/pnml+xml"}
 
@@ -56,11 +56,12 @@ def build_client(
     tmp_path: Path, *, timeout_seconds: int = 30
 ) -> tuple[httpx.Client, RunStore, SessionStore]:
     """Wire the app with a session store, a run store and a fake runner."""
-    settings = ApiSettings(api_key=SecretStr(TEST_API_KEY), check_timeout_seconds=timeout_seconds)
+    settings = ApiSettings(check_timeout_seconds=timeout_seconds)
     store = ModelStore()
     run_store = RunStore()
     session_store = SessionStore(directory=tmp_path / "sessions")
     app = create_app(
+        token_verifier=accepting_verifier(),
         settings=settings,
         store=store,
         run_store=run_store,
@@ -235,12 +236,13 @@ class TestBudgetRefusal:
 class TestContractBudget:
     def test_contract_carries_the_session_budget_and_per_run_costs(self, tmp_path: Path) -> None:
 
-        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+        settings = ApiSettings()
         store = ModelStore()
         run_store = RunStore()
         session_store = SessionStore(directory=tmp_path / "sessions")
         arbitrator = ProfileArbitrator()
         app = create_app(
+            token_verifier=accepting_verifier(),
             settings=settings,
             store=store,
             run_store=run_store,

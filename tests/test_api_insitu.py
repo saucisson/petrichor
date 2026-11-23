@@ -7,10 +7,10 @@ from typing import TYPE_CHECKING
 import httpx
 import pytest
 import structlog.testing
+from api_test_support import accepting_verifier
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from philosophes3 import build_philosophes3
-from pydantic import SecretStr
 
 from petrichor.api.app import create_app
 from petrichor.api.settings import ApiSettings
@@ -44,8 +44,8 @@ FIXTURES = Path(__file__).parent / "fixtures"
 PHILOSOPHES3_PNML = (FIXTURES / "philosophes3.pnml").read_text(encoding="utf-8")
 SYMMETRIC_PNML = (FIXTURES / "philosophes3-symmetric.pnml").read_text(encoding="utf-8")
 
-TEST_API_KEY = "test-key"
-AUTH_HEADERS = {"X-API-Key": TEST_API_KEY}
+TEST_PAT = "test-pat"
+AUTH_HEADERS = {"Authorization": f"Bearer {TEST_PAT}"}
 JSON_HEADERS = {**AUTH_HEADERS, "Content-Type": "application/json"}
 PNML_HEADERS = {**AUTH_HEADERS, "Content-Type": "application/pnml+xml"}
 
@@ -76,12 +76,13 @@ def build_client(
     tmp_path: Path, *, explorer: StateGraphExplorer | None = explore_state_graph_payload
 ) -> tuple[httpx.Client, ProfileArbitrator]:
     """Build a test client with the given in-situ explorer wired (None → 503)."""
-    settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+    settings = ApiSettings()
     store = ModelStore()
     run_store = RunStore()
     session_store = SessionStore(directory=tmp_path / "sessions")
     arbitrator = ProfileArbitrator()
     app = create_app(
+        token_verifier=accepting_verifier(),
         settings=settings,
         store=store,
         run_store=run_store,

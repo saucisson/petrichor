@@ -59,7 +59,7 @@ describe("P75 — <LlmBusy> active waiting", () => {
         path === "/v1/llm/calls" ? jsonResponse(200, IN_PROGRESS_READING) : jsonResponse(200, {}),
       ),
     );
-    render(<LlmBusy client={new ApiClient("k")} active={true} fallbackLabel="Chargement…" />);
+    render(<LlmBusy client={new ApiClient()} active={true} fallbackLabel="Chargement…" />);
     const status = await screen.findByRole("status");
     await waitFor(() => expect(status).toHaveTextContent("Lecture de la grille…"));
     expect(status).toHaveTextContent("depuis");
@@ -72,7 +72,7 @@ describe("P75 — <LlmBusy> active waiting", () => {
         path === "/v1/llm/calls" ? jsonResponse(200, NO_CALL_IN_PROGRESS) : jsonResponse(200, {}),
       ),
     );
-    render(<LlmBusy client={new ApiClient("k")} active={true} fallbackLabel="Chargement…" />);
+    render(<LlmBusy client={new ApiClient()} active={true} fallbackLabel="Chargement…" />);
     const status = await screen.findByRole("status");
     await waitFor(() => expect(status).toHaveTextContent("Chargement…"));
     expect(status).not.toHaveTextContent("Lecture de la grille…");
@@ -89,7 +89,7 @@ describe("P75 — <LlmBusy> active waiting", () => {
           : jsonResponse(200, {}),
       ),
     );
-    render(<LlmBusy client={new ApiClient("k")} active={true} fallbackLabel="Chargement…" />);
+    render(<LlmBusy client={new ApiClient()} active={true} fallbackLabel="Chargement…" />);
     const status = await screen.findByRole("status");
     expect(status).toHaveTextContent("Chargement…");
     await new Promise((resolve) => setTimeout(resolve, 120));
@@ -104,7 +104,7 @@ describe("P75 — <LlmBusy> active waiting", () => {
         path === "/v1/llm/calls" ? jsonResponse(200, IN_PROGRESS_READING) : jsonResponse(200, {}),
       ),
     );
-    render(<LlmBusy client={new ApiClient("k")} active={true} fallbackLabel="Loading…" />);
+    render(<LlmBusy client={new ApiClient()} active={true} fallbackLabel="Loading…" />);
     const status = await screen.findByRole("status");
     await waitFor(() => expect(status).toHaveTextContent("Reading the question grid…"));
   });

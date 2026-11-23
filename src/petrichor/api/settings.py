@@ -1,8 +1,8 @@
-"""API settings: the `X-API-Key` credential lives in a protected settings type.
+"""API settings (web v1 bascule, issue #207: the X-API-Key credential is gone).
 
-Secrets stay in masked settings types and are never logged (ADR-0005); the
-key is read from the ``PETRICHOR_API_KEY`` environment variable and has no
-default, so a misconfigured server fails at startup instead of running open.
+Secrets stay in masked settings types and are never logged (ADR-0005).
+Authentication is OIDC (see ``petrichor.auth``) plus the server-side web
+session cookie — no static API key remains in the settings.
 """
 
 from typing import Literal
@@ -24,7 +24,6 @@ class ApiSettings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix=ENV_PREFIX)
 
-    api_key: SecretStr
     check_timeout_seconds: int = Field(default=DEFAULT_CHECK_TIMEOUT_SECONDS, gt=0)
     """Timeout of one check run; a timeout is an explicit error state, never a verdict."""
     session_budget_seconds: float = Field(default=DEFAULT_SESSION_BUDGET_SECONDS, gt=0)

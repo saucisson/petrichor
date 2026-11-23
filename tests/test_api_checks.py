@@ -17,9 +17,9 @@ from typing import TYPE_CHECKING
 import httpx
 import pytest
 import structlog.testing
+from api_test_support import accepting_verifier
 from hypothesis import given
 from hypothesis import strategies as st
-from pydantic import SecretStr
 
 from petrichor.api import WSGIApp, create_app
 from petrichor.api.settings import ApiSettings
@@ -43,8 +43,8 @@ if TYPE_CHECKING:
     from wsgiref.types import WSGIEnvironment
 
 FIXTURES = Path(__file__).parent / "fixtures"
-TEST_API_KEY = "test-key"
-AUTH_HEADERS = {"X-API-Key": TEST_API_KEY}
+TEST_PAT = "test-pat"
+AUTH_HEADERS = {"Authorization": f"Bearer {TEST_PAT}"}
 JSON_HEADERS = {**AUTH_HEADERS, "Content-Type": "application/json"}
 PROBLEM_JSON_CONTENT_TYPE = "application/problem+json"
 TERMINAL_POLL_SECONDS = 5.0
@@ -118,15 +118,19 @@ def build_client(
 ) -> tuple[httpx.Client, str, RunStore]:
     """Wire the WSGI app with a known key, the Philosophes-3 model and a runner."""
     if timeout_seconds is None:
-        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+        settings = ApiSettings()
     else:
-        settings = ApiSettings(
-            api_key=SecretStr(TEST_API_KEY), check_timeout_seconds=timeout_seconds
-        )
+        settings = ApiSettings(check_timeout_seconds=timeout_seconds)
     store = ModelStore()
     model, _ = store.save(model=import_pnml(text=philosophes3_pnml()))
     run_store = RunStore()
-    app = create_app(settings=settings, store=store, run_store=run_store, runner=runner)
+    app = create_app(
+        token_verifier=accepting_verifier(),
+        settings=settings,
+        store=store,
+        run_store=run_store,
+        runner=runner,
+    )
     client = httpx.Client(transport=httpx.WSGITransport(app=app), base_url="http://testserver")
     return client, str(model.id), run_store
 
@@ -479,18 +483,22 @@ class TestRunStates:
 
 class TestEdgeBranches:
     def test_invalid_content_length_returns_400(self) -> None:
-        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+        settings = ApiSettings()
         store = ModelStore()
         store.save(model=import_pnml(text=philosophes3_pnml()))
         app: WSGIApp = create_app(
-            settings=settings, store=store, run_store=RunStore(), runner=FakeRunner()
+            token_verifier=accepting_verifier(),
+            settings=settings,
+            store=store,
+            run_store=RunStore(),
+            runner=FakeRunner(),
         )
         environ: WSGIEnvironment = {
             "REQUEST_METHOD": "POST",
             "PATH_INFO": "/v1/checks/deadlock",
             "CONTENT_LENGTH": "abc",
             "CONTENT_TYPE": "application/json",
-            "HTTP_X_API_KEY": TEST_API_KEY,
+            "HTTP_AUTHORIZATION": f"Bearer {TEST_PAT}",
             "wsgi.input": io.BytesIO(b"{}"),
         }
         captured: dict[str, object] = {}
@@ -503,18 +511,22 @@ class TestEdgeBranches:
         assert json.loads(body)["extensions"]["reason"] == "invalid_content_length"
 
     def test_non_utf8_check_body_returns_422(self) -> None:
-        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+        settings = ApiSettings()
         store = ModelStore()
         store.save(model=import_pnml(text=philosophes3_pnml()))
         app: WSGIApp = create_app(
-            settings=settings, store=store, run_store=RunStore(), runner=FakeRunner()
+            token_verifier=accepting_verifier(),
+            settings=settings,
+            store=store,
+            run_store=RunStore(),
+            runner=FakeRunner(),
         )
         environ: WSGIEnvironment = {
             "REQUEST_METHOD": "POST",
             "PATH_INFO": "/v1/checks/deadlock",
             "CONTENT_LENGTH": "3",
             "CONTENT_TYPE": "application/json",
-            "HTTP_X_API_KEY": TEST_API_KEY,
+            "HTTP_AUTHORIZATION": f"Bearer {TEST_PAT}",
             "wsgi.input": io.BytesIO(b"\xff\xfe\x00"),
         }
         captured: dict[str, object] = {}
@@ -575,6 +587,6 @@ class TestSettings:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.delenv("PETRICHOR_CHECK_TIMEOUT_SECONDS", raising=False)
-        assert ApiSettings(api_key=SecretStr(TEST_API_KEY)).check_timeout_seconds == 30
+        assert ApiSettings().check_timeout_seconds == 30
         monkeypatch.setenv("PETRICHOR_CHECK_TIMEOUT_SECONDS", "12")
-        assert ApiSettings(api_key=SecretStr(TEST_API_KEY)).check_timeout_seconds == 12
+        assert ApiSettings().check_timeout_seconds == 12
