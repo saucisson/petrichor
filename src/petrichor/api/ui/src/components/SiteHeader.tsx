@@ -4,9 +4,9 @@ import type { Theme } from "../theme";
 
 /* Common saucisson web v1 header (contract docs/consigne-interface-web-v1.md
    §4): logo + site name, the three zones (Accueil / Découvrir / Atelier),
-   language selector, persistent light/dark theme toggle, and the account
-   menu. "Se connecter" starts the OIDC browser login (issue #207); préférences
-   land with issue #208, déconnexion posts /auth/logout. */
+   language selector, persistent light/dark theme toggle. The account menu
+   ("Se connecter" / préférences / déconnexion) lands with the OIDC login
+   (issue #207) and the harmonisation pass (issue #209). */
 
 export const ZONE_IDS = ["accueil", "decouvrir", "atelier"] as const;
 export type Zone = (typeof ZONE_IDS)[number];
@@ -74,18 +74,6 @@ export default function SiteHeader({
               <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" />
             </svg>
           )}
-        </button>
-      </div>
-      <div className="header-group">
-        <button
-          id="login"
-          type="button"
-          className="btn"
-          onClick={() =>
-            window.location.assign(`/auth/login?returnTo=${encodeURIComponent("/ui/")}`)
-          }
-        >
-          {t("header.login")}
         </button>
       </div>
       <div className="header-group">

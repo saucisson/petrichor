@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 
 import httpx
 import structlog.testing
-from api_test_support import accepting_verifier
+from pydantic import SecretStr
 
 from conftest import fetch_ui_bundle, fetch_ui_stylesheet
 from petrichor.api.app import create_app
@@ -25,15 +25,14 @@ from petrichor.run_store import RunStore
 if TYPE_CHECKING:
     from wsgiref.types import WSGIEnvironment
 
-TEST_PAT = "test-pat"
-AUTH_HEADERS = {"Authorization": f"Bearer {TEST_PAT}"}
+TEST_API_KEY = "test-key"
+AUTH_HEADERS = {"X-API-Key": TEST_API_KEY}
 
 
 def build_client() -> httpx.Client:
     """Build a test client; the UI needs no store, only the app."""
-    settings = ApiSettings()
+    settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
     app = create_app(
-        token_verifier=accepting_verifier(),
         settings=settings,
         store=ModelStore(),
         run_store=RunStore(),
@@ -65,7 +64,7 @@ class TestStaticUi:
         bundle = fetch_ui_bundle(client)
         for step in ("Amorçage", "Questions statiques", "Vérifications MC", "Synthèse"):
             assert step in bundle
-        assert "Se connecter" in bundle  # web v1 (#207): account menu, no API key input
+        assert "Clé API" in bundle
         assert "Identifiant de session (reprise)" in bundle
         assert "aria-live" in bundle
         assert "aria-current" in bundle
@@ -125,14 +124,8 @@ class TestStaticUi:
     def test_path_traversal_is_refused_at_the_wsgi_layer(self) -> None:
         # httpx normalizes dot segments client-side, so the server-side guard
         # is exercised through a raw WSGI call with the un-normalized path.
-        settings = ApiSettings()
-        app = create_app(
-            token_verifier=accepting_verifier(),
-            settings=settings,
-            store=ModelStore(),
-            run_store=RunStore(),
-            runner=None,
-        )
+        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+        app = create_app(settings=settings, store=ModelStore(), run_store=RunStore(), runner=None)
         captured: dict[str, str] = {}
 
         def start_response(status: str, headers: list[tuple[str, str]]) -> None:
@@ -141,7 +134,7 @@ class TestStaticUi:
         environ: WSGIEnvironment = {
             "REQUEST_METHOD": "GET",
             "PATH_INFO": "/ui/../app.py",
-            "HTTP_AUTHORIZATION": f"Bearer {TEST_PAT}",
+            "HTTP_X_API_KEY": TEST_API_KEY,
             "wsgi.input": io.BytesIO(b""),
         }
         body = b"".join(app(environ, start_response))
@@ -155,14 +148,8 @@ class TestStaticUi:
         # the static base - the guard must refuse it (review PR #146).
         outside = tmp_path / "evil.js"
         outside.write_text("alert(1)", encoding="utf-8")
-        settings = ApiSettings()
-        app = create_app(
-            token_verifier=accepting_verifier(),
-            settings=settings,
-            store=ModelStore(),
-            run_store=RunStore(),
-            runner=None,
-        )
+        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+        app = create_app(settings=settings, store=ModelStore(), run_store=RunStore(), runner=None)
         captured: dict[str, str] = {}
 
         def start_response(status: str, headers: list[tuple[str, str]]) -> None:
@@ -171,7 +158,7 @@ class TestStaticUi:
         environ: WSGIEnvironment = {
             "REQUEST_METHOD": "GET",
             "PATH_INFO": "/ui//" + str(outside),
-            "HTTP_AUTHORIZATION": f"Bearer {TEST_PAT}",
+            "HTTP_X_API_KEY": TEST_API_KEY,
             "wsgi.input": io.BytesIO(b""),
         }
         body = b"".join(app(environ, start_response))

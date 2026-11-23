@@ -4,12 +4,14 @@
     "languageLabel": "Language"
   },
   "header": {
+    "groupConnection": "Connection",
     "groupSession": "Session",
+    "apiKeyLabel": "API key",
+    "apiKeyAria": "API key",
     "sessionLabel": "Session",
     "sessionAria": "Session identifier (resume)",
     "resume": "Resume session",
-    "themeToggle": "Switch to dark / light mode",
-    "login": "Log in"
+    "themeToggle": "Switch to dark / light mode"
   },
   "nav": {
     "aria": "Steps",

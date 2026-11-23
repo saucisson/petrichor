@@ -34,12 +34,11 @@ uv run notify send --severity question --message "Need a decision on X." --issue
 
 ## Authentication
 
-The HTTP API (`/v1/`) requires an applicative session cookie (web v1 OIDC
-browser login via the Zitadel IdP, issue #207) or an OIDC Bearer JWT (a PAT,
-validated locally via JWKS); the legacy `X-API-Key` header is removed. Auth
-is active by default and `AUTH_DISABLED=1` is the local-dev bypass only. See
+The HTTP API (`/v1/`) requires an OIDC Bearer JWT (Zitadel IdP, validated
+locally via JWKS) or the legacy `X-API-Key` header; auth is active by
+default and `AUTH_DISABLED=1` is the local-dev bypass only. See
 `deploy/README.md` (« Authentification ») for the `AUTH_*` variables,
-`.env.example`, and curl examples (issues #182-#184, #207).
+`.env.example`, and curl examples (issues #182-#184).
 
 ## What is in the box
 
