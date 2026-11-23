@@ -11,6 +11,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+import structlog.testing
 from pydantic import SecretStr
 
 from petrichor.api import create_app
@@ -92,6 +93,16 @@ class TestPublicReadRoutes:
         response = client.get("/v1/models/m_unknown", headers={"Accept": PETRI_JSON_ACCEPT})
         assert response.status_code == 404
         assert response.json()["extensions"]["reason"] == "model_not_found"
+
+    def test_public_read_allowance_is_narrated(self, client: httpx.Client) -> None:
+        # ADR-0005: the narration of the public-route decision is pinned so it
+        # cannot silently vanish.
+        with structlog.testing.capture_logs() as events:
+            response = client.get("/v1/catalog/models")
+        assert response.status_code == 200
+        allowed = [e for e in events if e["event"] == "api_public_read_allowed"]
+        assert len(allowed) == 1
+        assert allowed[0]["path"] == "/v1/catalog/models"
 
 
 class TestProtectedRoutesRequireSession:

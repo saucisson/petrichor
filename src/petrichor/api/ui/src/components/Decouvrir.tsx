@@ -76,6 +76,7 @@ export default function Decouvrir() {
         {!loading && error === null ? (
           <>
             <p className="nav-hint">{t("decouvrir.total", { count: total })}</p>
+            {entries.length === 0 ? <p className="nav-hint">{t("decouvrir.empty")}</p> : null}
             <ul id="decouvrir-list">
               {entries.map((entry) => (
                 <li key={entry.name} className="decouvrir-entry">
