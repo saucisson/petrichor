@@ -5,8 +5,7 @@
 # beyond the loopback-published port.
 #
 # The engine timeout is configurable: ENGINE_TIMEOUT (seconds, default 30).
-# Web v1 (issue #207): no static API key anymore - the browser login is OIDC
-# (session cookie) and machine callers use a Bearer PAT.
+# The API key is required: PETRICHOR_API_KEY must be set in the environment.
 services:
   api:
     build:
@@ -24,10 +23,10 @@ services:
     ports:
       - "127.0.0.1:${API_HOST_PORT:-8080}:8080"
     environment:
-      # OIDC layer (PT-1/PT-2, issues #182-#183; web v1 login, #207):
-      # forwarded only when set in the host .env; when AUTH_ISSUER is empty the
-      # Bearer verifier and the /auth/* login are not wired (never open: the
-      # gate answers 401 session_required) and logs auth_bearer_not_configured.
+      PETRICHOR_API_KEY: ${PETRICHOR_API_KEY:?PETRICHOR_API_KEY is required}
+      # OIDC Bearer layer (PT-1/PT-2, issues #182-#183): forwarded only when
+      # set in the host .env; when AUTH_ISSUER is empty the API falls back to
+      # the legacy X-API-Key alone (never open) and logs auth_bearer_not_configured.
       AUTH_ISSUER: ${AUTH_ISSUER:-}
       AUTH_CLIENT_ID: ${AUTH_CLIENT_ID:-}
       AUTH_CLIENT_SECRET: ${AUTH_CLIENT_SECRET:-}
