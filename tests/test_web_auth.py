@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING
 from urllib.parse import parse_qs, urlparse
 
 import httpx
+import structlog
+import structlog.testing
 from api_test_support import VALID_CLAIMS, StubVerifier, make_auth_settings
 
 from petrichor.api import create_app
@@ -50,11 +52,13 @@ DISCOVERY_DOCUMENT = {
 }
 
 
-def fake_idp(*, token_status: int = 200) -> httpx.Client:
+def fake_idp(*, token_status: int = 200, discovery_status: int = 200) -> httpx.Client:
     """An httpx client serving the discovery document and the token endpoint."""
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/.well-known/openid-configuration"):
+            if discovery_status != 200:
+                return httpx.Response(discovery_status, json={"error": "unavailable"})
             return httpx.Response(200, json=DISCOVERY_DOCUMENT)
         if request.url.path == urlparse(TOKEN_ENDPOINT).path:
             if token_status != 200:
@@ -95,10 +99,10 @@ def make_app(
     return client, sessions, pending
 
 
-def make_flow(*, token_status: int = 200) -> OidcFlowClient:
+def make_flow(*, token_status: int = 200, discovery_status: int = 200) -> OidcFlowClient:
     return OidcFlowClient(
         settings=make_auth_settings(),
-        http_client=fake_idp(token_status=token_status),
+        http_client=fake_idp(token_status=token_status, discovery_status=discovery_status),
     )
 
 
@@ -134,14 +138,31 @@ class TestLoginRedirect:
 
     def test_open_redirect_return_to_is_neutralized(self) -> None:
         client, _, _pending = make_app(oidc_flow=make_flow())
-        state = login_and_get_state(client, return_to="//evil.example")
-        response = client.get(
-            "/auth/callback",
-            params={"state": state, "code": "fake-code"},
-            follow_redirects=False,
-        )
-        assert response.status_code == 302
-        assert response.headers["location"] == "/ui/"
+        for evil in ("//evil.example", "/\\evil.example", "https://evil.example"):
+            state = login_and_get_state(client, return_to=evil)
+            response = client.get(
+                "/auth/callback",
+                params={"state": state, "code": "fake-code"},
+                follow_redirects=False,
+            )
+            assert response.status_code == 302
+            assert response.headers["location"] == "/ui/"
+
+    def test_login_redirect_is_narrated(self) -> None:
+        client, _, _ = make_app(oidc_flow=make_flow())
+        with structlog.testing.capture_logs() as logs:
+            client.get("/auth/login", params={"returnTo": "/ui/"}, follow_redirects=False)
+        events = [event["event"] for event in logs]
+        assert "web_auth_login_redirect" in events
+
+    def test_unreachable_idp_is_a_typed_503(self) -> None:
+        client, _, _ = make_app(oidc_flow=make_flow(discovery_status=500))
+        with structlog.testing.capture_logs() as logs:
+            response = client.get("/auth/login", follow_redirects=False)
+        assert response.status_code == 503
+        assert response.json()["extensions"]["reason"] == "oidc_unavailable"
+        events = [event["event"] for event in logs]
+        assert "web_auth_discovery_failed" in events
 
     def test_login_without_oidc_configured_is_503(self) -> None:
         client, _, _ = make_app(oidc_flow=None)
@@ -154,10 +175,21 @@ class TestCallback:
     def test_full_flow_sets_the_session_cookie(self) -> None:
         client, sessions, _ = make_app(oidc_flow=make_flow())
         state = login_and_get_state(client)
-        response = client.get(
-            "/auth/callback", params={"state": state, "code": "fake-code"}, follow_redirects=False
-        )
+        with structlog.testing.capture_logs() as logs:
+            response = client.get(
+                "/auth/callback",
+                params={"state": state, "code": "fake-code"},
+                follow_redirects=False,
+            )
         assert response.status_code == 302
+        events = {event["event"]: event for event in logs}
+        assert "web_auth_login_succeeded" in events
+        assert events["web_auth_login_succeeded"]["sub"] == "user-1"
+        # ADR-0005: the session cookie value is never logged, only its digest.
+        assert "web_session_created" in events
+        created = events["web_session_created"]
+        assert "session_id" not in created
+        assert isinstance(created["session_digest"], str)
         assert response.headers["location"] == "/ui/"
         cookie = response.headers["set-cookie"]
         assert cookie.startswith(f"{SESSION_COOKIE}=")
@@ -176,6 +208,13 @@ class TestCallback:
         )
         assert response.status_code == 401
         assert response.json()["extensions"]["reason"] == "invalid_state"
+        with structlog.testing.capture_logs() as logs:
+            client.get(
+                "/auth/callback",
+                params={"state": "unknown", "code": "fake-code"},
+                follow_redirects=False,
+            )
+        assert "web_auth_callback_rejected" in [event["event"] for event in logs]
         # A consumed state is gone: replaying the same callback fails too.
         state = login_and_get_state(client)
         first = client.get(
@@ -195,6 +234,14 @@ class TestCallback:
         )
         assert response.status_code == 401
         assert response.json()["extensions"]["reason"] == "code_exchange_failed"
+        with structlog.testing.capture_logs() as logs:
+            state = login_and_get_state(client)
+            client.get(
+                "/auth/callback",
+                params={"state": state, "code": "bad"},
+                follow_redirects=False,
+            )
+        assert "web_auth_code_exchange_failed" in [event["event"] for event in logs]
 
     def test_rejected_id_token_is_401(self) -> None:
         verifier = StubVerifier(
@@ -269,9 +316,17 @@ class TestLogout:
         )
         cookie = callback.headers["set-cookie"].split(";", 1)[0]
         session_id = cookie.removeprefix(f"{SESSION_COOKIE}=")
-        response = client.post("/auth/logout", headers={"Cookie": cookie}, follow_redirects=False)
+        with structlog.testing.capture_logs() as logs:
+            response = client.post(
+                "/auth/logout", headers={"Cookie": cookie}, follow_redirects=False
+            )
         assert response.status_code == 302
-        assert response.headers["location"].endswith("/ui/")
+        # The IdP end_session endpoint is used (id_token_hint), falling back
+        # to /ui/ when the discovery document has none.
+        location = response.headers["location"]
+        assert location.startswith(END_SESSION_ENDPOINT)
+        assert "id_token_hint=" in location
+        assert "web_auth_logout" in [event["event"] for event in logs]
         clear = response.headers["set-cookie"]
         assert clear.startswith(f"{SESSION_COOKIE}=;")
         assert "Max-Age=0" in clear

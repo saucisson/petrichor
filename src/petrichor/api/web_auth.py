@@ -41,12 +41,19 @@ CODE_CHALLENGE_METHOD = "S256"
 
 @dataclass(frozen=True)
 class WebSession:
-    """One applicative session, stored server-side."""
+    """One applicative session, stored server-side.
+
+    ``id_token``/``access_token`` stay server-side only (logout revocation and
+    IdP end-session); the cookie carries just the opaque ``session_id``, and
+    logs never carry it - only its digest (ADR-0005).
+    """
 
     session_id: str
     claims: TokenClaims
     created_at: float
     expires_at: float
+    id_token: str = ""
+    access_token: str = ""
 
 
 @dataclass(frozen=True)
@@ -69,7 +76,9 @@ class WebSessionStore:
         self._sessions: dict[str, WebSession] = {}
         self._lock = threading.Lock()
 
-    def create(self, *, claims: TokenClaims) -> WebSession:
+    def create(
+        self, *, claims: TokenClaims, id_token: str = "", access_token: str = ""
+    ) -> WebSession:
         """Create a fresh session (rotation: a new id at every login)."""
         now = time.time()
         session = WebSession(
@@ -77,10 +86,13 @@ class WebSessionStore:
             claims=claims,
             created_at=now,
             expires_at=now + self._ttl_seconds,
+            id_token=id_token,
+            access_token=access_token,
         )
         with self._lock:
             self._sessions[session.session_id] = session
-        logger.debug("web_session_created", session_id=session.session_id)
+        # ADR-0005: never log the cookie value (a bearer credential) - digest only.
+        logger.debug("web_session_created", session_digest=_digest(session.session_id))
         return session
 
     def get(self, *, session_id: str) -> WebSession | None:
@@ -98,7 +110,7 @@ class WebSessionStore:
         """Drop one session (logout)."""
         with self._lock:
             self._sessions.pop(session_id, None)
-        logger.debug("web_session_destroyed", session_id=session_id)
+        logger.debug("web_session_destroyed", session_digest=_digest(session_id))
 
 
 class PendingLoginStore:
@@ -140,9 +152,20 @@ def code_challenge_s256(*, code_verifier: str) -> str:
     return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
 
 
+def _digest(value: str) -> str:
+    """A short non-reversible digest of a secret, for log narration (ADR-0005)."""
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:12]
+
+
 def is_internal_path(*, path: str) -> bool:
-    """A returnTo is valid only as an internal path (never an open redirect)."""
-    return path.startswith("/") and not path.startswith("//")
+    r"""A returnTo is valid only as an internal path (never an open redirect).
+
+    Rejected: external URLs, protocol-relative ``//host``, and backslash
+    variants (browsers normalize ``/\host`` to ``//host``).
+    """
+    if not path.startswith("/") or path.startswith(("//", "/\\")):
+        return False
+    return "\\" not in path
 
 
 class OidcFlowClient:
