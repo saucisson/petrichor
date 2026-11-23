@@ -172,9 +172,11 @@ class TestCatalogListing:
         assert response.status_code == 503
         assert response.json()["extensions"]["reason"] == "catalog_unavailable"
 
-    def test_listing_requires_the_api_key(self, client: httpx.Client) -> None:
+    def test_listing_is_public_read_only(self, client: httpx.Client) -> None:
+        # Web v1 (issue #206): GET /v1/catalog/models is a public route of the
+        # Découvrir zone - no credentials required.
         response = client.get("/v1/catalog/models")
-        assert response.status_code == 401
+        assert response.status_code == 200
 
 
 class TestCatalogImport:
@@ -239,9 +241,10 @@ class TestCatalogImport:
         response = client.post("/v1/catalog/import", json={"wrong": 1}, headers=AUTH_HEADERS)
         assert response.status_code == 422
 
-    def test_import_requires_the_api_key(self, client: httpx.Client) -> None:
+    def test_import_without_credentials_is_401_session_required(self, client: httpx.Client) -> None:
         response = client.post("/v1/catalog/import", json={"name": "Philosophers-PT-010"})
         assert response.status_code == 401
+        assert response.json()["extensions"]["reason"] == "session_required"
 
 
 class TestCatalogNarration:

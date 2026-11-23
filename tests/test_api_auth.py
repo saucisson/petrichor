@@ -20,7 +20,7 @@ from petrichor.api import create_app
 from petrichor.api.auth import (
     ENVIRON_AUTH_CLAIMS,
     REASON_INVALID_BEARER,
-    REASON_MISSING_CREDENTIALS,
+    REASON_SESSION_REQUIRED,
     auth_claims_from_environ,
     authenticate_request,
 )
@@ -136,7 +136,7 @@ class TestLegacyApiKey:
         client = make_app(accepting_verifier)
         response = client.get(PROBE_PATH)
         assert response.status_code == 401
-        assert response.json()["extensions"]["reason"] == REASON_MISSING_CREDENTIALS
+        assert response.json()["extensions"]["reason"] == REASON_SESSION_REQUIRED
 
     def test_wrong_api_key_returns_401(self, accepting_verifier: StubVerifier) -> None:
         client = make_app(accepting_verifier)
@@ -239,7 +239,7 @@ class TestBearerFallback:
         client = make_app(build_token_verifier(environment={}))
         response = client.get(PROBE_PATH)
         assert response.status_code == 401
-        assert response.json()["extensions"]["reason"] == REASON_MISSING_CREDENTIALS
+        assert response.json()["extensions"]["reason"] == REASON_SESSION_REQUIRED
 
     def test_fallback_app_still_accepts_the_legacy_key(self) -> None:
         client = make_app(build_token_verifier(environment={}))

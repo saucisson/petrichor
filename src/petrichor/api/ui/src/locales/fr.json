@@ -223,6 +223,11 @@
   },
   "decouvrir": {
     "title": "Découvrir",
-    "placeholder": "Cette zone publique présentera en lecture seule les catalogues de modèles et les exemples. Aucun compte requis."
+    "intro": "Consultation en lecture seule du catalogue de modèles MCC : aucun compte requis, aucune écriture possible.",
+    "searchLabel": "Recherche dans le catalogue",
+    "searchButton": "Rechercher",
+    "loading": "Chargement du catalogue…",
+    "total": "{{count}} modèle(s) dans le catalogue.",
+    "empty": "Aucun modèle ne correspond à la recherche."
   }
 }

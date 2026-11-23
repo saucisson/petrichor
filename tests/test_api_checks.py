@@ -171,7 +171,7 @@ class TestAuthentication:
         )
         assert response.status_code == 401
         assert response.headers["Content-Type"] == PROBLEM_JSON_CONTENT_TYPE
-        assert response.json()["extensions"]["reason"] == "missing_or_invalid_api_key"
+        assert response.json()["extensions"]["reason"] == "session_required"
 
     def test_get_run_without_api_key_returns_401(self) -> None:
         client, _, _ = build_client(FakeRunner())

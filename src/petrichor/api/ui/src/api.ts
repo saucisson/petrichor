@@ -17,7 +17,13 @@ export class ApiClient {
   constructor(private readonly apiKey: string) {}
 
   private headers(extra?: Record<string, string>): Record<string, string> {
-    return { "X-API-Key": this.apiKey, ...(extra ?? {}) };
+    // Web v1 (issue #206): an empty key means a public call - the header is
+    // omitted entirely, never sent empty (its removal is issue #207).
+    const headers: Record<string, string> = { ...(extra ?? {}) };
+    if (this.apiKey !== "") {
+      headers["X-API-Key"] = this.apiKey;
+    }
+    return headers;
   }
 
   async request(path: string, options?: RequestInit): Promise<Response> {
