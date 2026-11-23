@@ -82,7 +82,7 @@ flowchart TD
 | Outils | Conteneurs **runners** (LoLA, ITS-Tools, TAPAAL, GreatSPN) | Un conteneur par outil, adaptateur de dialecte embarqué dans le conteneur |
 | LLM | Couche d'abstraction `LLMProvider` | Implémentations : `MistralAPIProvider`, `LocalProvider` (vLLM/Ollama), `DeterministicMockProvider` |
 | Stockage | **JSON canonique = vérité** ; PNML = interop | ids d'éléments stables, `layout` et `annotations` de première classe |
-| Auth | Clé API simple (`X-API-Key`) | Prototype mono-utilisateur ; pas d'OAuth |
+| Auth | Cookie de session OIDC (web v1, #207) + Bearer PAT ; `X-API-Key` retiré | Zones publiques + atelier authentifié |
 
 Le **mock déterministe** est un citoyen de première classe : les sorties LLM du prototype (profils sémantiques, lectures naturelles, clusters) sont scriptées dans des *golden files*, ce qui rend les expériences reproductibles — exigence pour la publication (étude C, benchmark par injection de fautes).
 
@@ -586,7 +586,7 @@ Les conventions de codage génériques sont celles du template. Ne figurent ici 
 
 - **Verrous de verdict** : seul le paquet `engines/` (adaptateurs + mini-moteur) peut produire une valeur de verdict ; un test de garde vérifie qu'aucun autre module ne l'importe. Le mock déterministe et les golden files (§15–16) sont l'unique source de verdicts dans les tests sans moteur.
 - **Moteurs** : un moteur = un service `docker compose`, image construite **localement** (licences GPL : pas de redistribution), version épinglée + empreinte, healthcheck, conteneur non privilégié, pas de réseau sortant au-delà du nécessaire. Tests de verdicts connus **dans le vrai conteneur** (oracles du benchmark MCC, §17.5), marqués `@engine` : un échec moteur = un échec CI, jamais un skip silencieux.
-- **Budget & asynchrone** (§5, §12.4) : toute commande moteur passe par le plafond de session ; timeout toujours défini ; `202 + Location`, idempotence par hachage et authentification `X-API-Key` testées.
+- **Budget & asynchrone** (§5, §12.4) : toute commande moteur passe par le plafond de session ; timeout toujours défini ; `202 + Location`, idempotence par hachage et authentification session/PAT testées (`X-API-Key` retiré, #207).
 - **Déterminisme du mock** : graine configurable, horloge injectée ; deux exécutions d'une même session produisent un journal identique (test).
 - **Entrées PNML** : validées à l'import, jamais de confiance aveugle au XML — rejet explicite plutôt que dépliage faux (cf. §18.5).
 
@@ -599,7 +599,7 @@ Les conventions de codage génériques sont celles du template. Ne figurent ici 
 | 3 | `POST /models` + import PNML P/T, puis Symmetric non déplié | §13 | import de Philosophes-3, rejet explicite des PNML invalides |
 | 4 | Compose moteurs + driver `dummy` + contrat de sortie normalisée | §4, §17 | un run dummy produit verdict + witness + coût JSON |
 | 5 | Mini-moteur statique embarqué (invariants, siphons/pièges, Tarjan, BFS `AG EF`) | §18.1 | résultats identiques au fil rouge (14 états, 6 invariants, 1 impasse) |
-| 6 | Runs asynchrones : `POST /checks` → 202+Location, `X-API-Key`, idempotence | §5 | rejouer la même requête retourne le même run |
+| 6 | Runs asynchrones : `POST /checks` → 202+Location, auth session/PAT (#207), idempotence | §5 | rejouer la même requête retourne le même run |
 | 7 | Archivage des runs + budget de session | §12.4–5 | aucun run supprimable par le code ; plafond testé |
 | 8 | Mock LLM déterministe + golden files (corpus Philosophes-3) | §15–16 | deux exécutions produisent un journal identique |
 | 9 | Jalon : bout en bout réel | §11 | Philosophes-3 importé, `EF DEADLOCK` exécuté sur un moteur réel qualifié, run lisible — même scénario rejoué sur mock |

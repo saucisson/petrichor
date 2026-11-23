@@ -65,7 +65,7 @@ class TestStaticUi:
         bundle = fetch_ui_bundle(client)
         for step in ("Amorçage", "Questions statiques", "Vérifications MC", "Synthèse"):
             assert step in bundle
-        assert "Clé API" in bundle
+        assert "Se connecter" in bundle  # web v1 (#207): account menu, no API key input
         assert "Identifiant de session (reprise)" in bundle
         assert "aria-live" in bundle
         assert "aria-current" in bundle

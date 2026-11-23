@@ -16,7 +16,6 @@ type Step = "amorcage" | "questions" | "verifications" | "synthese";
 
 const STEP_IDS: Step[] = ["amorcage", "questions", "verifications", "synthese"];
 
-const API_KEY_STORAGE = "petrichor.apiKey";
 const SESSION_STORAGE = "petrichor.sessionId";
 
 applyInitialTheme();
@@ -40,7 +39,6 @@ export default function App() {
     document.documentElement.dataset.theme = theme;
     document.documentElement.style.colorScheme = theme;
   }, [theme]);
-  const [apiKey, setApiKey] = useState<string>(() => localStorage.getItem(API_KEY_STORAGE) ?? "");
   const [sessionId, setSessionId] = useState<string>(
     () => localStorage.getItem(SESSION_STORAGE) ?? "",
   );
@@ -48,15 +46,10 @@ export default function App() {
   const [reloadToken, setReloadToken] = useState(0);
   const [resumeError, setResumeError] = useState<string | null>(null);
 
-  // P76: the client is memoized on the key - recreating it every render
-  // invalidated every useCallback depending on it and caused a fetch loop.
-  const client = useMemo(() => new ApiClient(apiKey), [apiKey]);
+  // P76/web v1 (#207): the client is stateless - the session cookie carries
+  // the authentication, so there is nothing to memoize on.
+  const client = useMemo(() => new ApiClient(), []);
   const bumpReload = useCallback(() => setReloadToken((token) => token + 1), []);
-
-  const onApiKeyChange = (value: string) => {
-    setApiKey(value);
-    localStorage.setItem(API_KEY_STORAGE, value);
-  };
 
   const onSessionCreated = (newSessionId: string) => {
     setSessionId(newSessionId);
@@ -98,18 +91,6 @@ export default function App() {
       {zone === "decouvrir" ? <Decouvrir /> : null}
       {zone === "atelier" ? (
         <>
-          <div className="header-group atelier-controls">
-            <span className="header-group-label">{t("header.groupConnection")}</span>
-            <label htmlFor="api-key">{t("header.apiKeyLabel")}</label>
-            <input
-              id="api-key"
-              type="password"
-              autoComplete="off"
-              aria-label={t("header.apiKeyAria")}
-              value={apiKey}
-              onChange={(event) => onApiKeyChange(event.target.value)}
-            />
-          </div>
           <div className="header-group atelier-controls">
             <span className="header-group-label">{t("header.groupSession")}</span>
             <label htmlFor="session-id">{t("header.sessionLabel")}</label>

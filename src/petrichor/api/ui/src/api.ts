@@ -14,25 +14,28 @@ export class ApiError extends Error {
 }
 
 export class ApiClient {
-  constructor(private readonly apiKey: string) {}
-
+  /* Web v1 (issue #207): no API key in the browser anymore. The applicative
+     session travels in the HttpOnly cookie set by /auth/callback, sent with
+     `credentials: "include"`; a 401 session_required redirects to the OIDC
+     login. Public read calls (Découvrir) simply send no credential. */
   private headers(extra?: Record<string, string>): Record<string, string> {
-    // Web v1 (issue #206): an empty key means a public call - the header is
-    // omitted entirely, never sent empty (its removal is issue #207).
-    const headers: Record<string, string> = { ...(extra ?? {}) };
-    if (this.apiKey !== "") {
-      headers["X-API-Key"] = this.apiKey;
-    }
-    return headers;
+    return { ...(extra ?? {}) };
   }
 
   async request(path: string, options?: RequestInit): Promise<Response> {
     const response = await fetch(path, {
       ...options,
+      credentials: "include",
       headers: this.headers(options?.headers as Record<string, string> | undefined),
     });
     if (response.status === 401) {
-      throw new ApiError(401, "Clé API invalide (401).");
+      const reason = await problemReason(response);
+      if (reason === "session_required") {
+        const returnTo = window.location.pathname + window.location.search;
+        window.location.assign(`/auth/login?returnTo=${encodeURIComponent(returnTo)}`);
+        throw new ApiError(401, "Session requise : redirection vers la connexion (401).");
+      }
+      throw new ApiError(401, "Accès refusé (401).");
     }
     return response;
   }
@@ -116,6 +119,16 @@ export class ApiClient {
       { method: "POST", headers: { "Content-Type": contentType }, body },
     );
     return parseImportResponse(response);
+  }
+}
+
+async function problemReason(response: Response): Promise<string | undefined> {
+  // The typed problem payload carries the reason in extensions (ADR-0016).
+  try {
+    const payload = (await response.clone().json()) as { extensions?: { reason?: string } };
+    return payload.extensions?.reason;
+  } catch {
+    return undefined;
   }
 }
 
