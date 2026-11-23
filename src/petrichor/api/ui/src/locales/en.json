@@ -206,5 +206,23 @@
     "clarification": "Clarifying the proposal…",
     "cluster": "Triaging the violated clauses…",
     "narration": "Narrating the witness…"
+  },
+  "zones": {
+    "aria": "Site zones",
+    "accueil": "Home",
+    "decouvrir": "Explore",
+    "atelier": "Workshop"
+  },
+  "landing": {
+    "title": "Petrichor — property elicitation on Petri nets",
+    "tagline": "Check properties of your PNML models through guided elicitation and model checking.",
+    "description": "Petrichor accompanies the analyst from model import to proof synthesis: model setup, static questions, multi-tool model-checking verifications, and the proof dossier. The Explore zone lets you browse catalogs and examples freely; the workshop, reserved for signed-in accounts, runs the computations.",
+    "ctaExplore": "Explore the Explore zone",
+    "ctaWorkshop": "Open the workshop",
+    "hintNoAuth": "No account needed on this page or in the Explore zone."
+  },
+  "decouvrir": {
+    "title": "Explore",
+    "placeholder": "This public zone will present the model catalogs and examples in read-only mode. No account needed."
   }
 }

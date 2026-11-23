@@ -1,6 +1,6 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import App from "../src/App";
+import { renderAtelier } from "./render-atelier";
 import { applyLanguage } from "../src/i18n";
 
 /* Formula editing in the UI (issue #125, P37 endpoints): the edit goes
@@ -100,7 +100,7 @@ describe("formule éditable (issue #125)", () => {
         respond: () => jsonResponse(201, EDIT_RESPONSE),
       },
     ]);
-    render(<App />);
+    renderAtelier();
     fireEvent.click(screen.getByRole("button", { name: "2. Questions statiques" }));
     await waitFor(() => expect(screen.getByText(/AG\(philo0 thinking\)/)).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Éditer la formule" }));
@@ -139,7 +139,7 @@ describe("formule éditable (issue #125)", () => {
           }),
       },
     ]);
-    render(<App />);
+    renderAtelier();
     fireEvent.click(screen.getByRole("button", { name: "2. Questions statiques" }));
     await waitFor(() => expect(screen.getByText(/AG\(philo0 thinking\)/)).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Éditer la formule" }));
@@ -162,7 +162,7 @@ describe("formule éditable (issue #125)", () => {
           jsonResponse(429, { status: 429, detail: "Budget MC épuisé pour cette session." }),
       },
     ]);
-    render(<App />);
+    renderAtelier();
     fireEvent.click(screen.getByRole("button", { name: "2. Questions statiques" }));
     await waitFor(() => expect(screen.getByText(/AG\(philo0 thinking\)/)).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Éditer la formule" }));

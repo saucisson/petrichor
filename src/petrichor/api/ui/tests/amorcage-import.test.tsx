@@ -1,6 +1,6 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import App from "../src/App";
+import { renderAtelier } from "./render-atelier";
 
 /* Import zone of the Amorçage step (issue #163): explicit click-or-drop
    zone, file name and size shown before sending, .pnml/.xml validation,
@@ -72,7 +72,7 @@ afterEach(() => {
 describe("amorçage import zone (issue #163)", () => {
   it("shows the selected file name and size before sending, then confirms the import with the model id", async () => {
     mockFetch(IMPORT_ROUTES(201));
-    render(<App />);
+    renderAtelier();
     const file = new File(["<pnml/>"], "philosophes.pnml", { type: "application/pnml+xml" });
     openLocalImport();
     fireEvent.change(screen.getByLabelText("Fichier PNML"), { target: { files: [file] } });
@@ -87,7 +87,7 @@ describe("amorçage import zone (issue #163)", () => {
 
   it("signals an idempotent re-import when the model is already known (200)", async () => {
     mockFetch(IMPORT_ROUTES(200));
-    render(<App />);
+    renderAtelier();
     const file = new File(["<pnml/>"], "philosophes.pnml", { type: "application/pnml+xml" });
     openLocalImport();
     fireEvent.change(screen.getByLabelText("Fichier PNML"), { target: { files: [file] } });
@@ -99,7 +99,7 @@ describe("amorçage import zone (issue #163)", () => {
 
   it("refuses a non .pnml/.xml extension before any request", () => {
     mockFetch(IMPORT_ROUTES(201));
-    render(<App />);
+    renderAtelier();
     const file = new File(["hello"], "notes.txt", { type: "text/plain" });
     openLocalImport();
     fireEvent.change(screen.getByLabelText("Fichier PNML"), { target: { files: [file] } });
@@ -112,7 +112,7 @@ describe("amorçage import zone (issue #163)", () => {
 
   it("requires a file before sending", () => {
     mockFetch(IMPORT_ROUTES(201));
-    render(<App />);
+    renderAtelier();
     openLocalImport();
     fireEvent.click(screen.getByRole("button", { name: "Importer le modèle et créer la session" }));
     expect(screen.getByRole("alert")).toHaveTextContent("Aucun fichier sélectionné.");
@@ -121,7 +121,7 @@ describe("amorçage import zone (issue #163)", () => {
 
   it("accepts a dropped file in the import zone", () => {
     mockFetch(IMPORT_ROUTES(201));
-    const { container } = render(<App />);
+    const { container } = renderAtelier();
     openLocalImport();
     const zone = container.querySelector(".import-zone");
     expect(zone).not.toBeNull();
@@ -137,7 +137,7 @@ describe("amorçage import zone (issue #163)", () => {
         respond: () => jsonResponse(422, { detail: "PNML invalide : balise <net> manquante." }),
       },
     ]);
-    render(<App />);
+    renderAtelier();
     const file = new File(["<pnml/>"], "broken.pnml", { type: "application/pnml+xml" });
     openLocalImport();
     fireEvent.change(screen.getByLabelText("Fichier PNML"), { target: { files: [file] } });

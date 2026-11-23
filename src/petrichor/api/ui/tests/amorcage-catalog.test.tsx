@@ -1,6 +1,6 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import App from "../src/App";
+import { renderAtelier } from "./render-atelier";
 
 /* P71 (issue #166, spec §21): the three import paths of the Amorçage step —
    catalog search (query + facets, COL warning with -PT- twin, import by
@@ -133,7 +133,7 @@ afterEach(() => {
 describe("amorçage catalog panel (issue #166)", () => {
   it("searches the catalog with query and facets, then imports by name with provenance confirmation", async () => {
     mockFetch(BASE_ROUTES);
-    render(<App />);
+    renderAtelier();
     openCatalog();
     fireEvent.change(screen.getByLabelText("Recherche dans le catalogue"), {
       target: { value: "philosophes" },
@@ -165,7 +165,7 @@ describe("amorçage catalog panel (issue #166)", () => {
   // P77: clicking a column header emits the server `sort` parameter.
   it("sends sort= when a column header is clicked and toggles the direction", async () => {
     mockFetch(BASE_ROUTES);
-    render(<App />);
+    renderAtelier();
     openCatalog();
     fireEvent.click(screen.getByRole("button", { name: "Rechercher" }));
     await waitFor(() => expect(screen.getByText(/2 modèle\(s\) dans le catalogue/)).toBeInTheDocument());
@@ -206,7 +206,7 @@ describe("amorçage catalog panel (issue #166)", () => {
         },
       },
     ]);
-    render(<App />);
+    renderAtelier();
     openCatalog();
     fireEvent.click(screen.getByRole("button", { name: "Rechercher" }));
     await waitFor(() => expect(screen.getByText("philosophes-COL-v3")).toBeInTheDocument());
@@ -235,7 +235,7 @@ describe("amorçage catalog panel (issue #166)", () => {
         },
       },
     ]);
-    render(<App />);
+    renderAtelier();
     openCatalog();
     fireEvent.click(screen.getByRole("button", { name: "Rechercher" }));
     await waitFor(() => expect(screen.getByText("philosophes-COL-v3")).toBeInTheDocument());
@@ -264,7 +264,7 @@ describe("amorçage catalog panel (issue #166)", () => {
 
   it("warns on COL entries and proposes the -PT- twin", async () => {
     mockFetch(BASE_ROUTES);
-    render(<App />);
+    renderAtelier();
     openCatalog();
     fireEvent.click(screen.getByRole("button", { name: "Rechercher" }));
     await waitFor(() => expect(screen.getByText(/réseau symétrique non déplié/)).toBeInTheDocument());
@@ -276,7 +276,7 @@ describe("amorçage catalog panel (issue #166)", () => {
 
   it("imports by exact catalog name from the dedicated field", async () => {
     mockFetch(BASE_ROUTES);
-    render(<App />);
+    renderAtelier();
     openCatalog();
     fireEvent.change(screen.getByLabelText("Nom exact dans le catalogue"), {
       target: { value: "philosophes-PT-v3" },
@@ -293,7 +293,7 @@ describe("amorçage catalog panel (issue #166)", () => {
         respond: () => jsonResponse(503, { detail: "catalog index not ready" }),
       },
     ]);
-    render(<App />);
+    renderAtelier();
     openCatalog();
     fireEvent.click(screen.getByRole("button", { name: "Rechercher" }));
     await waitFor(() =>
@@ -309,7 +309,7 @@ describe("amorçage catalog panel (issue #166)", () => {
         respond: () => jsonResponse(404, { detail: "unknown catalog model: nope" }),
       },
     ]);
-    render(<App />);
+    renderAtelier();
     openCatalog();
     fireEvent.change(screen.getByLabelText("Nom exact dans le catalogue"), { target: { value: "nope" } });
     fireEvent.click(screen.getByRole("button", { name: "Importer depuis le catalogue" }));
@@ -322,7 +322,7 @@ describe("amorçage catalog panel (issue #166)", () => {
 describe("amorçage URL import (issue #166)", () => {
   it("imports from a URL and shows the provenance", async () => {
     mockFetch(BASE_ROUTES);
-    render(<App />);
+    renderAtelier();
     openUrlImport();
     fireEvent.change(screen.getByLabelText(/URL du modèle ou de l'archive/), {
       target: { value: "https://example.org/m.pnml" },
@@ -345,7 +345,7 @@ describe("amorçage URL import (issue #166)", () => {
           jsonResponse(422, { detail: "url host not in allowlist", extensions: { reason: "url_not_allowed" } }),
       },
     ]);
-    render(<App />);
+    renderAtelier();
     openUrlImport();
     fireEvent.change(screen.getByLabelText(/URL du modèle ou de l'archive/), {
       target: { value: "https://evil.example/x.pnml" },
@@ -392,7 +392,7 @@ describe("amorçage archive import and 409 candidate choice (issue #166)", () =>
         respond: () => jsonResponse(200, PROFILE),
       },
     ]);
-    render(<App />);
+    renderAtelier();
     const file = new File(["PK"], "models.zip", { type: "application/zip" });
     openLocalImport();
     fireEvent.change(screen.getByLabelText("Fichier PNML"), { target: { files: [file] } });
@@ -428,7 +428,7 @@ describe("amorçage archive import and 409 candidate choice (issue #166)", () =>
         respond: () => jsonResponse(200, PROFILE),
       },
     ]);
-    render(<App />);
+    renderAtelier();
     const file = new File(["PK"], "models.tgz", { type: "application/gzip" });
     openLocalImport();
     fireEvent.change(screen.getByLabelText("Fichier PNML"), { target: { files: [file] } });

@@ -1,6 +1,6 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import App from "../src/App";
+import { renderAtelier } from "./render-atelier";
 import { applyLanguage } from "../src/i18n";
 
 /* Convergence asymétrique affichée (issue #127, P34): les convergences
@@ -112,7 +112,7 @@ describe("convergence asymétrique (issue #127)", () => {
         respond: () => jsonResponse(201, CONVERGENCES.convergences[0]),
       },
     ]);
-    render(<App />);
+    renderAtelier();
     fireEvent.click(screen.getByRole("button", { name: "2. Questions statiques" }));
     // The detected convergence is signaled on the card.
     await waitFor(() => expect(screen.getByText(/converge avec q0/)).toBeInTheDocument());
@@ -132,7 +132,7 @@ describe("convergence asymétrique (issue #127)", () => {
 
   it("refuse la fusion localement sans appeler l'API (pas de fusion automatique)", async () => {
     mockFetch([CONTRACT_ROUTE, CONVERGENCES_ROUTE]);
-    render(<App />);
+    renderAtelier();
     fireEvent.click(screen.getByRole("button", { name: "2. Questions statiques" }));
     await waitFor(() => expect(screen.getByText(/converge avec q0/)).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Refuser la fusion" }));
@@ -144,7 +144,7 @@ describe("convergence asymétrique (issue #127)", () => {
 
   it("affiche la question couverte et l'historique append-only des fusions", async () => {
     mockFetch([CONTRACT_ROUTE, CONVERGENCES_ROUTE]);
-    render(<App />);
+    renderAtelier();
     fireEvent.click(screen.getByRole("button", { name: "2. Questions statiques" }));
     await waitFor(() =>
       expect(screen.getByText(/couverte par la fusion avec q0/)).toBeInTheDocument(),
@@ -169,7 +169,7 @@ describe("convergence asymétrique (issue #127)", () => {
           }),
       },
     ]);
-    render(<App />);
+    renderAtelier();
     fireEvent.click(screen.getByRole("button", { name: "2. Questions statiques" }));
     await waitFor(() => expect(screen.getByText(/converge avec q0/)).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Arbitrer la fusion (accepter)" }));

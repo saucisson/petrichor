@@ -20,6 +20,8 @@ test("parcours complet des 4 étapes + arbitrage + langue + édition + dossier +
   page,
 }) => {
   await page.goto("/");
+  // Web v1 (issue #205): the app opens on the public landing - enter the workshop zone.
+  await page.locator("nav button[data-zone='atelier']").click();
 
   // Étape 1 - amorçage: clé API, import PNML, création de session.
   await page.locator("#api-key").fill(API_KEY);

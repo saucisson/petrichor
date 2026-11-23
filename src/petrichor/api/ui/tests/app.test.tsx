@@ -1,6 +1,6 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import App from "../src/App";
+import { renderAtelier } from "./render-atelier";
 
 /* Parity tests (issue #123): the React UI reproduces the four steps of the
    vanilla UI wired to the real API - same endpoints, same chrome, same
@@ -110,7 +110,7 @@ afterEach(() => {
 describe("UI v2 parity with the vanilla UI", () => {
   it("renders the four steps with the first one current (a11y: aria-current)", () => {
     mockFetch([]);
-    render(<App />);
+    renderAtelier();
     expect(screen.getByRole("heading", { name: "Amorçage" })).toBeVisible();
     const first = screen.getByRole("button", { name: "1. Amorçage" });
     expect(first).toHaveAttribute("aria-current", "step");
@@ -128,7 +128,7 @@ describe("UI v2 parity with the vanilla UI", () => {
       { match: (call) => call.url === "/v1/sessions/s1/profile", respond: () => jsonResponse(200, PROFILE) },
       { match: (call) => call.url === "/v1/sessions/s1/profile/arbitrate" && call.method === "POST", respond: () => jsonResponse(200, {}) },
     ]);
-    render(<App />);
+    renderAtelier();
     openLocalImport();
     const file = new File(["<pnml/>"], "model.pnml", { type: "application/pnml+xml" });
     fireEvent.change(screen.getByLabelText("Fichier PNML"), { target: { files: [file] } });
@@ -152,7 +152,7 @@ describe("UI v2 parity with the vanilla UI", () => {
       { match: (call) => call.url === "/v1/sessions/s1/contract" && (call.accept !== undefined && call.accept.includes("contract+json")), respond: () => jsonResponse(200, CONTRACT) },
       { match: (call) => call.url === "/v1/sessions/s1/arbitration-requests" && call.method === "POST", respond: () => jsonResponse(201, {}) },
     ]);
-    render(<App />);
+    renderAtelier();
     fireEvent.click(screen.getByRole("button", { name: "2. Questions statiques" }));
     await waitFor(() => expect(screen.getByText(/AG\(philo0 thinking\)/)).toBeInTheDocument());
     expect(screen.getByText("Vérifiée par 2 outils.")).toBeInTheDocument();
@@ -178,7 +178,7 @@ describe("UI v2 parity with the vanilla UI", () => {
       { match: (call) => call.url === "/v1/runs/r1", respond: () => jsonResponse(200, RUN) },
       { match: (call) => call.url === "/v1/runs/r1/witness", respond: () => jsonResponse(200, WITNESS) },
     ]);
-    render(<App />);
+    renderAtelier();
     fireEvent.click(screen.getByRole("button", { name: "3. Vérifications MC" }));
     await waitFor(() => expect(screen.getByText(/Budget MC — consommé 1.500 s/)).toBeInTheDocument());
     expect(screen.getByText(/aucun report/)).toBeInTheDocument();
@@ -207,7 +207,7 @@ describe("UI v2 parity with the vanilla UI", () => {
         respond: () => jsonResponse(200, CONTRACT),
       },
     ]);
-    render(<App />);
+    renderAtelier();
     fireEvent.click(screen.getByRole("button", { name: "4. Synthèse" }));
     // P79: the contract arrives rendered (heading), the source is one toggle away.
     await waitFor(() => expect(screen.getByRole("heading", { name: "Contrat" })).toBeInTheDocument());
@@ -227,7 +227,7 @@ describe("UI v2 parity with the vanilla UI", () => {
       { match: (call) => call.url === "/v1/sessions/s9", respond: () => jsonResponse(200, { session_id: "s9", model_id: "m9", run_ids: [] }) },
       { match: (call) => call.url === "/v1/sessions/s9/profile", respond: () => jsonResponse(404, {}) },
     ]);
-    render(<App />);
+    renderAtelier();
     fireEvent.change(screen.getByLabelText("Identifiant de session (reprise)"), {
       target: { value: "s9" },
     });
@@ -243,7 +243,7 @@ describe("UI v2 parity with the vanilla UI", () => {
       { match: (call) => call.url === "/v1/sessions/s1/profile", respond: () => jsonResponse(401, {}) },
     ]);
     localStorage.setItem("petrichor.sessionId", "s1");
-    render(<App />);
+    renderAtelier();
     await waitFor(() => expect(screen.getByText(/Clé API invalide \(401\)/)).toBeInTheDocument());
   });
 
@@ -259,7 +259,7 @@ describe("UI v2 parity with the vanilla UI", () => {
         respond: () => jsonResponse(404, { detail: "session inconnue: s1" }),
       },
     ]);
-    render(<App />);
+    renderAtelier();
     fireEvent.click(screen.getByRole("button", { name: "2. Questions statiques" }));
     await waitFor(() => {
       const alert = screen.getByRole("alert");
@@ -276,7 +276,7 @@ describe("UI v2 parity with the vanilla UI", () => {
       { match: (call) => call.url === "/v1/sessions/s1/budget", respond: () => jsonResponse(200, BUDGET) },
       { match: (call) => call.url === "/v1/runs/r1", respond: () => jsonResponse(500, { detail: "moteur indisponible" }) },
     ]);
-    render(<App />);
+    renderAtelier();
     fireEvent.click(screen.getByRole("button", { name: "3. Vérifications MC" }));
     await waitFor(() => {
       const alert = screen.getByRole("alert");
@@ -288,15 +288,17 @@ describe("UI v2 parity with the vanilla UI", () => {
 describe("UI v3 chrome (issue #162)", () => {
   it("groups the header into visible connection / session / language groups", () => {
     mockFetch([]);
-    render(<App />);
+    renderAtelier();
     expect(screen.getByText("Connexion")).toBeInTheDocument();
     expect(screen.getAllByText("Session").length).toBeGreaterThanOrEqual(2);
-    expect(screen.getAllByText("Langue").length).toBeGreaterThanOrEqual(2);
+    // Web v1 (issue #205): the language selector moved to the common site
+    // header - one visible label remains.
+    expect(screen.getByText("Langue")).toBeInTheDocument();
   });
 
   it("locks every step but Amorçage without an active session, with the reason displayed", () => {
     mockFetch([]);
-    render(<App />);
+    renderAtelier();
     const amorcage = screen.getByRole("button", { name: "1. Amorçage" });
     expect(amorcage).toBeEnabled();
     expect(amorcage).toHaveAttribute("aria-current", "step");
@@ -309,7 +311,7 @@ describe("UI v3 chrome (issue #162)", () => {
   it("unlocks every step once a session is active and hides the reason", () => {
     localStorage.setItem("petrichor.sessionId", "s1");
     mockFetch([]);
-    render(<App />);
+    renderAtelier();
     for (const name of ["1. Amorçage", "2. Questions statiques", "3. Vérifications MC", "4. Synthèse"]) {
       expect(screen.getByRole("button", { name })).toBeEnabled();
     }
@@ -322,7 +324,7 @@ describe("UI v3 chrome (issue #162)", () => {
       { match: (call) => call.url === "/v1/sessions" && call.method === "POST", respond: () => jsonResponse(201, { session_id: "s1" }) },
       { match: (call) => call.url === "/v1/sessions/s1/profile", respond: () => jsonResponse(200, PROFILE) },
     ]);
-    render(<App />);
+    renderAtelier();
     openLocalImport();
     const file = new File(["<pnml/>"], "model.pnml", { type: "application/pnml+xml" });
     fireEvent.change(screen.getByLabelText("Fichier PNML"), { target: { files: [file] } });
@@ -338,7 +340,7 @@ describe("UI v3 chrome (issue #162)", () => {
       { match: (call) => call.url === "/v1/sessions/s1/profile", respond: () => jsonResponse(401, {}) },
     ]);
     localStorage.setItem("petrichor.sessionId", "s1");
-    render(<App />);
+    renderAtelier();
     await waitFor(() =>
       expect(screen.getByRole("alert")).toHaveTextContent("Clé API invalide (401)."),
     );

@@ -99,6 +99,8 @@ test.describe("amorçage — trois voies d'import (issue #166)", () => {
   test("import par nom depuis le catalogue, avec avertissement COL et jumeau -PT-", async ({ page }) => {
     await mockApi(page);
     await page.goto("/");
+  // Web v1 (issue #205): the app opens on the public landing - enter the workshop zone.
+  await page.locator("nav button[data-zone='atelier']").click();
     // P77 wizard: Source distante -> Catalogue intégré.
     await page.getByRole("button", { name: "Source distante" }).click();
     await page.getByRole("button", { name: "Catalogue intégré" }).click();
@@ -119,6 +121,8 @@ test.describe("amorçage — trois voies d'import (issue #166)", () => {
   test("import par URL avec provenance affichée", async ({ page }) => {
     await mockApi(page);
     await page.goto("/");
+  // Web v1 (issue #205): the app opens on the public landing - enter the workshop zone.
+  await page.locator("nav button[data-zone='atelier']").click();
     await page.getByRole("button", { name: "Source distante" }).click();
     await page.getByRole("button", { name: "URL directe" }).click();
     await page.locator("#import-url").fill("https://example.org/m.pnml");
@@ -151,6 +155,8 @@ test.describe("amorçage — trois voies d'import (issue #166)", () => {
       },
     });
     await page.goto("/");
+  // Web v1 (issue #205): the app opens on the public landing - enter the workshop zone.
+  await page.locator("nav button[data-zone='atelier']").click();
     await page.getByRole("button", { name: "Fichier local" }).click();
     await page.locator("#pnml-file").setInputFiles({
       name: "models.zip",
