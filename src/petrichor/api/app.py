@@ -4074,13 +4074,25 @@ def _auth_login(
         return_to = UI_PATH
     ui_locales = "fr" if "fr" in environ.get("HTTP_ACCEPT_LANGUAGE", "fr") else "en"
     pending = pending_logins.create(return_to=return_to)
-    url = oidc_flow.authorize_url(
-        redirect_uri=_redirect_uri(environ=environ),
-        state=pending.state,
-        nonce=pending.nonce,
-        code_challenge=code_challenge_s256(code_verifier=pending.code_verifier),
-        ui_locales=ui_locales,
-    )
+    try:
+        url = oidc_flow.authorize_url(
+            redirect_uri=_redirect_uri(environ=environ),
+            state=pending.state,
+            nonce=pending.nonce,
+            code_challenge=code_challenge_s256(code_verifier=pending.code_verifier),
+            ui_locales=ui_locales,
+        )
+    except Exception as error:  # noqa: BLE001 - an unreachable IdP is narrated, never swallowed
+        logger.warning("web_auth_discovery_failed", reason=repr(error))
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+                reason="oidc_unavailable",
+                detail="The identity provider could not be reached.",
+            ),
+        )
     logger.debug("web_auth_login_redirect", return_to=return_to, ui_locales=ui_locales)
     return _respond(
         start_response=start_response,
@@ -4179,7 +4191,7 @@ def _auth_callback(  # noqa: PLR0911 - one typed response per failure mode
                 detail="The id_token nonce does not match the pending login.",
             ),
         )
-    session = web_sessions.create(claims=claims)
+    session = web_sessions.create(claims=claims, id_token=id_token, access_token=access_token)
     logger.info("web_auth_login_succeeded", sub=claims.sub)
     return _respond(
         start_response=start_response,
@@ -4208,13 +4220,19 @@ def _auth_logout(
 ) -> Iterable[bytes]:
     """POST /auth/logout — revoke, destroy the session, expire the cookie."""
     session_id = _session_id_from_cookie(environ=environ)
+    session = web_sessions.get(session_id=session_id) if session_id else None
     if session_id is not None:
         web_sessions.destroy(session_id=session_id)
     scheme = environ.get("wsgi.url_scheme", "http")
     host = environ.get("HTTP_HOST") or environ.get("SERVER_NAME", "localhost")
     post_logout = f"{scheme}://{host}{UI_PATH}"
     if oidc_flow is not None:
-        oidc_flow.revoke(token=session_id or "")
+        if session is not None and session.access_token:
+            oidc_flow.revoke(token=session.access_token)
+        if session is not None and session.id_token:
+            post_logout = oidc_flow.end_session_url(
+                id_token_hint=session.id_token, post_logout_redirect_uri=post_logout
+            )
     logger.debug("web_auth_logout", had_session=session_id is not None)
     return _respond(
         start_response=start_response,
