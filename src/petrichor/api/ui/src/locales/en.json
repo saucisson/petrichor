@@ -223,6 +223,11 @@
   },
   "decouvrir": {
     "title": "Explore",
-    "placeholder": "This public zone will present the model catalogs and examples in read-only mode. No account needed."
+    "intro": "Read-only view of the MCC model catalog: no account needed, no writes possible.",
+    "searchLabel": "Search the catalog",
+    "searchButton": "Search",
+    "loading": "Loading the catalog…",
+    "total": "{{count}} model(s) in the catalog.",
+    "empty": "No model matches the search."
   }
 }

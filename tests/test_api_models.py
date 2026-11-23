@@ -81,21 +81,29 @@ class TestAuthentication:
         assert response.headers["Content-Type"] == PROBLEM_JSON_CONTENT_TYPE
         problem = response.json()
         assert problem["status"] == 401
-        assert problem["extensions"]["reason"] == "missing_or_invalid_api_key"
+        assert problem["extensions"]["reason"] == "session_required"
 
     def test_post_with_wrong_api_key_returns_401(self, client: httpx.Client) -> None:
         headers = {**PNML_HEADERS, "X-API-Key": "wrong"}
         response = post_model(client, philosophes3_pnml(), headers=headers)
         assert response.status_code == 401
 
-    def test_get_without_api_key_returns_401(self, client: httpx.Client) -> None:
+    def test_get_model_is_public_read_only(self, client: httpx.Client) -> None:
+        # Web v1 (issue #206): GET /v1/models/{id} is a public route of the
+        # Découvrir zone - an unknown id answers a truthful 404, not a 401.
         response = client.get("/v1/models/mdl_whatever")
-        assert response.status_code == 401
-        assert response.json()["status"] == 401
+        assert response.status_code == 404
+        assert response.json()["extensions"]["reason"] == "model_not_found"
 
     def test_unauthorized_request_is_narrated_as_a_warning(self, client: httpx.Client) -> None:
+        # A protected route (POST /v1/models) without credentials: 401 +
+        # structured warning (the public GET /v1/models/{id} no longer logs it).
         with structlog.testing.capture_logs() as events:
-            client.get("/v1/models/mdl_whatever")
+            client.post(
+                "/v1/models",
+                content=philosophes3_pnml(),
+                headers={"Content-Type": "application/pnml+xml"},
+            )
         assert any(e["event"] == "api_request_unauthorized" for e in events)
 
 

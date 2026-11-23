@@ -519,3 +519,16 @@
   .journal-detail {
     @apply rounded bg-surface px-1 py-0.5 font-mono text-xs;
   }
+
+  /* Web v1 Découvrir zone (issue #206): public read-only catalog listing. */
+  .decouvrir-search {
+    @apply my-2 flex flex-wrap items-center gap-2;
+  }
+
+  #decouvrir-list {
+    @apply m-0 list-none p-0;
+  }
+
+  .decouvrir-entry {
+    @apply my-1 rounded-card border border-line bg-surface px-3 py-2;
+  }

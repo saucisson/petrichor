@@ -1,7 +1,10 @@
 # OpenAPI contract of the Petrichor HTTP API (ADR-0016) - kept with the code.
 # Versioning is explicit in the URL prefix (/v1). Errors are RFC 7807
-# problem+json everywhere. Authentication is the X-API-Key header, checked
-# before any body is parsed.
+# problem+json everywhere. Web v1 (issue #206, contract
+# docs/consigne-interface-web-v1.md §1/§5): GET /catalog/models and
+# GET /models/{model_id} are public read-only routes (security: []) of the
+# Découvrir zone; every other /v1 route requires a session cookie or a Bearer
+# PAT and answers 401 reason "session_required" without one.
 openapi: 3.1.0
 info:
   title: Petrichor API
@@ -216,7 +219,11 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
   /models/{model_id}:
     get:
-      summary: Read a model in its canonical form
+      summary: Read a model in its canonical form (public, read-only — issue #206)
+      description: >-
+        Public route of the Découvrir zone (contract §1/§5): no session, no
+        PAT required. Serves the canonical petri+json document.
+      security: []
       parameters:
         - name: model_id
           in: path
@@ -230,8 +237,6 @@ paths:
             application/petri+json; version=1.0:
               schema:
                 $ref: "#/components/schemas/CanonicalModel"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
         "406":
@@ -244,13 +249,16 @@ paths:
                 $ref: "#/components/schemas/Problem"
   /catalog/models:
     get:
-      summary: Search the MCC model catalog (spec §21.2, ADR-0105)
+      summary: Search the MCC model catalog (spec §21.2, ADR-0105) — public, read-only (issue #206)
       description: >-
+        Public route of the Découvrir zone (contract §1/§5): no session, no
+        PAT required.
         Paginated listing of the known MCC instances with free-text search on
         name/family, facet filters (family, formalism, edition, source, size),
         a closed sort set (name, family, edition, size - size is semantic,
         small to huge) and limit/offset pagination. 503 catalog_unavailable
         when every configured source failed to refresh.
+      security: []
       parameters:
         - name: search
           in: query
@@ -311,8 +319,6 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
         "503":
           description: Every catalog source failed (reason catalog_unavailable).
           content:
@@ -2186,11 +2192,11 @@ components:
   responses:
     Unauthorized:
       description: >-
-        Missing or invalid credentials: a valid `Authorization: Bearer`
-        access token (OIDC, validated locally against the IdP JWKS) or the
-        legacy `X-API-Key` header. Reason `invalid_bearer_token` when an
-        Authorization header was present but rejected, else
-        `missing_or_invalid_api_key`.
+        Web v1 (issue #206): every non-public route requires a session cookie
+        or a PAT. Reason `session_required` when no credentials were provided,
+        `invalid_bearer_token` when an Authorization header was present but
+        rejected. Public read-only routes (GET /catalog/models,
+        GET /models/{model_id}) never answer 401.
       content:
         application/problem+json:
           schema:

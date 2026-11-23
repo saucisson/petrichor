@@ -47,13 +47,15 @@ describe("landing publique (issue #205)", () => {
     expect(calls).toEqual([]);
   });
 
-  it("n'émet aucun appel authentifié sur Accueil et Découvrir", () => {
+  it("n'émet aucun appel authentifié sur Accueil et Découvrir", async () => {
     render(<App />);
     fireEvent.click(screen.getByRole("button", { name: "Découvrir" }));
-    expect(screen.getByText(/lecture seule/)).toBeInTheDocument();
-    expect(calls).toEqual([]);
+    // La zone Découvrir charge le catalogue (appel public, sans credential).
+    await screen.findByText(/modèle\(s\) dans le catalogue/);
+    const authenticated = calls.filter((call) => call.headers["X-API-Key"] !== undefined);
+    expect(authenticated).toEqual([]);
     fireEvent.click(screen.getByRole("button", { name: "Accueil" }));
-    expect(calls).toEqual([]);
+    expect(calls.filter((call) => call.headers["X-API-Key"] !== undefined)).toEqual([]);
   });
 
   it("navigue vers l'Atelier via la navigation du contrat (zones Accueil / Découvrir / Atelier)", () => {

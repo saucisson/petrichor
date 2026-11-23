@@ -36,6 +36,8 @@ REASON_MISSING_CREDENTIALS = "missing_or_invalid_api_key"
 REASON_INVALID_BEARER = "invalid_bearer_token"
 REASON_UNSUPPORTED_SCHEME = "unsupported_authorization_scheme"
 REASON_VERIFIER_NOT_CONFIGURED = "bearer_verifier_not_configured"
+REASON_SESSION_REQUIRED = "session_required"
+"""Web v1 (issue #206): a non-public route hit without a session/PAT."""
 
 
 @dataclass(frozen=True)
@@ -106,6 +108,7 @@ __all__ = [
     "HEADER_AUTHORIZATION",
     "REASON_INVALID_BEARER",
     "REASON_MISSING_CREDENTIALS",
+    "REASON_SESSION_REQUIRED",
     "REASON_UNSUPPORTED_SCHEME",
     "REASON_VERIFIER_NOT_CONFIGURED",
     "AuthDecision",

@@ -20,9 +20,11 @@
   (adapter, family) to the orchestrator (spec §17.5, issue #22); a done run
   also carries ``engine_qualified``, whether its engine is qualified for the
   family - an unqualified adapter is never alone on a clause.
-- Every request is authenticated with the ``X-API-Key`` header before it is
-  parsed deeply; every error is an RFC 7807 ``application/problem+json``
-  payload of the same shape.
+- Web v1 (issue #206, contract §1/§5): ``GET /v1/catalog/models`` and
+  ``GET /v1/models/{mid}`` are public read-only routes of the Découvrir zone;
+  every other ``/v1`` route requires a session cookie or a Bearer PAT and
+  answers ``401`` ``reason: "session_required"`` without one. Every error is
+  an RFC 7807 ``application/problem+json`` payload of the same shape.
 
 The contract document is ``openapi.yaml`` next to this module (ADR-0016).
 """
@@ -43,9 +45,9 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from petrichor.api.auth import (
     ENVIRON_AUTH_CLAIMS,
-    HEADER_API_KEY,
     REASON_INVALID_BEARER,
     REASON_MISSING_CREDENTIALS,
+    REASON_SESSION_REQUIRED,
     authenticate_request,
 )
 from petrichor.arbitration import ArbitrationDecisionKind, ArbitrationStore
@@ -3935,6 +3937,23 @@ def _serve_ui_asset(
     )
 
 
+def _is_public_read_route(*, method: str, path: str) -> bool:
+    """The web v1 public read-only routes (issue #206, contract §1/§5).
+
+    ``GET /v1/catalog/models`` and ``GET /v1/models/{mid}`` serve the public
+    Découvrir zone. Every other API route requires a session cookie or a PAT;
+    the gate is adapted to this public/private split, not just complemented.
+    """
+    if method != "GET":
+        return False
+    if path == CATALOG_MODELS_PATH:
+        return True
+    if path.startswith(MODEL_PATH_PREFIX):
+        model_id = path.removeprefix(MODEL_PATH_PREFIX)
+        return bool(model_id) and "/" not in model_id
+    return False
+
+
 def _auth_gate(
     *,
     environ: WSGIEnvironment,
@@ -3946,10 +3965,15 @@ def _auth_gate(
 ) -> Iterable[bytes] | None:
     """The PT-2 auth gate: a uniform 401 problem response on rejection, else None.
 
-    On a valid Bearer token the validated claims are exposed to the handlers
-    as ``environ["petrichor.auth_claims"]``; the exact rejection reason goes
-    to the structured log, never to the response body.
+    Public read-only routes (issue #206) pass without credentials; on every
+    other route a valid Bearer token exposes its validated claims to the
+    handlers as ``environ["petrichor.auth_claims"]``. A missing session answers
+    ``401`` with ``reason: "session_required"`` (contract §1); the exact
+    rejection reason goes to the structured log, never to the response body.
     """
+    if _is_public_read_route(method=method, path=path):
+        logger.debug("api_public_read_allowed", method=method, path=path)
+        return None
     decision = authenticate_request(
         environ=environ, settings=settings, token_verifier=token_verifier
     )
@@ -3963,7 +3987,7 @@ def _auth_gate(
     problem_reason = (
         REASON_INVALID_BEARER
         if decision.rejection_reason not in (None, REASON_MISSING_CREDENTIALS)
-        else REASON_MISSING_CREDENTIALS
+        else REASON_SESSION_REQUIRED
     )
     return _problem_response(
         start_response=start_response,
@@ -3971,7 +3995,7 @@ def _auth_gate(
         payload=_problem(
             status=HTTPStatus.UNAUTHORIZED,
             reason=problem_reason,
-            detail=f"Provide a valid Authorization: Bearer token or {HEADER_API_KEY} header.",
+            detail="A session cookie or a Bearer PAT is required for this route.",
         ),
     )
 
