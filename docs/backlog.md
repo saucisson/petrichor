@@ -15,7 +15,7 @@ Corps de toutes les issues, prêts à peupler GitHub via le script idempotent (�
 | P03 | `POST /models` et import PNML (P/T, puis Symmetric non déplié) | P01, P02 |
 | P04 | Compose moteurs, driver `dummy` et contrat de sortie normalisée | P01 |
 | P05 | Mini-moteur statique embarqué | P02 |
-| P06 | Runs asynchrones : 202 + Location, idempotence, auth session/PAT (`X-API-Key` retiré, #207) | P03, P04 |
+| P06 | Runs asynchrones : 202 + Location, idempotence, `X-API-Key` | P03, P04 |
 | P07 | Archivage intégral des runs et budget de session | P06 |
 | P08 | Mock LLM déterministe et golden files (corpus Philosophes-3) | P02 |
 | P09 | Adaptateur verifypn — socle minimal (reachability, deadlock, témoin) | P04 |
@@ -116,13 +116,13 @@ Corps de toutes les issues, prêts à peupler GitHub via le script idempotent (�
 
 **Labels** `kind:feat` `area:api` · **Dép.** P01, P02
 
-**Contexte.** Spec §5 (médias types versionnés, auth session/PAT — `X-API-Key` retiré, #207), §13, §12.6 (Symmetric accepté dès le socle, non déplié).
+**Contexte.** Spec §5 (médias types versionnés, `X-API-Key`), §13, §12.6 (Symmetric accepté dès le socle, non déplié).
 
 **Critères d'acceptation.**
 - [ ] `POST /models` en `application/pnml+xml` → canonique P/T ; hachage calculé et renvoyé.
 - [ ] Symmetric importé et stocké **non déplié** (le schéma ne ment pas sur le formalisme).
 - [ ] PNML invalide ou non supporté → rejet explicite (jamais de dépliage faux, cf. §18.5).
-- [ ] Sans credential (cookie de session ni PAT) → 401 `session_required` ; lecture du modèle via GET renvoie le canonique (route publique, #206).
+- [ ] Sans clé `X-API-Key` → 401 ; lecture du modèle via GET renvoie le canonique.
 
 **Hors périmètre.** Dépliage (P27) ; transformations (vague 3).
 
@@ -154,7 +154,7 @@ Corps de toutes les issues, prêts à peupler GitHub via le script idempotent (�
 
 **Hors périmètre.** Tout appel à un outil externe.
 
-### P06 · Runs asynchrones : 202 + Location, idempotence, auth session/PAT (`X-API-Key` retiré, #207)
+### P06 · Runs asynchrones : 202 + Location, idempotence, `X-API-Key`
 
 **Labels** `kind:feat` `area:api` · **Dép.** P03, P04
 
@@ -757,7 +757,7 @@ Corps de toutes les issues, prêts à peupler GitHub via le script idempotent (�
 - [ ] ADR (numérotation suivante dans `docs/decisions/`) qui **supersede** la décision « UI statique sans dépendance » de P18 et acte React 18+ / TypeScript strict / Vite, justifié face à Svelte/Solid/vue (maquette React existante, écosystème i18n, outillage de tests) ;
 - [ ] Stratégie build/servage : build Node → `dist/` servi par l'API **sous `/ui/` sans écart d'URL** ; toolchain épinglé (version de Node fixée, lockfile commis) ;
 - [ ] Nouvelles gates frontend intégrées à `make check` (ESLint, `tsc --noEmit`, vitest + `@testing-library/react`), sans casser les gates Python existants ;
-- [ ] Migration **à parité stricte** des 4 étapes actuelles (amorçage/import PNML, cartes/arbitrages « Impossible / C'est normal / Vérifier d'abord », runs/budget/témoins, synthèse/export/journal, reprise de session, cookie de session (login OIDC, #207), localStorage) — parité prouvée par tests ;
+- [ ] Migration **à parité stricte** des 4 étapes actuelles (amorçage/import PNML, cartes/arbitrages « Impossible / C'est normal / Vérifier d'abord », runs/budget/témoins, synthèse/export/journal, reprise de session, `X-API-Key`, localStorage) — parité prouvée par tests ;
 - [ ] Suppression des fichiers vanilla une fois la parité prouvée ;
 - [ ] Aucun verdict inventé côté client ; le serveur reste l'unique source de vérité (§9, §19.4) ; a11y P12 de la maquette préservée.
 

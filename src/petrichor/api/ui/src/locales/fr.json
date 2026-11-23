@@ -4,12 +4,14 @@
     "languageLabel": "Langue"
   },
   "header": {
+    "groupConnection": "Connexion",
     "groupSession": "Session",
+    "apiKeyLabel": "Clé API",
+    "apiKeyAria": "Clé API",
     "sessionLabel": "Session",
     "sessionAria": "Identifiant de session (reprise)",
     "resume": "Reprendre la session",
-    "themeToggle": "Basculer en mode sombre / clair",
-    "login": "Se connecter"
+    "themeToggle": "Basculer en mode sombre / clair"
   },
   "nav": {
     "aria": "Étapes",
