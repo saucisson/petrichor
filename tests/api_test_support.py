@@ -25,13 +25,19 @@ INVALID_AUTH_HEADERS = {"Authorization": f"Bearer {INVALID_PAT}"}
 
 ISSUER = "https://auth.test"
 CLIENT_ID = "petrichor-test"
+API_CLIENT_ID = "petrichor-test-api"
 
 VALID_CLAIMS = TokenClaims(sub="user-1", iss=ISSUER, aud=[CLIENT_ID], exp=4_000_000_000)
 
 
 def make_auth_settings(**overrides: str) -> AuthSettings:
-    """Auth settings from a minimal test environment."""
-    env = {"AUTH_ISSUER": ISSUER, "AUTH_CLIENT_ID": CLIENT_ID, **overrides}
+    """Auth settings from a minimal test environment (Web + API clients)."""
+    env = {
+        "AUTH_ISSUER": ISSUER,
+        "AUTH_CLIENT_ID": CLIENT_ID,
+        "AUTH_API_CLIENT_ID": API_CLIENT_ID,
+        **overrides,
+    }
     return AuthSettings.model_validate(env)
 
 

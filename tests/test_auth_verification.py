@@ -23,6 +23,7 @@ from petrichor.auth import (
 
 ISSUER = "https://auth.test"
 CLIENT_ID = "petrichor-test"
+API_CLIENT_ID = "petrichor-test-api"
 
 
 class FakeIdp:
@@ -106,6 +107,15 @@ class TestValidToken:
         token = idp.sign(idp.valid_claims(aud=["other-app", CLIENT_ID]))
         claims = verifier.verify_access_token(token=token)
         assert CLIENT_ID in claims.aud
+
+    def test_api_client_id_audience_is_accepted_by_default(self, idp: FakeIdp) -> None:
+        settings = AuthSettings.model_validate(
+            {"AUTH_ISSUER": ISSUER, "AUTH_CLIENT_ID": CLIENT_ID, "AUTH_API_CLIENT_ID": API_CLIENT_ID}
+        )
+        verifier = make_verifier(idp, settings)
+        token = idp.sign(idp.valid_claims(aud=API_CLIENT_ID))
+        claims = verifier.verify_access_token(token=token)
+        assert claims.aud == [API_CLIENT_ID]
 
     def test_allowed_audiences_from_configuration(self, idp: FakeIdp) -> None:
         settings = AuthSettings.model_validate(
@@ -286,9 +296,17 @@ class TestDisabledMode:
             verifier.verify_access_token(token=idp.sign(idp.valid_claims()))
 
     def test_default_settings_are_auth_active(self) -> None:
-        settings = AuthSettings.model_validate({"AUTH_ISSUER": ISSUER, "AUTH_CLIENT_ID": CLIENT_ID})
+        settings = AuthSettings.model_validate(
+            {"AUTH_ISSUER": ISSUER, "AUTH_CLIENT_ID": CLIENT_ID, "AUTH_API_CLIENT_ID": API_CLIENT_ID}
+        )
         assert settings.auth_disabled is False
-        assert settings.allowed_audiences() == (CLIENT_ID,)
+        assert settings.allowed_audiences() == (CLIENT_ID, API_CLIENT_ID)
+
+    def test_api_client_id_alone_is_a_valid_default_audience(self) -> None:
+        settings = AuthSettings.model_validate(
+            {"AUTH_ISSUER": ISSUER, "AUTH_API_CLIENT_ID": API_CLIENT_ID}
+        )
+        assert settings.allowed_audiences() == (API_CLIENT_ID,)
 
 
 @pytest.mark.property

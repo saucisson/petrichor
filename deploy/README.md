@@ -18,15 +18,17 @@ sudo git clone https://github.com/saucisson/petrichor.git /srv/petrichor
 sudo chown -R deploy:deploy /srv/petrichor
 cd /srv/petrichor && git checkout daily
 # .env est git-ignored : ne jamais commiter de secret (ADR-0008)
-# Authentification OIDC (Zitadel, auth.linard.fr) — client "petrichor" créé
-# côté IdP ; sans AUTH_ISSUER le vérifieur Bearer et le login /auth/* ne sont
-# pas câblés (jamais ouvert : le gate répond 401 session_required) et
-# auth_bearer_not_configured est logué :
+# Authentification OIDC (Zitadel, auth.linard.fr) — deux clients "petrichor"
+# côté IdP : Web (login navigateur) et API (audience des PAT). Leurs secrets
+# sont dans /home/deploy/zitadel-clients.json sur le VPS. Sans AUTH_ISSUER le
+# vérifieur Bearer et le login /auth/* ne sont pas câblés (jamais ouvert :
+# le gate répond 401 session_required) et auth_bearer_not_configured est logué :
 cat >> /srv/petrichor/.env <<'ENVEOF'
 PETRICHOR_ENV=production
 AUTH_ISSUER=https://auth.linard.fr
-AUTH_CLIENT_ID=<client_id_du_client_petrichor_dans_zitadel>
-AUTH_CLIENT_SECRET=<secret_du_client>
+AUTH_CLIENT_ID=<clientId du client Web petrichor>
+AUTH_CLIENT_SECRET=<clientSecret du client Web>
+AUTH_API_CLIENT_ID=<clientId du client API petrichor>
 ENVEOF
 # Site nginx (même pattern que sites-enabled/layered-data) + certificat :
 sudo cp deploy/nginx/petrichor.linard.fr.conf /etc/nginx/sites-enabled/petrichor
@@ -88,9 +90,10 @@ aucun secret commité) :
 | Variable                 | Rôle                                                              |
 | ------------------------ | ----------------------------------------------------------------- |
 | `AUTH_ISSUER`            | Émetteur OIDC (requis, aucun défaut en dur dans le code)          |
-| `AUTH_CLIENT_ID`         | Client OIDC de l'app ; audience acceptée par défaut               |
-| `AUTH_CLIENT_SECRET`     | Secret du client (confidentiel uniquement)                        |
-| `AUTH_ALLOWED_AUDIENCES` | Audiences acceptées (CSV), défaut = `AUTH_CLIENT_ID`              |
+| `AUTH_CLIENT_ID`         | Client OIDC **Web** (login navigateur, Authorization Code + PKCE) |
+| `AUTH_CLIENT_SECRET`     | Secret du client **Web** (confidentiel uniquement)                |
+| `AUTH_API_CLIENT_ID`     | Client OIDC **API** ; audience acceptée par défaut pour les PAT   |
+| `AUTH_ALLOWED_AUDIENCES` | Audiences acceptées (CSV), défaut = Web + API client ids          |
 | `AUTH_DISABLED`          | `1` = mode dev local L3 (voir ci-dessous)                         |
 | `PETRICHOR_ENV`          | `production` interdit toute combinaison avec `AUTH_DISABLED=1`   |
 
