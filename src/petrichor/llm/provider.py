@@ -51,6 +51,11 @@ FormulaText = NewType("FormulaText", str)
 HumanMessage = NewType("HumanMessage", str)
 """A human proposal in natural language (spec §15)."""
 
+MistralToken = NewType("MistralToken", str)
+"""The per-request Mistral API token (web v1 §3, issue #208): a distinct
+domain primitive so it is never confused with an arbitrary string at a
+boundary - it is never logged, never persisted, never echoed in a response."""
+
 
 class LLMError(Exception):
     """Base class of every domain error raised by the LLM layer."""
@@ -113,7 +118,7 @@ class LLMProvider(ABC):
 
     @abstractmethod
     def semantic_profile(
-        self, *, model: CanonicalModel, api_token: str | None = None
+        self, *, model: CanonicalModel, api_token: MistralToken | None = None
     ) -> SemanticProfilePublic:
         """Extract the semantic profile of a model (P73: the net digest is sent along).
 
@@ -129,7 +134,7 @@ class LLMProvider(ABC):
         *,
         model: CanonicalModel,
         formulas: tuple[FormulaText, ...],
-        api_token: str | None = None,
+        api_token: MistralToken | None = None,
     ) -> FormulaReadings:
         """Read the whole frozen question grid in ONE call (P72, spec §15).
 
@@ -140,7 +145,7 @@ class LLMProvider(ABC):
 
     @abstractmethod
     def clarification(
-        self, *, model: CanonicalModel, text: HumanMessage, api_token: str | None = None
+        self, *, model: CanonicalModel, text: HumanMessage, api_token: MistralToken | None = None
     ) -> Clarification:
         """Reformulate a human proposal and propose option chips.
 
@@ -149,7 +154,7 @@ class LLMProvider(ABC):
 
     @abstractmethod
     def cluster(
-        self, *, model: CanonicalModel, api_token: str | None = None
+        self, *, model: CanonicalModel, api_token: MistralToken | None = None
     ) -> tuple[Cluster, ...]:
         """Cluster the violations of a model with their causes and remediations.
 
@@ -162,7 +167,7 @@ class LLMProvider(ABC):
         *,
         model: CanonicalModel,
         transitions: tuple[str, ...],
-        api_token: str | None = None,
+        api_token: MistralToken | None = None,
     ) -> NarrationCorpus:
         """Narrate the COMPLETE witness in ONE call (P72, spec §16, issue #32).
 
@@ -222,7 +227,7 @@ class DeterministicMockProvider(LLMProvider):
         }
 
     def semantic_profile(
-        self, *, model: CanonicalModel, api_token: str | None = None
+        self, *, model: CanonicalModel, api_token: MistralToken | None = None
     ) -> SemanticProfile:
         """Serve the scripted profile of the corpus (the mock needs no token)."""
         return self._load(
@@ -234,7 +239,7 @@ class DeterministicMockProvider(LLMProvider):
         *,
         model: CanonicalModel,
         formulas: tuple[FormulaText, ...],
-        api_token: str | None = None,
+        api_token: MistralToken | None = None,
     ) -> FormulaReadings:
         """Serve the scripted reading document of the whole grid (P72: one load per document).
 
@@ -247,7 +252,7 @@ class DeterministicMockProvider(LLMProvider):
         )
 
     def clarification(
-        self, *, model: CanonicalModel, text: HumanMessage, api_token: str | None = None
+        self, *, model: CanonicalModel, text: HumanMessage, api_token: MistralToken | None = None
     ) -> Clarification:
         """Serve the scripted clarification; the initial corpus scripts none."""
         return self._load(
@@ -255,7 +260,7 @@ class DeterministicMockProvider(LLMProvider):
         )
 
     def cluster(
-        self, *, model: CanonicalModel, api_token: str | None = None
+        self, *, model: CanonicalModel, api_token: MistralToken | None = None
     ) -> tuple[Cluster, ...]:
         """Serve the scripted clusters of the corpus."""
         document = self._load(
@@ -268,7 +273,7 @@ class DeterministicMockProvider(LLMProvider):
         *,
         model: CanonicalModel,
         transitions: tuple[str, ...],
-        api_token: str | None = None,
+        api_token: MistralToken | None = None,
     ) -> NarrationCorpus:
         """Serve the scripted narration document of the whole witness (P72: one load per document).
 

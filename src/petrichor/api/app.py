@@ -107,6 +107,7 @@ from petrichor.llm.provider import (
     FormulaText,
     LLMDegradationError,
     LLMTokenRequiredError,
+    MistralToken,
     MistralTokenInvalidError,
 )
 from petrichor.petri_canonical import (
@@ -2428,14 +2429,14 @@ MISTRAL_TOKEN_HEADER = "HTTP_X_MISTRAL_API_TOKEN"  # noqa: S105 - a header name,
 """WSGI environ key of the per-request ``x-mistral-api-token`` header (web v1 §3, issue #208)."""
 
 
-def _mistral_token_from_environ(*, environ: WSGIEnvironment) -> str | None:
+def _mistral_token_from_environ(*, environ: WSGIEnvironment) -> MistralToken | None:
     """The per-request Mistral token, or None (web v1 §3, issue #208).
 
     Read from the ``x-mistral-api-token`` header only - never logged, never
     persisted, never echoed in a response. An empty header means no token.
     """
     raw = environ.get(MISTRAL_TOKEN_HEADER, "").strip()
-    return raw or None
+    return MistralToken(raw) if raw else None
 
 
 def _token_problem_response(
@@ -2478,7 +2479,7 @@ def _read_formula(
     model: CanonicalModel,
     formula: str,
     grid: tuple[FormulaText, ...] = (),
-    api_token: str | None = None,
+    api_token: MistralToken | None = None,
 ) -> dict[str, JsonValue] | None:
     """The inverse reading of a formula (formule → langage), an LLM proposition (spec §9).
 

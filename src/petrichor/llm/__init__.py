@@ -23,6 +23,7 @@ from petrichor.llm.provider import (
     LLMError,
     LLMProvider,
     LLMTokenRequiredError,
+    MistralToken,
     MistralTokenInvalidError,
 )
 from petrichor.llm.schemas import (
@@ -60,6 +61,7 @@ __all__ = [
     "LLMProvider",
     "LLMTokenRequiredError",
     "LlmUsage",
+    "MistralToken",
     "MistralTokenInvalidError",
     "ProfileEntry",
     "ProfileEntryPublic",

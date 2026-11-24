@@ -33,6 +33,7 @@ from petrichor.llm.provider import (
     DeterministicMockProvider,
     FormulaText,
     LLMTokenRequiredError,
+    MistralToken,
     MistralTokenInvalidError,
 )
 from petrichor.llm.schemas import FormulaReadings, ProfileEntry, SemanticProfile
@@ -415,14 +416,14 @@ class RecordingTokenProvider(DeterministicMockProvider):
 
     def __init__(self) -> None:
         super().__init__()
-        self.seen_tokens: list[str | None] = []
+        self.seen_tokens: list[MistralToken | None] = []
 
     def reading(
         self,
         *,
         model: CanonicalModel,
         formulas: tuple[FormulaText, ...],
-        api_token: str | None = None,
+        api_token: MistralToken | None = None,
     ) -> FormulaReadings:
         self.seen_tokens.append(api_token)
         return super().reading(model=model, formulas=formulas, api_token=api_token)
@@ -440,7 +441,7 @@ class TokenErrorProvider(DeterministicMockProvider):
         *,
         model: CanonicalModel,
         formulas: tuple[FormulaText, ...],
-        api_token: str | None = None,
+        api_token: MistralToken | None = None,
     ) -> FormulaReadings:
         raise self._error
 
@@ -508,6 +509,11 @@ class TestMistralTokenHeader:
         assert response.status_code == 428
         assert response.json()["extensions"]["reason"] == "llm_token_required"
         assert "sk-ui" not in json.dumps(logs)
+        # The narration event is pinned: it fires with its typed reason (ADR-0005).
+        token_events = [event for event in logs if event["event"] == "api_mistral_token_error"]
+        assert len(token_events) == 1
+        assert token_events[0]["reason"] == "llm_token_required"
+        assert token_events[0]["status"] == 428
 
     def test_rejected_token_maps_to_502_mistral_token_invalid(self, tmp_path: Path) -> None:
         provider = TokenErrorProvider(error=MistralTokenInvalidError("mistral 401"))
@@ -524,6 +530,11 @@ class TestMistralTokenHeader:
         assert "Mistral" in response.json()["detail"]
         assert "sk-bad" not in json.dumps(logs)
         assert "sk-bad" not in response.text
+        # The narration event is pinned: it fires with its typed reason (ADR-0005).
+        token_events = [event for event in logs if event["event"] == "api_mistral_token_error"]
+        assert len(token_events) == 1
+        assert token_events[0]["reason"] == "mistral_token_invalid"
+        assert token_events[0]["status"] == 502
 
     def test_reading_endpoint_maps_token_errors_too(self, tmp_path: Path) -> None:
         provider = TokenErrorProvider(error=LLMTokenRequiredError("no token"))
