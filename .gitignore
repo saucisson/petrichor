@@ -8,7 +8,7 @@ dist/
 wheels/
 
 # Environments
-.venv/
+.venv
 .env
 
 # Tooling caches
@@ -35,3 +35,4 @@ htmlcov/
 
 # Dépendances frontend vendored (npm) - jamais commitées
 node_modules/
+.petrichor/

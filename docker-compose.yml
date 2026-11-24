@@ -1,10 +1,52 @@
-# Petrichor engines (spec §19.4): one engine = one compose service, image
-# built locally (GPL engines are not redistributed), base image pinned by
-# digest in Dockerfile.dummy, healthcheck, non-privileged read-only
-# container, and no network beyond the loopback-published port.
+# Petrichor services (spec §19.4, ADR-0102): the API is the source-of-truth
+# server (serves /ui/ + /v1/), the engines are one compose service each -
+# images built locally (GPL engines are not redistributed), base image pinned
+# by digest, healthcheck, non-privileged read-only container, and no network
+# beyond the loopback-published port.
 #
 # The engine timeout is configurable: ENGINE_TIMEOUT (seconds, default 30).
+# The API key is required: PETRICHOR_API_KEY must be set in the environment.
 services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    image: petrichor-api:2.0.0
+    user: "65534:65534"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    ports:
+      - "127.0.0.1:${API_HOST_PORT:-8080}:8080"
+    environment:
+      PETRICHOR_API_KEY: ${PETRICHOR_API_KEY:?PETRICHOR_API_KEY is required}
+      # OIDC Bearer layer (PT-1/PT-2, issues #182-#183): forwarded only when
+      # set in the host .env; when AUTH_ISSUER is empty the API falls back to
+      # the legacy X-API-Key alone (never open) and logs auth_bearer_not_configured.
+      AUTH_ISSUER: ${AUTH_ISSUER:-}
+      AUTH_CLIENT_ID: ${AUTH_CLIENT_ID:-}
+      AUTH_CLIENT_SECRET: ${AUTH_CLIENT_SECRET:-}
+      AUTH_ALLOWED_AUDIENCES: ${AUTH_ALLOWED_AUDIENCES:-}
+      AUTH_DISABLED: ${AUTH_DISABLED:-}
+      PETRICHOR_ENV: ${PETRICHOR_ENV:-}
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - petrichor-data:/app/.petrichor
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/ui/', timeout=2)"
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    restart: "no"
   dummy:
     build:
       context: .
@@ -90,3 +132,6 @@ services:
       retries: 3
       start_period: 2s
     restart: "no"
+
+volumes:
+  petrichor-data:

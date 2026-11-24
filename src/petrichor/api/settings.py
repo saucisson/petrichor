@@ -34,8 +34,6 @@ class ApiSettings(BaseSettings):
     llm_provider: LlmProviderKind = "mock"
     """The LLM provider selected by configuration (spec §8, issue #36): the
     deterministic mock by default, the real Mistral provider with ``mistral``."""
-    llm_model: str = Field(default="mistral-small-latest", min_length=1)
-    """The model of the real LLM provider when ``llm_provider="mistral"``."""
     mistral_api_key: SecretStr | None = None
     """The Mistral API key (env MISTRAL_API_KEY); required when llm_provider="mistral",
     never logged (ADR-0005)."""

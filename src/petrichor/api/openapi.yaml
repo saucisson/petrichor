@@ -56,11 +56,22 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
   /models:
     post:
-      summary: Import a PNML document into the canonical form
+      summary: Import a PNML document or an archive into the canonical form
       description: >-
         201 when the content hash is new, 200 when the same net was already
         imported (idempotent by content hash, spec §13). Invalid or
         unsupported PNML is rejected with 422 - never silently unfolded.
+        Archives (application/zip, application/gzip, application/x-tar) are
+        accepted under the upload quota with protected extraction (spec
+        §21.3): one PNML imports directly, several PNML answer 409 with the
+        typed candidate list and import only on an explicit candidate query
+        parameter - never a silent multi-import.
+      parameters:
+        - name: candidate
+          in: query
+          schema:
+            type: string
+          description: The archive member to import when the source holds several PNML documents.
       requestBody:
         required: true
         content:
@@ -68,7 +79,33 @@ paths:
             schema:
               type: string
               format: xml
+          application/zip:
+            schema:
+              type: string
+              format: binary
+          application/gzip:
+            schema:
+              type: string
+              format: binary
+          application/x-tar:
+            schema:
+              type: string
+              format: binary
       responses:
+        "409":
+          description: >-
+            The source contains several PNML documents; the typed body lists
+            the candidates (name, size, sha256, detected formalism).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CandidateList"
+        "413":
+          description: The upload exceeds the quota (reason quota_exceeded).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
         "201":
           description: Model created; Location header points at the resource.
           headers:
@@ -91,7 +128,92 @@ paths:
         "415":
           $ref: "#/components/responses/UnsupportedMediaType"
         "422":
-          $ref: "#/components/responses/InvalidPnml"
+          description: >-
+            Invalid or unsupported PNML (InvalidPnml), unsafe archive
+            (reason unsafe_archive, refused members listed), no PNML in the
+            archive (no_pnml), corrupt archive (invalid_archive).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /models/import-url:
+    post:
+      summary: Import a PNML or an archive from an allowlisted https URL (spec §21.3, ADR-0008)
+      description: >-
+        The URL must be https and its domain must be in the versioned
+        allowlist (url_import.json); every resolved address must be public
+        (SSRF rejection, ADR-0008) and redirects are re-validated. The
+        download honors a timeout and a size quota, then the same
+        one-PNML-or-candidates rule as POST /v1/models applies. Provenance
+        (source url, sha256) is recorded in the model metadata.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ModelImportUrlRequest"
+      responses:
+        "201":
+          description: Model created; Location header points at /v1/models/{model_id}.
+          headers:
+            Location:
+              schema:
+                type: string
+              description: /v1/models/{model_id}
+          content:
+            application/petri+json; version=1.0:
+              schema:
+                $ref: "#/components/schemas/CanonicalModel"
+        "200":
+          description: The same net was already imported (idempotent by content hash).
+          content:
+            application/petri+json; version=1.0:
+              schema:
+                $ref: "#/components/schemas/CanonicalModel"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Unknown candidate name (reason unknown_candidate).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: Several PNML documents in the downloaded source (reason multiple_candidates).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CandidateList"
+        "413":
+          description: The download exceeds the quota (reason quota_exceeded).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: >-
+            URL not allowlisted or not https (url_not_allowed), private/local
+            network refused (private_network_rejected), invalid body
+            (invalid_body), invalid PNML (invalid_pnml), unsafe or empty
+            archive (unsafe_archive / no_pnml / invalid_archive).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "502":
+          description: The download failed (reason download_failed).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: URL import is not configured on this server (reason url_import_not_configured).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
   /models/{model_id}:
     get:
       summary: Read a model in its canonical form
@@ -116,6 +238,143 @@ paths:
           description: >-
             The Accept header admits no supported representation. PNML
             re-export is not supported yet.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /catalog/models:
+    get:
+      summary: Search the MCC model catalog (spec §21.2, ADR-0105)
+      description: >-
+        Paginated listing of the known MCC instances with free-text search on
+        name/family, facet filters (family, formalism, edition, source, size),
+        a closed sort set (name, family, edition, size - size is semantic,
+        small to huge) and limit/offset pagination. 503 catalog_unavailable
+        when every configured source failed to refresh.
+      parameters:
+        - name: search
+          in: query
+          schema:
+            type: string
+          description: Free-text search on name and family.
+        - name: family
+          in: query
+          schema:
+            type: string
+        - name: formalism
+          in: query
+          schema:
+            type: string
+            enum: [PT, COL]
+        - name: edition
+          in: query
+          schema:
+            type: string
+        - name: source
+          in: query
+          schema:
+            type: string
+        - name: size
+          in: query
+          schema:
+            type: string
+            enum: [small, medium, large, huge]
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [name, family, edition, size]
+            default: name
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        "200":
+          description: One page of catalog entries with facet counts.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CatalogPage"
+        "400":
+          description: Invalid sort or pagination parameter (reason invalid_sort / invalid_pagination).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          description: Every catalog source failed (reason catalog_unavailable).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /catalog/import:
+    post:
+      summary: Import one catalog instance by name into the canonical form (spec §21.2)
+      description: >-
+        Fetches the PNML of the named instance from its source (with a bounded
+        disk cache and a download quota), imports it into the canonical
+        petri+json form and records the provenance (catalog, source, edition,
+        name, url, sha256) in the model metadata. 201 when the content hash is
+        new, 200 when the same net was already imported (idempotent by content
+        hash, like POST /v1/models).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CatalogImportRequest"
+      responses:
+        "201":
+          description: Model created; Location header points at /v1/models/{model_id}.
+          headers:
+            Location:
+              schema:
+                type: string
+              description: /v1/models/{model_id}
+          content:
+            application/petri+json; version=1.0:
+              schema:
+                $ref: "#/components/schemas/CanonicalModel"
+        "200":
+          description: The same net was already imported (idempotent by content hash).
+          content:
+            application/petri+json; version=1.0:
+              schema:
+                $ref: "#/components/schemas/CanonicalModel"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          description: Unknown catalog instance name (reason unknown_model).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "413":
+          description: The archive exceeds the configured download quota (reason quota_exceeded).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: Invalid body (reason invalid_body) or invalid PNML (reason invalid_pnml).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: Catalog or source unavailable (reason catalog_unavailable / source_unavailable).
           content:
             application/problem+json:
               schema:
@@ -315,10 +574,25 @@ paths:
                     properties:
                       provider:
                         type: string
-                      model:
-                        type: string
+                      routing:
+                        type: object
+                        description: >-
+                          The exact pinned version per usage (P74, ADR-0108);
+                          present only when the provider routes per usage.
+                        additionalProperties:
+                          type: string
                       calls:
                         type: integer
+                      by_usage_model:
+                        type: object
+                        description: The LLM cost per (usage, model) couple (P72/P74).
+                        additionalProperties:
+                          type: object
+                          properties:
+                            calls:
+                              type: integer
+                            total_tokens:
+                              type: integer
                       prompt_tokens:
                         type: integer
                       completion_tokens:
@@ -327,6 +601,58 @@ paths:
                         type: integer
                   budget_note:
                     type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          description: No LLM provider is wired.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+  /llm/calls:
+    get:
+      summary: The observable state of every LLM call (P75)
+      description: >-
+        Polled by the UI while a real LLM call may be in flight, to show the
+        active waiting indicator (animated hourglass, usage, elapsed) — never
+        a frozen screen without information. The deterministic mock is
+        instantaneous: no call is ever in progress with it. Only the most
+        recent call states are kept (bounded history), so the payload stays
+        small on a long-lived server.
+      responses:
+        "200":
+          description: The call states of the configured provider.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [calls]
+                properties:
+                  calls:
+                    type: array
+                    items:
+                      type: object
+                      required: [usage, model, started_at, ended_at, error, in_progress]
+                      properties:
+                        usage:
+                          type: string
+                          enum: [semantic-profile, reading, clarification, cluster, narration]
+                        model:
+                          type: string
+                        started_at:
+                          type: string
+                          format: date-time
+                        ended_at:
+                          type: string
+                          format: date-time
+                          nullable: true
+                        error:
+                          type: string
+                          nullable: true
+                        in_progress:
+                          type: boolean
         "401":
           $ref: "#/components/responses/Unauthorized"
         "503":
@@ -1045,6 +1371,124 @@ components:
       in: header
       name: X-API-Key
   schemas:
+    PnmlCandidate:
+      type: object
+      required: [name, size_bytes, sha256, content, formalism]
+      properties:
+        name:
+          type: string
+          description: The archive member path of the PNML document.
+        size_bytes:
+          type: integer
+        sha256:
+          type: string
+        content:
+          type: string
+        formalism:
+          type: string
+          enum: [pt, symmetric]
+    CandidateList:
+      type: object
+      required: [reason, detail, candidates]
+      properties:
+        reason:
+          type: string
+          enum: [multiple_candidates]
+        detail:
+          type: string
+        candidates:
+          type: array
+          items:
+            $ref: "#/components/schemas/PnmlCandidate"
+    ModelImportUrlRequest:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          description: An https URL whose domain is in the versioned allowlist.
+        candidate:
+          type: string
+          nullable: true
+          description: The archive member to import when the source holds several PNML documents.
+    CatalogEntry:
+      type: object
+      required: [name, family, source, url]
+      properties:
+        name:
+          type: string
+          description: The instance name, e.g. Philosophers-PT-010.
+        family:
+          type: string
+          description: The model family, e.g. Philosophers.
+        formalism:
+          type: string
+          enum: [PT, COL]
+          nullable: true
+        edition:
+          type: string
+          nullable: true
+          description: The MCC edition year when the source provides it.
+        source:
+          type: string
+          description: The configured source id that listed this entry.
+        size_bucket:
+          type: string
+          enum: [small, medium, large, huge]
+          nullable: true
+          description: Compressed-size bucket of the archive, when known.
+        url:
+          type: string
+          description: The URL the PNML archive is fetched from.
+        sha256:
+          type: string
+          nullable: true
+    CatalogFacets:
+      type: object
+      properties:
+        family:
+          type: object
+          additionalProperties:
+            type: integer
+        formalism:
+          type: object
+          additionalProperties:
+            type: integer
+        edition:
+          type: object
+          additionalProperties:
+            type: integer
+        source:
+          type: object
+          additionalProperties:
+            type: integer
+        size:
+          type: object
+          additionalProperties:
+            type: integer
+    CatalogPage:
+      type: object
+      required: [items, total, limit, offset, facets]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/CatalogEntry"
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+        facets:
+          $ref: "#/components/schemas/CatalogFacets"
+    CatalogImportRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          description: The catalog instance name to import, as listed by GET /v1/catalog/models.
     Session:
       type: object
       required: [session_id, model_id, created_at, updated_at, run_ids, budget_seconds]
@@ -1741,7 +2185,12 @@ components:
           type: string
   responses:
     Unauthorized:
-      description: Missing or invalid X-API-Key.
+      description: >-
+        Missing or invalid credentials: a valid `Authorization: Bearer`
+        access token (OIDC, validated locally against the IdP JWKS) or the
+        legacy `X-API-Key` header. Reason `invalid_bearer_token` when an
+        Authorization header was present but rejected, else
+        `missing_or_invalid_api_key`.
       content:
         application/problem+json:
           schema:

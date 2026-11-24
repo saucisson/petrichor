@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from petrichor.llm.provider import LLMProvider
-    from petrichor.petri_canonical import ContentHash, JsonValue
+    from petrichor.petri_canonical import CanonicalModel, JsonValue
 
 logger = structlog.get_logger(__name__)
 
@@ -183,7 +183,7 @@ def witness_record_of(*, document: WitnessDocument) -> WitnessRecord:
 def narrate_steps(
     *,
     provider: LLMProvider,
-    model_hash: ContentHash,
+    model: CanonicalModel,
     steps: tuple[WitnessStep, ...],
 ) -> tuple[Narration, ...]:
     """One LLM narration per fired step, labeled ``provenance: llm`` (spec §16).
@@ -191,16 +191,28 @@ def narrate_steps(
     A transition missing from the scripted corpus degrades explicitly (the
     step gets no narration) — the mock never invents a sentence (spec §15).
     """
+    fired = tuple(step.fired for step in steps if step.fired is not None)
+    if not fired:
+        return ()
+    # P72: ONE LLM call for the complete witness (document granularity), the
+    # corpus is stored once (P32). A transition absent from the corpus gets
+    # no narration - never an invented sentence.
+    try:
+        corpus = provider.narrate(model=model, transitions=fired)
+    except LLMDegradationError:
+        logger.warning(
+            "witness_narration_degraded", model_hash=model.content_hash, steps=len(steps)
+        )
+        return ()
     narrations: list[Narration] = []
     for step in steps:
         if step.fired is None:
             continue
-        try:
-            text = provider.narrate_transition(model_hash=model_hash, transition=step.fired)
-        except LLMDegradationError:
+        text = corpus.narrations.get(step.fired)
+        if text is None:
             logger.warning(
-                "witness_narration_degraded",
-                model_hash=model_hash,
+                "witness_narration_not_scripted",
+                model_hash=model.content_hash,
                 transition=step.fired,
                 step_index=step.index,
             )
@@ -208,7 +220,7 @@ def narrate_steps(
         narrations.append(Narration(step_index=step.index, text=text, provenance="llm"))
     logger.debug(
         "witness_narrated",
-        model_hash=model_hash,
+        model_hash=model.content_hash,
         steps=len(steps),
         narrations=len(narrations),
     )

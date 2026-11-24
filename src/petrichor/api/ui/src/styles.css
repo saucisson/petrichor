@@ -1,114 +1,494 @@
-:root {
-  --focus: #1a56db;
-  --covered: #9ca3af;
+@import "tailwindcss";
+
+/* P81: the dark variant follows data-theme on <html>, not the media query -
+   the user's persisted choice wins over the system preference. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+/* P81: dark mode overrides of the @theme tokens. Every text/background pair
+   keeps WCAG AA >= 4.5:1 (ratios in comments): ink #f1f5f9 on card #1e293b
+   13.4:1, muted #cbd5e1 on card 9.9:1, primary #60a5fa on card 5.8:1,
+   error #f87171 on card 5.3:1, warning #fbbf24 on card 8.8:1. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --color-ink: #f1f5f9; /* slate-100: 13.4:1 on card */
+  --color-muted: #cbd5e1; /* slate-300: 9.9:1 on card */
+  --color-line: #475569; /* slate-600 borders */
+  --color-surface: #334155; /* slate-700 subtle panels */
+  --color-card: #1e293b; /* slate-800 cards on the dark page */
+  --color-page: #0f172a; /* slate-900 page */
+  --color-primary: #60a5fa; /* blue-400: 5.8:1 on card */
+  --color-primary-hover: #93c5fd; /* blue-300: 9.7:1 on card */
+  --color-error: #f87171; /* red-400: 5.3:1 on card */
+  --color-warning: #fbbf24; /* amber-400: 8.8:1 on card */
+  --color-highlight: #78350f; /* amber-900: 8.3:1 with light ink */
+  --color-banner-error-bg: #450a0a; /* red-950: 5.8:1 with error text */
+  --color-banner-warning-bg: #451a03; /* amber-950: 9.0:1 with warning text */
+  --shadow-soft: 0 1px 3px rgb(0 0 0 / 0.5), 0 1px 2px rgb(0 0 0 / 0.4);
 }
 
-body {
-  font-family: system-ui, sans-serif;
-  margin: 0 auto;
-  max-width: 60rem;
-  padding: 1rem;
+/* UI v3 design socle (ADR-0104, issue #161, spec §9 v1.4): every visual
+   decision is a named token in @theme below or a Tailwind utility applied
+   in the components - no ad hoc style is duplicated in the TSX. All palette
+   entries are picked for WCAG AA contrast (>= 4.5:1) on their background. */
+
+@theme {
+  /* Palette - every entry is picked for WCAG AA contrast (>= 4.5:1) on its
+     background; P81 dark mode overrides these tokens, never hardcoded hex. */
+  --color-primary: #1d4ed8; /* blue-700: 6.7:1 with white */
+  --color-primary-hover: #1e40af; /* blue-800: 8.6:1 with white */
+  --color-ink: #111827; /* gray-900: 17.7:1 on card */
+  --color-muted: #4b5563; /* gray-600: 7.5:1 on card */
+  --color-line: #d1d5db; /* gray-300 borders */
+  --color-surface: #f9fafb; /* gray-50 subtle panels */
+  --color-card: #ffffff; /* white cards on the pastel page */
+  --color-page: #eef2ff; /* indigo-50 pastel page background */
+  --color-error: #b91c1c; /* red-700: 6.5:1 with white, 5.3:1 on red-100 */
+  --color-warning: #b45309; /* amber-700: 4.8:1 on card */
+  --color-highlight: #fde68a; /* amber-200: 12.6:1 with ink text */
+  --color-header-a: #4338ca; /* indigo-700: 7.9:1 with white */
+  --color-header-b: #6d28d9; /* violet-700: 7.1:1 with white */
+  --color-header-c: #0e7490; /* cyan-700: 5.4:1 with white */
+  --color-accent-a: #1d4ed8; /* blue-700 gradient start for primary buttons */
+  --color-accent-b: #6d28d9; /* violet-700 gradient end: 7.1:1 with white */
+  --color-banner-error-bg: #fee2e2; /* red-100: 5.3:1 with error text */
+  --color-banner-warning-bg: #fef3c7; /* amber-100: 8.2:1 with amber-900 */
+
+  /* Typography */
+  --font-sans: system-ui, sans-serif;
+
+  /* Radii */
+  --radius-control: 0.375rem;
+  --radius-card: 0.5rem;
+
+  /* Soft shadow for cards on the pastel page */
+  --shadow-soft: 0 1px 3px rgb(17 24 39 / 0.12), 0 1px 2px rgb(17 24 39 / 0.08);
 }
 
-:focus-visible {
-  outline: 3px solid var(--focus);
-  outline-offset: 2px;
+@layer base {
+  body {
+    @apply mx-auto max-w-5xl bg-page p-4 font-sans text-ink;
+  }
+
+  /* Visible focus everywhere (a11y, maquette P12): 3px primary outline. */
+  :focus-visible {
+    outline: 3px solid var(--color-primary);
+    outline-offset: 2px;
+  }
+
+  pre {
+    @apply overflow-x-auto rounded-card bg-surface p-3;
+  }
 }
 
-header {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  align-items: center;
+/* Reusable control styles, defined once as utilities (no duplication in
+   the components): .btn is the secondary button, .btn-primary the primary
+   one (P67 will rely on this visual distinction). */
+@utility btn {
+  @apply rounded-control border border-line bg-card px-3 py-1.5 text-sm text-ink shadow-soft hover:bg-surface disabled:cursor-not-allowed disabled:opacity-60;
 }
 
-#steps {
-  display: flex;
-  gap: 0.5rem;
-  list-style: none;
-  padding: 0;
+/* P80: primary buttons in the indigo->violet gradient; white text keeps
+   >= 6.7:1 contrast on both gradient stops (WCAG AA). */
+@utility btn-primary {
+  @apply border-transparent bg-gradient-to-r from-accent-a to-accent-b text-white shadow-soft hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60;
 }
 
-#steps button[aria-current="step"] {
-  font-weight: bold;
-  text-decoration: underline;
+@layer components {
+  /* P80: header band in the indigo -> violet -> cyan gradient; white text
+     keeps >= 5.4:1 on every stop (WCAG AA). */
+  header {
+    @apply flex flex-wrap items-center gap-2 rounded-card bg-gradient-to-r from-header-a via-header-b to-header-c p-3 text-white shadow-soft;
+  }
+
+  header h1 {
+    @apply flex items-center gap-2 text-white;
+  }
+
+  header .header-group {
+    @apply border-line bg-card text-ink;
+  }
+
+  /* Header groups (issue #162): connection / session / language, each with
+     a visible label - the primary action (resume) is a btn-primary. */
+  .header-group {
+    @apply flex items-center gap-2 rounded-card border border-line bg-surface px-2 py-1;
+  }
+
+  .header-group-label {
+    @apply text-xs font-semibold tracking-wide text-muted uppercase;
+  }
+
+  /* Guided stepper hint (issue #162): the reason the locked steps are
+     disabled, displayed next to the stepper. */
+  .nav-hint {
+    @apply mt-1 text-sm text-muted;
+  }
+
+  /* Typed messages (issue #162): error = alert in error color, info/ok =
+     status. Server-produced texts stay verbatim inside the alert. */
+  .message {
+    @apply my-1 text-sm;
+  }
+
+  .message-error {
+    @apply rounded-control border border-error bg-banner-error-bg px-2 py-1 font-semibold text-error;
+  }
+
+  .message-info {
+    @apply text-muted;
+  }
+
+  .message-ok {
+    @apply font-semibold text-primary;
+  }
+
+  /* P76/P80: referenced by the COL warning and other caution messages -
+     amber banner, amber-900 text on amber-100 (8.2:1, WCAG AA). */
+  .message-warning {
+    @apply rounded-control border border-warning bg-banner-warning-bg px-2 py-1 font-semibold text-warning;
+  }
+
+  #language-select {
+    @apply max-w-32;
+  }
+
+  #steps {
+    @apply flex list-none gap-2 p-0;
+  }
+
+  #steps button[aria-current="step"] {
+    @apply font-bold underline;
+  }
+
+  .question-card {
+    @apply my-2 rounded-card border border-line bg-card p-3 shadow-soft;
+  }
+
+  .question-card .decisions {
+    @apply flex gap-2;
+  }
+
+  .question-card .status {
+    @apply italic;
+  }
+
+  .question-card .cross-status {
+    @apply font-semibold;
+  }
+
+  .controversy-camps {
+    @apply ml-4 mt-1 font-normal;
+  }
+
+  .covered {
+    @apply text-muted;
+  }
+
+  .run-verdict {
+    @apply font-bold;
+  }
+
+  /* Witness step reader (spec §16, issue #32): the fired transition of each
+     step is highlighted; the narration is labeled with its provenance. */
+  .witness-reader {
+    @apply mt-2;
+  }
+
+  .witness-steps {
+    @apply ml-5 mt-1;
+  }
+
+  .fired-transition {
+    @apply bg-highlight px-1 text-ink;
+  }
+
+  .witness-narration {
+    @apply my-1 italic;
+  }
+
+  .narration-provenance {
+    @apply text-[0.8em] text-muted not-italic;
+  }
+
+  /* Live per-session MC budget line (spec §12.4, issue #33). */
+  .budget-line {
+    @apply mb-2 font-bold;
+  }
+
+  /* P78: budget encart, run rows with status badges, folded witnesses. */
+  .budget-card {
+    @apply rounded-card border border-line bg-card px-3 py-2 shadow-soft;
+  }
+
+  .run-row {
+    @apply my-2 flex flex-wrap items-center gap-2 rounded-card border border-line bg-card p-3 shadow-soft;
+  }
+
+  .run-row .run-id {
+    @apply font-mono text-sm font-semibold;
+  }
+
+  .badge {
+    @apply inline-block rounded-full border border-line bg-surface px-2 py-0.5 text-xs font-semibold text-ink;
+  }
+
+  .badge-family {
+    @apply border-indigo-200 bg-indigo-50 text-indigo-900 dark:border-indigo-800 dark:bg-indigo-950 dark:text-indigo-200;
+  }
+
+  .badge-triage {
+    @apply border-violet-200 bg-violet-50 text-violet-900 dark:border-violet-800 dark:bg-violet-950 dark:text-violet-200;
+  }
+
+  .badge-status {
+    @apply border-sky-200 bg-sky-50 text-sky-900 dark:border-sky-800 dark:bg-sky-950 dark:text-sky-200;
+  }
+
+  .badge-kind {
+    @apply border-teal-200 bg-teal-50 text-teal-900 dark:border-teal-800 dark:bg-teal-950 dark:text-teal-200;
+  }
+
+  .badge-verified {
+    @apply border-green-300 bg-green-100 text-green-900 dark:border-green-800 dark:bg-green-950 dark:text-green-200;
+  }
+
+  .badge-controversial {
+    @apply border-amber-300 bg-amber-100 text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200;
+  }
+
+  .run-status.st-done {
+    @apply border-green-300 bg-green-100 text-green-900 dark:border-green-800 dark:bg-green-950 dark:text-green-200;
+  }
+
+  .run-status.st-running {
+    @apply border-blue-300 bg-blue-100 text-blue-900 dark:border-blue-800 dark:bg-blue-950 dark:text-blue-200;
+    animation: p78-pulse 1.2s ease-in-out infinite;
+  }
+
+  .run-status.st-pending,
+  .run-status.st-queued {
+    @apply border-gray-300 bg-gray-100 text-gray-700 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300;
+  }
+
+  @keyframes p78-pulse {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.55;
+    }
+  }
+
+  /* P78: verdict pictograms (mission §2.6) - green check / red cross pills,
+     "—" while no verdict. */
+  .verdict {
+    @apply inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1 text-xs font-bold;
+  }
+
+  .verdict.v-true {
+    @apply bg-green-700 text-white; /* 5.0:1 with white */
+  }
+
+  .verdict.v-false {
+    @apply bg-red-700 text-white; /* 6.5:1 with white */
+  }
+
+  .verdict.v-other,
+  .verdict.v-none {
+    @apply bg-surface text-muted;
+  }
+
+  /* P78: question cards - prominent formula, badge row, filter bar, covered
+     cards grayed. */
+  .question-card .question-formula {
+    @apply font-mono text-sm font-semibold;
+  }
+
+  .question-card .badge-row {
+    @apply mt-1 flex flex-wrap gap-1;
+  }
+
+  .question-card.covered {
+    @apply opacity-60;
+  }
+
+  .filter-bar {
+    @apply my-2 flex flex-wrap items-center gap-2 rounded-card border border-line bg-card p-2 shadow-soft;
+  }
+
+  .filter-bar label {
+    @apply text-xs font-semibold tracking-wide text-muted uppercase;
+  }
+
+  .filter-bar .filter-counters {
+    @apply ml-auto text-sm text-muted;
+  }
+
+  .witness-details {
+    @apply mt-2;
+  }
+
+  .witness-details .witness-summary {
+    @apply cursor-pointer font-semibold;
+  }
+
+  .profile-entry {
+    @apply my-1 flex items-center gap-2;
+  }
+
+  /* Explicit import zone (issue #163): click to browse or drop a file; the
+     selected file name and size are shown before sending. */
+  .import-zone {
+    @apply my-2 rounded-card border border-dashed border-line bg-surface p-3;
+  }
+
+  .import-zone-label {
+    @apply block cursor-pointer text-sm font-semibold text-primary hover:underline;
+  }
+
+  .import-file-info {
+    @apply my-1 text-sm text-muted;
+  }
+
+  .formula-editor {
+    @apply mt-2 border-t border-dashed border-line pt-2;
+  }
+
+  .formula-editor input {
+    @apply w-full max-w-2xl;
+  }
+
+  .edit-error {
+    @apply text-error;
+  }
+
+  .formula-reading {
+    @apply rounded-card bg-surface p-2;
+  }
+
+  .proof-dossier {
+    @apply my-2 rounded-card border border-line bg-card p-2 shadow-soft;
+  }
 }
 
-.question-card {
-  border: 1px solid #d1d5db;
-  border-radius: 0.5rem;
-  margin: 0.5rem 0;
-  padding: 0.75rem;
+/* P77: import wizard (cards, breadcrumb) and catalog data grid. */
+@layer components {
+  .wizard-nav {
+    @apply mb-2 flex items-center gap-3;
+  }
+
+  .breadcrumb {
+    @apply m-0 text-sm text-muted;
+  }
+
+  .wizard-cards {
+    @apply flex flex-wrap gap-3;
+  }
+
+  .wizard-card {
+    @apply flex w-64 flex-col gap-1 rounded-card border border-line bg-card p-3 text-left shadow-soft hover:border-primary;
+  }
+
+  .wizard-card strong {
+    @apply text-primary;
+  }
+
+  .wizard-card span {
+    @apply text-sm text-muted;
+  }
+
+  .catalog-table {
+    @apply w-full border-collapse text-sm;
+  }
+
+  .catalog-table th,
+  .catalog-table td {
+    @apply border border-line px-2 py-1 text-left align-top;
+  }
+
+  .catalog-table thead th {
+    @apply bg-surface;
+  }
+
+  .catalog-table {
+    @apply rounded-card border border-line bg-card shadow-soft;
+  }
+
+  .catalog-sort {
+    @apply border-0 bg-transparent p-0 font-semibold text-ink hover:bg-transparent;
+  }
+
+  .catalog-filters input,
+  .catalog-filters select {
+    @apply w-full max-w-40 text-sm;
+  }
+
+  .sr-only {
+    @apply absolute h-px w-px overflow-hidden whitespace-nowrap;
+    clip: rect(0 0 0 0);
+  }
 }
 
-.question-card .decisions {
-  display: flex;
-  gap: 0.5rem;
-}
+  /* P78: covered question notice (fusion arbitrée, plus jamais sollicitée). */
+  .question-card .covered-notice {
+    @apply font-semibold;
+  }
 
-.question-card .status {
-  font-style: italic;
-}
+  /* P79: active-wait indicator (mission §2.5) - animated spinner + elapsed
+     seconds inside role="status". */
+  .busy {
+    @apply inline-flex items-center gap-2;
+  }
 
-.question-card .cross-status {
-  font-weight: 600;
-}
+  .busy-spinner {
+    @apply inline-block h-4 w-4 rounded-full border-2 border-line border-t-primary;
+    animation: p79-spin 0.8s linear infinite;
+  }
 
-.controversy-camps {
-  font-weight: normal;
-  margin: 0.25rem 0 0 1rem;
-}
+  @keyframes p79-spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
 
-.covered {
-  color: var(--covered);
-}
+  /* P79: segmented Aperçu / Markdown toggle + rendered contract. */
+  .view-toggle {
+    @apply my-2 flex flex-wrap items-center gap-2;
+  }
 
-.run-verdict {
-  font-weight: bold;
-}
+  .markdown-body h3,
+  .markdown-body h4,
+  .markdown-body h5,
+  .markdown-body h6 {
+    @apply mt-3 mb-1 font-bold;
+  }
 
-pre {
-  background: #f3f4f6;
-  overflow-x: auto;
-  padding: 0.75rem;
-}
+  .markdown-body p {
+    @apply my-1;
+  }
 
-/* Witness step reader (spec §16, issue #32): the fired transition of each
-   step is highlighted; the narration is labeled with its provenance. */
-.witness-reader {
-  margin-top: 0.5rem;
-}
+  .markdown-body ul {
+    @apply ml-5 list-disc;
+  }
 
-.witness-steps {
-  margin: 0.25rem 0;
-  padding-left: 1.25rem;
-}
+  .markdown-body code {
+    @apply rounded bg-surface px-1 font-mono text-[0.9em];
+  }
 
-.fired-transition {
-  background: #fde68a;
-  padding: 0 0.25rem;
-}
+  .markdown-source {
+    @apply overflow-x-auto rounded-card border border-line bg-surface p-3 font-mono text-sm whitespace-pre-wrap;
+  }
 
-.witness-narration {
-  margin: 0.15rem 0;
-  font-style: italic;
-}
+  /* P79: arbitration journal - event badge + monospace key=value details. */
+  .journal-entry {
+    @apply my-1 flex flex-wrap items-center gap-2;
+  }
 
-.narration-provenance {
-  font-style: normal;
-  font-size: 0.8em;
-  color: #6b7280;
-}
+  .journal-event {
+    @apply border-purple-200 bg-purple-50 text-purple-900 dark:border-purple-800 dark:bg-purple-950 dark:text-purple-200;
+  }
 
-/* Live per-session MC budget line (spec §12.4, issue #33). */
-.budget-line {
-  font-weight: bold;
-  margin-bottom: 0.5rem;
-}
-
-.profile-entry {
-  align-items: center;
-  display: flex;
-  gap: 0.5rem;
-  margin: 0.25rem 0;
-}
+  .journal-detail {
+    @apply rounded bg-surface px-1 py-0.5 font-mono text-xs;
+  }

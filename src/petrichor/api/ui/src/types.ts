@@ -1,14 +1,36 @@
 // API payload types (spec §19.4): the server is the source of truth - these
 // are read-only views of its responses, never verdicts computed client-side.
 
+export type LlmUsage =
+  | "semantic-profile"
+  | "reading"
+  | "clarification"
+  | "cluster"
+  | "narration";
+
+export interface LlmCallState {
+  usage: LlmUsage;
+  model: string;
+  started_at: string;
+  ended_at: string | null;
+  error: string | null;
+  in_progress: boolean;
+}
+
 export interface ProfileEntry {
   id: string;
   role: string;
   conf: number;
 }
 
+// The API serves the full ProfileState (spec §14): proposed is a
+// SemanticProfile object with its entries, not a bare array.
+export interface SemanticProfile {
+  entries: ProfileEntry[];
+}
+
 export interface Profile {
-  proposed: ProfileEntry[];
+  proposed: SemanticProfile;
 }
 
 export type CrossStatus = "verified_by_n" | "controversial" | string;
@@ -28,6 +50,25 @@ export interface Question {
   cross_status: CrossStatus;
   verified_by?: number;
   proofs: Proof[];
+  // P34 (issue #34): the earlier generated question this one converges with,
+  // and the surviving question of the human fusion covering this one.
+  convergence_hint?: string | null;
+  covered_by?: string | null;
+}
+
+// P34: one human fusion record (POST/GET /v1/sessions/{sid}/convergences).
+export interface ConvergenceRecord {
+  session_id: string;
+  question_id: string;
+  proposition_id: string;
+  timestamp: number;
+}
+
+export interface ConvergenceList {
+  convergences: ConvergenceRecord[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 export interface JournalEntry {
@@ -35,9 +76,63 @@ export interface JournalEntry {
   detail?: Record<string, unknown> | null;
 }
 
+// P37 (issue #37): one append-only formula edit record, as returned by
+// POST /v1/sessions/{sid}/questions/{qid}/formula.
+export interface FormulaEditRecord {
+  session_id: string;
+  question_id: string;
+  old_formula: string;
+  new_formula: string;
+  timestamp: number;
+}
+
+// The inverse reading of a formula: an LLM proposition labeled
+// provenance: llm - never a verdict. `degraded` readings carry a server
+// note instead of the reading fields.
+export interface FormulaReading {
+  reading?: string;
+  not_says?: string;
+  pattern?: string;
+  cross?: string;
+  provenance?: string;
+  degraded?: boolean;
+  note?: string;
+}
+
+export interface FormulaEditResponse {
+  record: FormulaEditRecord;
+  reading: FormulaReading | null;
+}
+
 export interface Contract {
   questions: Question[];
   journal: JournalEntry[];
+  proof_dossiers?: ProofDossier[];
+}
+
+// P38 (issue #38): one clickable proof dossier of the contract - a clause
+// with its runs (verdict per tool, technique, cost, witness id) and, on
+// controversy, the two camps exported as-is (spec §17.4).
+export interface ContractProof {
+  run_id: string;
+  link: string;
+  status: string;
+  triage: string;
+  verdict: string | null;
+  tool_version: string;
+  technique: string | null;
+  cost_tool_seconds: number | null;
+  witness_id: string | null;
+}
+
+export interface ProofDossier {
+  question_id: string;
+  formula: string;
+  status: string;
+  cross_status: string;
+  verified_by: number;
+  proofs: ContractProof[];
+  camps: string[];
 }
 
 export interface Budget {
@@ -85,4 +180,62 @@ export interface Witness {
   back_edge?: string;
   steps: WitnessStep[];
   narrations?: Narration[];
+}
+
+// P71 (issue #166, spec §21): catalog listing and the three import paths.
+export interface CatalogEntry {
+  name: string;
+  family: string;
+  formalism: "PT" | "COL" | null;
+  edition: string | null;
+  source: string;
+  size_bucket: "small" | "medium" | "large" | "huge" | null;
+  url: string;
+  sha256: string | null;
+}
+
+export interface CatalogFacets {
+  family: Record<string, number>;
+  formalism: Record<string, number>;
+  edition: Record<string, number>;
+  source: Record<string, number>;
+  size: Record<string, number>;
+}
+
+export interface CatalogPage {
+  items: CatalogEntry[];
+  total: number;
+  limit: number;
+  offset: number;
+  facets: CatalogFacets;
+}
+
+export interface PnmlCandidate {
+  name: string;
+  size_bytes: number;
+  sha256: string;
+  formalism: "pt" | "symmetric";
+}
+
+export interface CandidateList {
+  reason: "multiple_candidates";
+  detail: string;
+  candidates: PnmlCandidate[];
+}
+
+// Provenance recorded server-side in model.metadata.provenance (P69/P70).
+export interface ModelProvenance {
+  source: string;
+  url?: string;
+  candidate?: string;
+  sha256?: string;
+  archive_sha256?: string;
+  catalog?: string;
+  edition?: string | null;
+  name?: string;
+}
+
+export interface ImportedModel {
+  id: string;
+  metadata?: { provenance?: ModelProvenance };
 }

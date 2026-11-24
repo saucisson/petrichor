@@ -1,0 +1,210 @@
+{
+  "app": {
+    "title": "Petrichor — session d'élicitation",
+    "languageLabel": "Langue"
+  },
+  "header": {
+    "groupConnection": "Connexion",
+    "groupSession": "Session",
+    "apiKeyLabel": "Clé API",
+    "apiKeyAria": "Clé API",
+    "sessionLabel": "Session",
+    "sessionAria": "Identifiant de session (reprise)",
+    "resume": "Reprendre la session",
+    "themeToggle": "Basculer en mode sombre / clair"
+  },
+  "nav": {
+    "aria": "Étapes",
+    "noSession": "Créez ou reprenez une session en Amorçage pour activer cette étape.",
+    "steps": {
+      "amorcage": "1. Amorçage",
+      "questions": "2. Questions statiques",
+      "verifications": "3. Vérifications MC",
+      "synthese": "4. Synthèse"
+    }
+  },
+  "amorcage": {
+    "title": "Amorçage",
+    "intro": "Importez un modèle PNML, créez une session, arbitrez le profil sémantique proposé.",
+    "fileAria": "Fichier PNML",
+    "dropZone": "Glissez-déposez un fichier PNML ou une archive ici, ou cliquez pour parcourir",
+    "fileSelected": "Fichier sélectionné : {{name}} ({{size}})",
+    "sizeUnit": "o",
+    "noFile": "Aucun fichier sélectionné.",
+    "badExtension": "Extension refusée : seuls .pnml, .xml, .zip, .tgz, .tar.gz et .tar sont acceptés.",
+    "import": "Importer le modèle et créer la session",
+    "importing": "Envoi du modèle en cours…",
+    "modelImported": "Modèle importé : {{id}}.",
+    "modelKnown": "Modèle déjà connu (import idempotent) : {{id}}.",
+    "sessionCreated": "Session créée : {{id}}.",
+    "importRefused": "Import du modèle refusé : {{status}}",
+    "noProfile": "Aucun profil proposé pour cette session.",
+    "loadingProfile": "Chargement du profil sémantique…",
+    "roleProposed": "rôle proposé : {{role}} (conf {{conf}})",
+    "accept": "Accepter",
+    "refuse": "Refuser",
+    "catalogTitle": "Catalogue de modèles",
+    "catalogIntro": "Recherchez un modèle du catalogue (texte libre et facettes), puis importez-le en un clic.",
+    "catalogSearchLabel": "Recherche dans le catalogue",
+    "catalogSearchButton": "Rechercher",
+    "catalogLoading": "Recherche dans le catalogue…",
+    "catalogEmpty": "Aucun modèle ne correspond à la recherche.",
+    "catalogTotal": "{{count}} modèle(s) dans le catalogue.",
+    "catalogImport": "Importer ce modèle",
+    "colWarning": "COL : réseau symétrique non déplié — le jumeau -PT- est proposé.",
+    "ptTwin": "Importer le jumeau {{name}}",
+    "importByNameLabel": "Nom exact dans le catalogue",
+    "importByNameButton": "Importer depuis le catalogue",
+    "importByUrlLabel": "URL du modèle ou de l'archive (https uniquement)",
+    "importByUrlButton": "Importer depuis l'URL",
+    "noCatalogName": "Aucun nom de catalogue saisi.",
+    "noUrl": "Aucune URL saisie.",
+    "candidatesTitle": "Plusieurs candidats PNML dans l'archive — choisissez :",
+    "candidateLine": "{{name}} ({{size}}, {{formalism}}, sha256 {{sha256}})",
+    "provenanceLine": "Provenance : source {{source}}, nom {{name}}, sha256 {{sha256}}.",
+    "catalogUnavailable": "Catalogue indisponible ({{status}}).",
+    "facetAll": "Tous",
+    "facet": {
+      "family": "Famille",
+      "formalism": "Formalisme",
+      "edition": "Édition",
+      "source": "Source",
+      "size": "Taille"
+    },
+    "sessionCreateFailed": "Échec de la création de session : identifiant de session vide reçu du serveur.",
+    "wizard": {
+      "back": "← Retour",
+      "breadcrumbAria": "Fil d'Ariane",
+      "crumbLocal": "Source : fichier local",
+      "crumbDistant": "Source : distante",
+      "crumbCatalog": "catalogue",
+      "crumbUrl": "URL directe",
+      "localCard": "Fichier local",
+      "localCardHint": "PNML ou archive ({{extensions}})",
+      "distantCard": "Source distante",
+      "distantCardHint": "Catalogue intégré ou URL directe",
+      "catalogCard": "Catalogue intégré",
+      "catalogCardHint": "Rechercher et importer un modèle du catalogue",
+      "urlCard": "URL directe",
+      "urlCardHint": "Coller l'URL https d'un modèle ou d'une archive",
+      "extensionsHint": "Extensions acceptées : {{extensions}}"
+    },
+    "col": {
+      "name": "Nom",
+      "family": "Famille",
+      "formalism": "Formalisme",
+      "edition": "Édition",
+      "source": "Source",
+      "size": "Taille",
+      "action": "Action"
+    },
+    "shownCount": "({{shown}} affichés)",
+    "showMore": "Afficher plus"
+  },
+  "questions": {
+    "title": "Questions statiques",
+    "intro": "Cartes-question : arbitrez chaque question (Impossible / C'est normal / Vérifier d'abord).",
+    "status": "Statut : {{status}}",
+    "decisions": {
+      "refuse": "Impossible",
+      "accept": "C'est normal",
+      "verifyFirst": "Vérifier d'abord"
+    },
+    "cross": {
+      "verifiedByN": "Vérifiée par {{count}} outils.",
+      "controversial": "Clause controversée — remontée à l'ingénieur, jamais tranchée ici.",
+      "notVerified": "Non vérifiée.",
+      "proofLine": "{{tool}} : verdict {{verdict}}"
+    },
+    "edit": "Éditer la formule",
+    "editLabel": "Nouvelle formule",
+    "editSave": "Enregistrer",
+    "editCancel": "Annuler",
+    "editDone": "Formule mise à jour — journalisée (append-only).",
+    "editError": "Édition refusée ({{status}}) : {{detail}}",
+    "readingTitle": "Re-lecture inverse",
+    "readingNone": "Aucune re-lecture disponible pour cette formule.",
+    "readingNotSays": "Ne dit pas : {{notSays}}",
+    "convergenceHint": "converge avec {{hint}}",
+    "coveredBy": "couverte par la fusion avec {{survivor}} (plus jamais sollicitée)",
+    "fuse": "Arbitrer la fusion (accepter)",
+    "refuseFusion": "Refuser la fusion",
+    "fusionDone": "Fusion arbitrée — journalisée (append-only).",
+    "fusionRefused": "Fusion refusée — aucune fusion automatique.",
+    "fusionError": "Fusion refusée par l'API ({{status}}) : {{detail}}",
+    "convergencesTitle": "Fusions arbitrées (humain uniquement)",
+    "convergencesEmpty": "Aucune fusion arbitrée pour cette session.",
+    "convergenceLine": "{{questionId}} → couverte par {{propositionId}}",
+    "loading": "Chargement des questions…",
+    "empty": "Aucune question pour cette session.",
+    "filter": {
+      "searchLabel": "Recherche par formule",
+      "family": "Famille",
+      "triage": "Triage",
+      "status": "Statut",
+      "sort": "Tri",
+      "all": "Toutes",
+      "sortId": "par id",
+      "sortFamily": "par famille",
+      "sortTriage": "par triage"
+    },
+    "counters": "{{shown}} affichées / {{total}} — vérifiées {{verified}} — controversées {{controversial}}",
+    "badge": {
+      "verified": "vérifiée ×{{count}}",
+      "controversial": "controversée"
+    }
+  },
+  "verifications": {
+    "title": "Vérifications MC",
+    "intro": "Runs disponibles de la session (mock / statiques) — aucun verdict n'est inventé ici.",
+    "budget": "Budget MC — consommé {{consumed}} s / plafond {{cap}} s — restant {{remaining}} s (aucun report).",
+    "witnessUnavailable": "Témoin indisponible ({{status}}).",
+    "witnessTitle": "Témoin {{id}} — {{kind}}",
+    "witnessCyclic": " — cyclique (back-edge {{edge}})",
+    "witnessAcyclic": " — acyclique",
+    "marking": "marquage : {{marking}}",
+    "fired": "tire : {{transition}}",
+    "narrationProvenance": "(provenance : {{provenance}})",
+    "loading": "Chargement des vérifications…",
+    "empty": "Aucun run pour cette session."
+  },
+  "synthese": {
+    "title": "Synthèse",
+    "intro": "Le contrat de la session, exportable en Markdown.",
+    "export": "Télécharger le contrat (Markdown)",
+    "unavailable": "Contrat indisponible ({{status}}).",
+    "journalTitle": "Journal d'arbitrage",
+    "dossiers": {
+      "title": "Dossiers de preuve",
+      "empty": "Aucun dossier de preuve pour cette session.",
+      "campsTitle": "Camps (exportés tels quels)",
+      "proof": {
+        "run": "run {{runId}}",
+        "tool": "outil {{tool}}",
+        "technique": "technique {{technique}}",
+        "cost": "coût {{cost}} s",
+        "witness": "témoin {{witnessId}}",
+        "replay": "Rejouer le témoin pas à pas",
+        "closeReplay": "Fermer le témoin"
+      }
+    },
+    "loading": "Chargement du contrat…",
+    "journalEmpty": "Aucune entrée dans le journal d'arbitrage.",
+    "view": {
+      "aria": "Vue du contrat",
+      "preview": "Aperçu",
+      "source": "Markdown"
+    }
+  },
+  "common": {
+    "verdictAria": "verdict : {{verdict}}",
+    "elapsed": "depuis {{seconds}} s"
+  },
+  "llm": {
+    "semantic-profile": "Profil sémantique du réseau…",
+    "reading": "Lecture de la grille…",
+    "clarification": "Clarification de la proposition…",
+    "cluster": "Tri des clauses violées…",
+    "narration": "Narration du témoin…"
+  }
+}

@@ -1,0 +1,4 @@
+
+# Playwright artifacts (issue #128)
+test-results/
+playwright-report/

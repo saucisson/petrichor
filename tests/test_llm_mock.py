@@ -9,7 +9,7 @@ degradation, two executions of a session produce an identical journal
 """
 
 import json
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 import structlog.testing
@@ -28,13 +28,14 @@ from petrichor.llm import (
     run_session,
 )
 from petrichor.petri_canonical import ContentHash
+from petrichor.pnml_import import import_pnml
 
-if TYPE_CHECKING:
-    from pathlib import Path
+FIXTURES = Path(__file__).parent / "fixtures"
+PHILOSOPHES3_PNML = (FIXTURES / "philosophes3-maquette.pnml").read_text(encoding="utf-8")
+PHILOSOPHES3_MODEL = import_pnml(text=PHILOSOPHES3_PNML)
+"""The Philosophes-3 maquette net (docs/ui-mockup), as a canonical model."""
 
-PHILOSOPHES3_CONTENT_HASH = ContentHash(
-    "sha256:48fb522c37d91504f4dc22ead01e8be6269eed234d62ab6b562a0fc38f9fb316"
-)
+PHILOSOPHES3_CONTENT_HASH = PHILOSOPHES3_MODEL.content_hash
 """Canonical content hash of the Philosophes-3 maquette net (docs/ui-mockup)."""
 
 ARROW = "\u2192"
@@ -74,13 +75,13 @@ class TestSemanticProfile:
     def test_profile_serves_the_seven_maquette_entries(
         self, provider: DeterministicMockProvider
     ) -> None:
-        profile = provider.semantic_profile(model_hash=PHILOSOPHES3_CONTENT_HASH)
+        profile = provider.semantic_profile(model=PHILOSOPHES3_MODEL)
         assert len(profile.entries) == 7
 
     def test_profile_carries_the_deliberately_false_role(
         self, provider: DeterministicMockProvider
     ) -> None:
-        profile = provider.semantic_profile(model_hash=PHILOSOPHES3_CONTENT_HASH)
+        profile = provider.semantic_profile(model=PHILOSOPHES3_MODEL)
         think = next(entry for entry in profile.entries if entry.id == "think")
         assert think.role == "file d'attente"
         assert think.wrong is True
@@ -88,13 +89,16 @@ class TestSemanticProfile:
 
 
 class TestReadings:
-    def test_all_seven_catalogue_formulas_are_scripted(
+    def test_all_seven_catalogue_formulas_are_scripted_in_one_document(
         self, provider: DeterministicMockProvider
     ) -> None:
+        document = provider.reading(
+            model=PHILOSOPHES3_MODEL,
+            formulas=tuple(FormulaText(formula) for formula in CATALOGUE_FORMULAS),
+        )
+        assert len(document.readings) == len(CATALOGUE_FORMULAS)
         for formula in CATALOGUE_FORMULAS:
-            reading = provider.reading(
-                model_hash=PHILOSOPHES3_CONTENT_HASH, formula=FormulaText(formula)
-            )
+            reading = document.readings[formula]
             assert reading.reading
             assert reading.not_says
             assert reading.pattern
@@ -103,16 +107,28 @@ class TestReadings:
     def test_deadlock_reading_matches_the_maquette(
         self, provider: DeterministicMockProvider
     ) -> None:
-        reading = provider.reading(
-            model_hash=PHILOSOPHES3_CONTENT_HASH, formula=FormulaText("EF DEADLOCK")
+        document = provider.reading(
+            model=PHILOSOPHES3_MODEL, formulas=(FormulaText("EF DEADLOCK"),)
         )
+        reading = document.readings["EF DEADLOCK"]
         assert reading.pattern == "atteignabilité d'impasse"
         assert "plus aucune transition n'est activable" in reading.reading
 
-    def test_unknown_formula_degrades_explicitly(self, provider: DeterministicMockProvider) -> None:
-        with pytest.raises(LLMDegradationError, match="No scripted reading"):
-            provider.reading(
-                model_hash=PHILOSOPHES3_CONTENT_HASH, formula=FormulaText("AG (eat_1)")
+    def test_unknown_formula_is_absent_from_the_served_document(
+        self, provider: DeterministicMockProvider
+    ) -> None:
+        """The mock serves the document verbatim and never invents a reading."""
+        document = provider.reading(model=PHILOSOPHES3_MODEL, formulas=(FormulaText("AG (eat_1)"),))
+        assert "AG (eat_1)" not in document.readings
+
+    def test_unknown_formula_degrades_explicitly_at_session_level(
+        self, provider: DeterministicMockProvider
+    ) -> None:
+        with pytest.raises(LLMDegradationError, match="No reading for formula"):
+            run_session(
+                provider=provider,
+                model=PHILOSOPHES3_MODEL,
+                requests=(SessionRequest(usage="reading", formula=FormulaText("AG (eat_1)")),),
             )
 
 
@@ -120,7 +136,7 @@ class TestClusters:
     def test_clusters_ab_are_served_with_causes_and_members(
         self, provider: DeterministicMockProvider
     ) -> None:
-        clusters = provider.cluster(model_hash=PHILOSOPHES3_CONTENT_HASH)
+        clusters = provider.cluster(model=PHILOSOPHES3_MODEL)
         assert [cluster.cause for cluster in clusters] == ["model", "specification"]
         assert clusters[0].members == ("M1", "M2", "M5")
         assert clusters[1].members == ("M3",)
@@ -133,9 +149,7 @@ class TestBoundedRetryAndDegradation:
             structlog.testing.capture_logs() as events,
             pytest.raises(LLMDegradationError, match="after 2 attempts"),
         ):
-            provider.clarification(
-                model_hash=PHILOSOPHES3_CONTENT_HASH, text=HumanMessage("un texte")
-            )
+            provider.clarification(model=PHILOSOPHES3_MODEL, text=HumanMessage("un texte"))
         failures = [event for event in events if event["event"] == "llm_golden_load_failed"]
         assert len(failures) == MAX_LLM_ATTEMPTS
         assert any(event["event"] == "llm_degraded" for event in events)
@@ -150,16 +164,18 @@ class TestBoundedRetryAndDegradation:
             structlog.testing.capture_logs() as events,
             pytest.raises(LLMDegradationError),
         ):
-            provider.semantic_profile(model_hash=PHILOSOPHES3_CONTENT_HASH)
+            provider.semantic_profile(model=PHILOSOPHES3_MODEL)
         failures = [event for event in events if event["event"] == "llm_golden_load_failed"]
         assert len(failures) == MAX_LLM_ATTEMPTS
 
     def test_unknown_model_hash_degrades_explicitly(
         self, provider: DeterministicMockProvider
     ) -> None:
-        unknown = ContentHash("sha256:" + "0" * 64)
+        unknown = PHILOSOPHES3_MODEL.model_copy(
+            update={"content_hash": ContentHash("sha256:" + "0" * 64)}
+        )
         with pytest.raises(LLMDegradationError):
-            provider.semantic_profile(model_hash=unknown)
+            provider.semantic_profile(model=unknown)
 
 
 class TestSessionDeterminism:
@@ -171,12 +187,8 @@ class TestSessionDeterminism:
             SessionRequest(usage="reading", formula=FormulaText("EF DEADLOCK")),
             SessionRequest(usage="cluster"),
         )
-        first = run_session(
-            provider=provider, model_hash=PHILOSOPHES3_CONTENT_HASH, requests=requests
-        )
-        second = run_session(
-            provider=provider, model_hash=PHILOSOPHES3_CONTENT_HASH, requests=requests
-        )
+        first = run_session(provider=provider, model=PHILOSOPHES3_MODEL, requests=requests)
+        second = run_session(provider=provider, model=PHILOSOPHES3_MODEL, requests=requests)
         assert first == second
         assert len(first) == 3
         profile_entry = json.loads(first[0])
@@ -188,7 +200,7 @@ class TestSessionDeterminism:
         with pytest.raises(LLMError, match="requires a formula"):
             run_session(
                 provider=provider,
-                model_hash=PHILOSOPHES3_CONTENT_HASH,
+                model=PHILOSOPHES3_MODEL,
                 requests=(SessionRequest(usage="reading"),),
             )
 
@@ -198,7 +210,7 @@ class TestSessionDeterminism:
         with pytest.raises(LLMError, match="requires a text"):
             run_session(
                 provider=provider,
-                model_hash=PHILOSOPHES3_CONTENT_HASH,
+                model=PHILOSOPHES3_MODEL,
                 requests=(SessionRequest(usage="clarification"),),
             )
 
@@ -210,7 +222,7 @@ class TestSessionDeterminism:
         provider = DeterministicMockProvider(golden_root=tmp_path)
         journal = run_session(
             provider=provider,
-            model_hash=PHILOSOPHES3_CONTENT_HASH,
+            model=PHILOSOPHES3_MODEL,
             requests=(
                 SessionRequest(usage="clarification", text=HumanMessage("le système se fige")),
             ),
@@ -223,7 +235,7 @@ class TestLogNarration:
         self, provider: DeterministicMockProvider
     ) -> None:
         with structlog.testing.capture_logs() as events:
-            provider.cluster(model_hash=PHILOSOPHES3_CONTENT_HASH)
+            provider.cluster(model=PHILOSOPHES3_MODEL)
         served = [event for event in events if event["event"] == "llm_golden_served"]
         assert len(served) == 1
         assert served[0]["usage"] == "cluster"
@@ -241,9 +253,7 @@ class TestSessionLogNarration:
             SessionRequest(usage="cluster"),
         )
         with structlog.testing.capture_logs() as events:
-            journal = run_session(
-                provider=provider, model_hash=PHILOSOPHES3_CONTENT_HASH, requests=requests
-            )
+            journal = run_session(provider=provider, model=PHILOSOPHES3_MODEL, requests=requests)
         steps = [event for event in events if event["event"] == "llm_session_step"]
         completed = [event for event in events if event["event"] == "llm_session_completed"]
         assert [event["index"] for event in steps] == [0, 1, 2]
@@ -268,11 +278,7 @@ def test_property_any_session_is_deterministic_across_two_runs(
 ) -> None:
     """Two executions of the same random session produce an identical journal."""
     provider = DeterministicMockProvider()
-    first = run_session(
-        provider=provider, model_hash=PHILOSOPHES3_CONTENT_HASH, requests=tuple(requests)
-    )
-    second = run_session(
-        provider=provider, model_hash=PHILOSOPHES3_CONTENT_HASH, requests=tuple(requests)
-    )
+    first = run_session(provider=provider, model=PHILOSOPHES3_MODEL, requests=tuple(requests))
+    second = run_session(provider=provider, model=PHILOSOPHES3_MODEL, requests=tuple(requests))
     assert first == second
     assert len(first) == len(requests)

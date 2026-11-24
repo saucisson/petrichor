@@ -1,9 +1,20 @@
 name: continuous-integration
 
+# CI gate (ADR-0009): the merge decision reads CI off the PR head, so the
+# post-merge push retesting the same content is not triggered for `daily`;
+# the human merge of `daily` into `main` runs the full gate on the release
+# state. The EOD mutation pass keeps its own workflow (mutation.yml).
 on:
   push:
-    branches: [main, daily]
+    branches: [main]
   pull_request:
+
+concurrency:
+  # A newer push to the same ref replaces the run in progress: the day
+  # cycle pushes a feature branch repeatedly and a stale run answers
+  # nothing (docs/branching.md, ADR-0009).
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -12,6 +23,11 @@ jobs:
   check:
     name: quality gate
     runs-on: ubuntu-latest
+    env:
+      # ADR-0012: the hypothesis sampling keeps its full depth on `main`;
+      # pull requests run the reduced budget (profile `ci`, conftest.py).
+      # A latency decision of the owner: revert by deleting this line.
+      HYPOTHESIS_PROFILE: ${{ github.event_name == 'pull_request' && 'ci' || 'default' }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -33,13 +49,26 @@ jobs:
         run: uv run ruff format --check .
 
       - name: mypy strict
-        run: uv run mypy tools/notify/src tools/notify/tests scripts
+        # Same paths as `make typecheck`: CI previously skipped `src`, so
+        # the product package escaped the mypy gate in CI.
+        run: uv run mypy tools/notify/src tools/notify/tests scripts src
 
       - name: import-linter onion contract
         run: uv run lint-imports
 
-      - name: pytest with coverage floor
-        run: uv run pytest
+      - name: pytest (parallel CPU-bound suite; @ui and @engine excluded)
+        # xdist spreads the suite over the runner cores; --dist loadfile
+        # keeps a test file and its module-scope fixtures on one worker.
+        # The @engine and @ui markers stay excluded by the owner's gate
+        # decision (2026-11-20): the real compose engines (dummy,
+        # verifypn) and the real-browser parcours run in the LOCAL gate
+        # (`make check`, `make ui-e2e`), where the docker caches are
+        # warm - the CI merge gate never builds an engine image. The
+        # coverage floor (ADR-0007) applies, unmodified, to what this
+        # gate runs. --durations=25 reports the slowest tests.
+        run: >-
+          uv run pytest -m "not ui and not engine" -n auto
+          --dist loadfile --durations=25
 
       - name: Setup Node (pinned by .node-version, ADR-0101)
         uses: actions/setup-node@v5

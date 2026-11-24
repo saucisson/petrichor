@@ -32,6 +32,14 @@ cp .env.example .env
 uv run notify send --severity question --message "Need a decision on X." --issue-identifier "PR-42"
 ```
 
+## Authentication
+
+The HTTP API (`/v1/`) requires an OIDC Bearer JWT (Zitadel IdP, validated
+locally via JWKS) or the legacy `X-API-Key` header; auth is active by
+default and `AUTH_DISABLED=1` is the local-dev bypass only. See
+`deploy/README.md` (« Authentification ») for the `AUTH_*` variables,
+`.env.example`, and curl examples (issues #182-#184).
+
 ## What is in the box
 
 | Area              | Where                                                     |

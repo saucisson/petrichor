@@ -9,6 +9,7 @@ authors = [{ name = "Alban Linard" }]
 requires-python = ">=3.15"
 dependencies = [
     "httpx>=0.28",
+    "joserfc>=1.8.0",
     "pydantic>=2.11",
     "pydantic-settings>=2.9",
     "structlog>=25.1",
@@ -26,6 +27,7 @@ dev = [
     "pre-commit>=4.2",
     "pytest>=8.4",
     "pytest-cov>=7.0",
+    "pytest-xdist>=3.8",
     "ruff>=0.17",
 ]
 
@@ -193,6 +195,7 @@ markers = [
     "integration: exercises adapter boundaries through injected fakes (http, filesystem).",
     "property: hypothesis-based invariant tests (ADR-0012).",
     "engine: runs a driver inside its real docker compose container; a failure is a CI failure, never a skip (spec §19.4).",
+    "ui: drives the built UI in a real browser (Playwright) against the real API on the real compose engines; a failure is a CI failure, never a skip (spec §20.10, issue #128).",
 ]
 filterwarnings = ["error"]
 

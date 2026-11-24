@@ -1,41 +1,99 @@
 # ITS-Tools engine image (spec §19.4; issue #21): built locally only
-# (GPL-3 engine, not redistributed), source pinned to the v10052022 tag,
-# non-root user, standard-library-only Python payload.
+# (GPL-3 engine, not redistributed), non-root user, standard-library-only
+# Python payload.
+#
+# Upstream publishes no versioned releases: the CLI product is a zip served
+# from https://lip6.github.io/ITSTools/. This build pins an exact capture,
+# fail-closed on sha256 — a re-capture changes the hashes deliberately,
+# never silently.
+#
+#   captured   : 2026-11-20 08:28 UTC
+#   published  : 2026-09-11 upstream (build stamp 202609112134)
+#   zip        : fr.lip6.move.gal.itscl.product-linux.gtk.x86_64.zip
+#                76 120 330 bytes
+#                sha256 faef344a641ca190e34eedee71a5cc44ac7051003841a431da4edfdf0bb7ae5f
+#   native     : its-tools-native (GraalVM image of the same product, running
+#                its-reach/its-ctl/its-ltl as native-linked binaries from
+#                plugins/)
+#                80 349 592 bytes
+#                sha256 a84feea4726890be2d0beb07031147703d8ff6e1da52f3742fcbff7cfea1abda
+#
 # ITS-Tools embeds LTSmin and Spot — never paired with them in
 # cross-verification (spec §17.4). LTL queries are stutter-sensitive.
-# Built from source with Maven (Tycho) — ITS-Tools is an Eclipse RCP app.
-ARG ITS_TOOLS_TAG=v10052022
+#
+# The upstream CLI speaks MCC examinations (-pnfolder/-examination over DAG
+# XML), not this server's textual query files: /usr/local/bin/its adapts
+# via petrichor.engines.its_tools_cli (stdlib-only, covered by the API test
+# suite) and prefers the native image, falling back to the Eclipse launcher.
+# Exit the Eclipse Tycho clone: the formerly pinned v10052022 tag is a p2
+# dump without a pom.xml and never built.
 
-FROM maven:3.9-eclipse-temurin-21 AS builder
-ARG ITS_TOOLS_TAG
+FROM python:3.15-slim AS fetcher
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
-        git \
-    && rm -rf /var/lib/apt/lists/* \
-    && git clone --depth 1 --branch "${ITS_TOOLS_TAG}" \
-        https://github.com/yanntm/ITSTools.git /src/its-tools \
-    && cd /src/its-tools \
-    && mvn -q -DskipTests package \
-    && mkdir -p /opt/its-tools \
-    && find . -name "its*.jar" -path "*/target/*" -exec cp {} /opt/its-tools/ \; \
-    && cp -r plugins /opt/its-tools/
+        unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Pinned capture of the official CLI product; any hash mismatch aborts the build.
+RUN python - <<'EOF'
+import hashlib
+import os
+import sys
+import urllib.request
+
+BASE = "https://lip6.github.io/ITSTools/"
+PINS = {
+    "fr.lip6.move.gal.itscl.product-linux.gtk.x86_64.zip": (
+        76120330,
+        "faef344a641ca190e34eedee71a5cc44ac7051003841a431da4edfdf0bb7ae5f",
+    ),
+    "its-tools-native": (
+        80349592,
+        "a84feea4726890be2d0beb07031147703d8ff6e1da52f3742fcbff7cfea1abda",
+    ),
+}
+
+# Both artifacts were published upstream on 2026-09-11 (build stamp
+# 202609112134) and captured on 2026-11-20 08:28 UTC; the site serves no
+# versioned artifacts.
+for name, (size, sha256) in PINS.items():
+    dest = "/tmp/" + name
+    with urllib.request.urlopen(BASE + name) as response, open(dest, "wb") as out:
+        out.write(response.read())
+    actual_size = os.path.getsize(dest)
+    actual_sha = hashlib.sha256(open(dest, "rb").read()).hexdigest()
+    if actual_size != size or actual_sha != sha256:
+        sys.exit(
+            f"pinned ITS-Tools artifact {name} does not match the capture: "
+            f"size {actual_size} != {size}, sha256 {actual_sha} != {sha256}"
+        )
+EOF
+
+# The zip unpacks the product at its root: launcher its-tools, its-tools.ini,
+# plugins/, configuration/...; unzip preserves the executable bits.
+RUN unzip -q /tmp/fr.lip6.move.gal.itscl.product-linux.gtk.x86_64.zip -d /opt/its-tools \
+    && mv /tmp/its-tools-native /opt/its-tools/its-tools-native \
+    && chmod 0755 /opt/its-tools/its-tools-native
 
 FROM python:3.15-slim AS runtime
 
+# default-jre-headless drives the Eclipse launcher fallback of the product;
+# the GraalVM native image needs no JVM at all.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         default-jre-headless \
     && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /opt/its-tools /opt/its-tools
-RUN mkdir -p /usr/local/bin     && printf '#!/bin/sh\nexec java -jar /opt/its-tools/its-tools.jar "$@"\n' > /usr/local/bin/its \
-    && chmod +x /usr/local/bin/its
-ENV JAVA_HOME="/usr/lib/jvm/default-java"
+COPY --from=fetcher /opt/its-tools /opt/its-tools
+RUN mkdir -p /usr/local/bin && printf '#!/bin/sh\nexec python -m petrichor.engines.its_tools_cli "$@"\n' > /usr/local/bin/its \
+    && chmod 0755 /usr/local/bin/its
+ENV PYTHONPATH=/app \
+    ITS_TOOLS_HOME=/opt/its-tools \
+    JAVA_HOME="/usr/lib/jvm/default-java"
 
 WORKDIR /app
 COPY src/petrichor /app/petrichor
-ENV PYTHONPATH=/app
 
 USER 65534:65534
 EXPOSE 8080

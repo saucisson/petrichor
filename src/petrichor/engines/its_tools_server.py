@@ -40,8 +40,12 @@ logger = logging.getLogger(__name__)
 type Json = bool | int | float | str | list[Json] | dict[str, Json] | None
 """Any JSON-compatible value (local alias: this module must stay stdlib-only)."""
 
-ITS_TOOLS_VERSION = "10052022"
-"""The pinned ITS-Tools release this image is built from (Dockerfile.its-tools)."""
+ITS_TOOLS_VERSION = "20260911"
+"""The pinned ITS-Tools capture this image is built from (Dockerfile.its-tools).
+
+Upstream publishes no versioned releases; this is the build stamp of the
+official CLI zip and native image captured on 2026-11-20 08:28 UTC.
+"""
 
 ITS_TOOLS_TECHNIQUE = f"its-tools-{ITS_TOOLS_VERSION}"
 ITS_TOOLS_REDUCER_TECHNIQUE = f"its-tools-{ITS_TOOLS_VERSION}-reducer"

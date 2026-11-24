@@ -1,0 +1,46 @@
+# VPS deployment (ADR-0103, issue #160): every push to `daily` rebuilds and
+# restarts the Petrichor services on the VPS over SSH. The deployment itself
+# is the idempotent deploy/deploy.sh script running on the server, so the CI
+# path and the manual path are identical.
+#
+# Required repository secrets (set by the human, never committed):
+#   SSH_PRIVATE_KEY - private key authorized for the `deploy` user on the VPS
+#                     (public key in /home/deploy/.ssh/authorized_keys)
+#   VPS_HOST        - 145.239.197.11 (vps-89091363.vps.ovh.net); secret OR repository variable (not sensitive)
+name: deploy
+
+on:
+  push:
+    branches: [daily]
+  # Manual re-run (e.g. after SSH_PRIVATE_KEY is set and VPS_HOST is configured).
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: deploy daily to the VPS
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install the SSH private key
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          VPS_HOST: ${{ secrets.VPS_HOST || vars.VPS_HOST }}
+        run: |
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/id_rsa"
+          chmod 600 "$HOME/.ssh/id_rsa"
+          ssh-keyscan -H "$VPS_HOST" >> "$HOME/.ssh/known_hosts"
+
+      - name: Run the deployment on the VPS
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST || vars.VPS_HOST }}
+          VPS_USER: ${{ vars.VPS_USER || 'deploy' }}
+        run: |
+          ssh -i "$HOME/.ssh/id_rsa" -o BatchMode=yes -o StrictHostKeyChecking=yes \
+            "${VPS_USER}@${VPS_HOST}" '/srv/petrichor/deploy/deploy.sh'

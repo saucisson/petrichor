@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "allowed_domains": [
+    "pnrepository.lip6.fr",
+    "mcc.lip6.fr",
+    "yanntm.github.io",
+    "raw.githubusercontent.com"
+  ],
+  "timeout_seconds": 30,
+  "max_bytes": 104857600,
+  "user_agent": "petrichor-url-import/1.0"
+}

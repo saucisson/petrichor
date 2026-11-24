@@ -73,7 +73,6 @@ WITNESS_OUTPUT = {
 }
 
 
-
 class FakeRunner:
     """A runner serving a fixed normalized output, recording its calls."""
 
@@ -199,7 +198,7 @@ class TestNarration:
         assert document is not None
         narrations = narrate_steps(
             provider=DeterministicMockProvider(),
-            model_hash=model.content_hash,
+            model=model,
             steps=document.steps,
         )
         assert len(narrations) == 1
@@ -212,7 +211,7 @@ class TestNarration:
         steps = (WitnessStep(index=1, marking=["x"], fired="unknown_transition"),)
         narrations = narrate_steps(
             provider=DeterministicMockProvider(),
-            model_hash=model.content_hash,
+            model=model,
             steps=steps,
         )
         assert narrations == ()
@@ -382,26 +381,33 @@ class TestLogNarration:
         assert "witness_stored" in events
         assert "witness_referenced" in events
 
-    def test_narration_events_are_pinned(self) -> None:
+    def test_narration_events_are_pinned(self, tmp_path: Path) -> None:
         model = import_pnml(text=PHILOSOPHES3_PNML)
         document = normalize_witness_output(run_id=RunId("run_a"), output=WITNESS_OUTPUT)
         assert document is not None
         with structlog.testing.capture_logs() as logs:
             narrations = narrate_steps(
                 provider=DeterministicMockProvider(),
-                model_hash=model.content_hash,
+                model=model,
                 steps=document.steps,
             )
+            # One document call: an unscripted transition is skipped, not a degradation.
             narrate_steps(
                 provider=DeterministicMockProvider(),
-                model_hash=model.content_hash,
+                model=model,
                 steps=(WitnessStep(index=1, marking=["x"], fired="unknown_transition"),),
+            )
+            # A provider-level failure degrades the whole witness explicitly.
+            narrate_steps(
+                provider=DeterministicMockProvider(golden_root=tmp_path),
+                model=model,
+                steps=document.steps,
             )
         assert len(narrations) == 1
         events = [event["event"] for event in logs]
         assert "witness_narrated" in events
         assert "witness_narration_degraded" in events
-        assert "llm_narration_not_scripted" in events
+        assert "witness_narration_not_scripted" in events
 
     def test_api_witness_events_are_pinned(self, tmp_path: Path) -> None:
         client, _, _, model_id = build_client(tmp_path, WITNESS_OUTPUT)

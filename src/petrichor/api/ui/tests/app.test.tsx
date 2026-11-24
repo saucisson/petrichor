@@ -43,7 +43,7 @@ function mockFetch(
   );
 }
 
-const PROFILE = { proposed: [{ id: "p1", role: "ressource", conf: 0.9 }] };
+const PROFILE = { proposed: { entries: [{ id: "p1", role: "ressource", conf: 0.9 }] } };
 const CONTRACT = {
   questions: [
     {
@@ -95,6 +95,12 @@ const WITNESS = {
 beforeEach(() => {
   localStorage.clear();
 });
+/* P77 wizard navigation helpers: the import paths live behind the source
+   cards (local file / remote source -> catalog or direct URL). */
+function openLocalImport() {
+  fireEvent.click(screen.getByRole("button", { name: /^Fichier local/ }));
+}
+
 
 afterEach(() => {
   cleanup();
@@ -123,6 +129,7 @@ describe("UI v2 parity with the vanilla UI", () => {
       { match: (call) => call.url === "/v1/sessions/s1/profile/arbitrate" && call.method === "POST", respond: () => jsonResponse(200, {}) },
     ]);
     render(<App />);
+    openLocalImport();
     const file = new File(["<pnml/>"], "model.pnml", { type: "application/pnml+xml" });
     fireEvent.change(screen.getByLabelText("Fichier PNML"), { target: { files: [file] } });
     fireEvent.click(screen.getByRole("button", { name: "Importer le modèle et créer la session" }));
@@ -152,7 +159,9 @@ describe("UI v2 parity with the vanilla UI", () => {
     expect(
       screen.getByText(/Clause controversée — remontée à l'ingénieur/),
     ).toBeInTheDocument();
-    expect(screen.getByText("lola 2.0 : verdict true")).toBeInTheDocument();
+    expect(screen.getByText("lola 2.0")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "verdict : true" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "verdict : false" })).toBeInTheDocument();
     fireEvent.click(screen.getAllByRole("button", { name: "C'est normal" })[0]);
     await waitFor(() =>
       expect(
@@ -173,7 +182,9 @@ describe("UI v2 parity with the vanilla UI", () => {
     fireEvent.click(screen.getByRole("button", { name: "3. Vérifications MC" }));
     await waitFor(() => expect(screen.getByText(/Budget MC — consommé 1.500 s/)).toBeInTheDocument());
     expect(screen.getByText(/aucun report/)).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByText("true")).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByRole("img", { name: "verdict : true" })).toBeInTheDocument(),
+    );
     expect(screen.getByText(/tire : t1/)).toBeInTheDocument();
     expect(
       screen.getByText(/La transition t1 s'est tirée./),
@@ -198,10 +209,15 @@ describe("UI v2 parity with the vanilla UI", () => {
     ]);
     render(<App />);
     fireEvent.click(screen.getByRole("button", { name: "4. Synthèse" }));
+    // P79: the contract arrives rendered (heading), the source is one toggle away.
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Contrat" })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Markdown" }));
     await waitFor(() => expect(screen.getByText(/# Contrat/)).toBeInTheDocument());
-    await waitFor(() =>
-      expect(screen.getByText(/arbitration — question_id=q1, decision=accept/)).toBeInTheDocument(),
-    );
+    // Journal: event badge + monospace key=value details.
+    await waitFor(() => {
+      expect(screen.getByText("arbitration")).toBeInTheDocument();
+      expect(screen.getByText("question_id=q1, decision=accept")).toBeInTheDocument();
+    });
     fireEvent.click(screen.getByRole("button", { name: "Télécharger le contrat (Markdown)" }));
     expect(createObjectURL).toHaveBeenCalledOnce();
   });
@@ -229,5 +245,102 @@ describe("UI v2 parity with the vanilla UI", () => {
     localStorage.setItem("petrichor.sessionId", "s1");
     render(<App />);
     await waitFor(() => expect(screen.getByText(/Clé API invalide \(401\)/)).toBeInTheDocument());
+  });
+
+  // P76 regression: a non-200 on the contract shows an alert with the server
+  // detail verbatim - never a silent blank step.
+  it("shows the contract 404 detail verbatim in a role=alert banner", async () => {
+    localStorage.setItem("petrichor.sessionId", "s1");
+    mockFetch([
+      {
+        match: (call) =>
+          call.url === "/v1/sessions/s1/contract" &&
+          (call.accept !== undefined && call.accept.includes("contract+json")),
+        respond: () => jsonResponse(404, { detail: "session inconnue: s1" }),
+      },
+    ]);
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "2. Questions statiques" }));
+    await waitFor(() => {
+      const alert = screen.getByRole("alert");
+      expect(alert).toHaveTextContent("session inconnue: s1");
+    });
+  });
+
+  // P76 regression: a 500 on the runs list shows an alert with the server
+  // detail verbatim - never a silent blank step.
+  it("shows the runs 500 detail verbatim in a role=alert banner", async () => {
+    localStorage.setItem("petrichor.sessionId", "s1");
+    mockFetch([
+      { match: (call) => call.url === "/v1/sessions/s1", respond: () => jsonResponse(200, SESSION) },
+      { match: (call) => call.url === "/v1/sessions/s1/budget", respond: () => jsonResponse(200, BUDGET) },
+      { match: (call) => call.url === "/v1/runs/r1", respond: () => jsonResponse(500, { detail: "moteur indisponible" }) },
+    ]);
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "3. Vérifications MC" }));
+    await waitFor(() => {
+      const alert = screen.getByRole("alert");
+      expect(alert).toHaveTextContent("moteur indisponible");
+    });
+  });
+});
+
+describe("UI v3 chrome (issue #162)", () => {
+  it("groups the header into visible connection / session / language groups", () => {
+    mockFetch([]);
+    render(<App />);
+    expect(screen.getByText("Connexion")).toBeInTheDocument();
+    expect(screen.getAllByText("Session").length).toBeGreaterThanOrEqual(2);
+    expect(screen.getAllByText("Langue").length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("locks every step but Amorçage without an active session, with the reason displayed", () => {
+    mockFetch([]);
+    render(<App />);
+    const amorcage = screen.getByRole("button", { name: "1. Amorçage" });
+    expect(amorcage).toBeEnabled();
+    expect(amorcage).toHaveAttribute("aria-current", "step");
+    for (const name of ["2. Questions statiques", "3. Vérifications MC", "4. Synthèse"]) {
+      expect(screen.getByRole("button", { name })).toBeDisabled();
+    }
+    expect(screen.getByText(/Créez ou reprenez une session en Amorçage/)).toBeInTheDocument();
+  });
+
+  it("unlocks every step once a session is active and hides the reason", () => {
+    localStorage.setItem("petrichor.sessionId", "s1");
+    mockFetch([]);
+    render(<App />);
+    for (const name of ["1. Amorçage", "2. Questions statiques", "3. Vérifications MC", "4. Synthèse"]) {
+      expect(screen.getByRole("button", { name })).toBeEnabled();
+    }
+    expect(screen.queryByText(/Créez ou reprenez une session/)).not.toBeInTheDocument();
+  });
+
+  it("types the messages: confirmation as status, server error as alert verbatim", async () => {
+    mockFetch([
+      { match: (call) => call.url === "/v1/models" && call.method === "POST", respond: () => jsonResponse(201, { id: "m1" }) },
+      { match: (call) => call.url === "/v1/sessions" && call.method === "POST", respond: () => jsonResponse(201, { session_id: "s1" }) },
+      { match: (call) => call.url === "/v1/sessions/s1/profile", respond: () => jsonResponse(200, PROFILE) },
+    ]);
+    render(<App />);
+    openLocalImport();
+    const file = new File(["<pnml/>"], "model.pnml", { type: "application/pnml+xml" });
+    fireEvent.change(screen.getByLabelText("Fichier PNML"), { target: { files: [file] } });
+    fireEvent.click(screen.getByRole("button", { name: "Importer le modèle et créer la session" }));
+    await waitFor(() => {
+      const confirmation = screen.getByText(/Session créée : s1/);
+      expect(confirmation).toHaveAttribute("role", "status");
+    });
+  });
+
+  it("renders a server error as a role=alert message, verbatim and never translated", async () => {
+    mockFetch([
+      { match: (call) => call.url === "/v1/sessions/s1/profile", respond: () => jsonResponse(401, {}) },
+    ]);
+    localStorage.setItem("petrichor.sessionId", "s1");
+    render(<App />);
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent("Clé API invalide (401)."),
+    );
   });
 });

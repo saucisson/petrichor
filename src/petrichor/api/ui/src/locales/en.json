@@ -1,0 +1,210 @@
+{
+  "app": {
+    "title": "Petrichor — elicitation session",
+    "languageLabel": "Language"
+  },
+  "header": {
+    "groupConnection": "Connection",
+    "groupSession": "Session",
+    "apiKeyLabel": "API key",
+    "apiKeyAria": "API key",
+    "sessionLabel": "Session",
+    "sessionAria": "Session identifier (resume)",
+    "resume": "Resume session",
+    "themeToggle": "Switch to dark / light mode"
+  },
+  "nav": {
+    "aria": "Steps",
+    "noSession": "Create or resume a session in Setup to enable this step.",
+    "steps": {
+      "amorcage": "1. Setup",
+      "questions": "2. Static questions",
+      "verifications": "3. MC checks",
+      "synthese": "4. Summary"
+    }
+  },
+  "amorcage": {
+    "fileAria": "PNML file",
+    "dropZone": "Drop a PNML file or an archive here, or click to browse",
+    "fileSelected": "Selected file: {{name}} ({{size}})",
+    "sizeUnit": "B",
+    "noFile": "No file selected.",
+    "badExtension": "Extension refused: only .pnml, .xml, .zip, .tgz, .tar.gz and .tar are accepted.",
+    "import": "Import model and create session",
+    "importing": "Uploading model…",
+    "modelImported": "Model imported: {{id}}.",
+    "modelKnown": "Model already known (idempotent import): {{id}}.",
+    "sessionCreated": "Session created: {{id}}.",
+    "importRefused": "Model import refused: {{status}}",
+    "title": "Setup",
+    "intro": "Import a PNML model, create a session, arbitrate the proposed semantic profile.",
+    "noProfile": "No profile proposed for this session.",
+    "loadingProfile": "Loading the semantic profile…",
+    "roleProposed": "proposed role: {{role}} (conf {{conf}})",
+    "accept": "Accept",
+    "refuse": "Refuse",
+    "catalogTitle": "Model catalog",
+    "catalogIntro": "Search the model catalog (free text and facets), then import in one click.",
+    "catalogSearchLabel": "Search the catalog",
+    "catalogSearchButton": "Search",
+    "catalogLoading": "Searching the catalog…",
+    "catalogEmpty": "No model matches the search.",
+    "catalogTotal": "{{count}} model(s) in the catalog.",
+    "catalogImport": "Import this model",
+    "colWarning": "COL: symmetric net, not unfolded — the -PT- twin is proposed.",
+    "ptTwin": "Import the {{name}} twin",
+    "importByNameLabel": "Exact name in the catalog",
+    "importByNameButton": "Import from the catalog",
+    "importByUrlLabel": "Model or archive URL (https only)",
+    "importByUrlButton": "Import from URL",
+    "noCatalogName": "No catalog name entered.",
+    "noUrl": "No URL entered.",
+    "candidatesTitle": "Several PNML candidates in the archive — choose one:",
+    "candidateLine": "{{name}} ({{size}}, {{formalism}}, sha256 {{sha256}})",
+    "provenanceLine": "Provenance: source {{source}}, name {{name}}, sha256 {{sha256}}.",
+    "catalogUnavailable": "Catalog unavailable ({{status}}).",
+    "facetAll": "All",
+    "facet": {
+      "family": "Family",
+      "formalism": "Formalism",
+      "edition": "Edition",
+      "source": "Source",
+      "size": "Size"
+    },
+    "sessionCreateFailed": "Session creation failed: the server returned an empty session id.",
+    "wizard": {
+      "back": "← Back",
+      "breadcrumbAria": "Breadcrumb",
+      "crumbLocal": "Source: local file",
+      "crumbDistant": "Source: remote",
+      "crumbCatalog": "catalog",
+      "crumbUrl": "direct URL",
+      "localCard": "Local file",
+      "localCardHint": "PNML or archive ({{extensions}})",
+      "distantCard": "Remote source",
+      "distantCardHint": "Integrated catalog or direct URL",
+      "catalogCard": "Integrated catalog",
+      "catalogCardHint": "Search and import a model from the catalog",
+      "urlCard": "Direct URL",
+      "urlCardHint": "Paste the https URL of a model or an archive",
+      "extensionsHint": "Accepted extensions: {{extensions}}"
+    },
+    "col": {
+      "name": "Name",
+      "family": "Family",
+      "formalism": "Formalism",
+      "edition": "Edition",
+      "source": "Source",
+      "size": "Size",
+      "action": "Action"
+    },
+    "shownCount": "({{shown}} shown)",
+    "showMore": "Show more"
+  },
+  "questions": {
+    "title": "Static questions",
+    "intro": "Question cards: arbitrate each question (Impossible / That's normal / Verify first).",
+    "status": "Status: {{status}}",
+    "decisions": {
+      "refuse": "Impossible",
+      "accept": "That's normal",
+      "verifyFirst": "Verify first"
+    },
+    "cross": {
+      "verifiedByN": "Verified by {{count}} tools.",
+      "controversial": "Controversial clause — escalated to the engineer, never decided here.",
+      "notVerified": "Not verified.",
+      "proofLine": "{{tool}} : verdict {{verdict}}"
+    },
+    "edit": "Edit formula",
+    "editLabel": "New formula",
+    "editSave": "Save",
+    "editCancel": "Cancel",
+    "editDone": "Formula updated — journaled (append-only).",
+    "editError": "Edit refused ({{status}}): {{detail}}",
+    "readingTitle": "Inverse reading",
+    "readingNone": "No reading available for this formula.",
+    "readingNotSays": "Does not say: {{notSays}}",
+    "convergenceHint": "converges with {{hint}}",
+    "coveredBy": "covered by the fusion with {{survivor}} (never solicited again)",
+    "fuse": "Arbitrate the fusion (accept)",
+    "refuseFusion": "Refuse the fusion",
+    "fusionDone": "Fusion arbitrated — journaled (append-only).",
+    "fusionRefused": "Fusion refused — no automatic fusion.",
+    "fusionError": "Fusion refused by the API ({{status}}): {{detail}}",
+    "convergencesTitle": "Arbitrated fusions (human only)",
+    "convergencesEmpty": "No arbitrated fusion for this session.",
+    "convergenceLine": "{{questionId}} → covered by {{propositionId}}",
+    "loading": "Loading questions…",
+    "empty": "No questions for this session.",
+    "filter": {
+      "searchLabel": "Search by formula",
+      "family": "Family",
+      "triage": "Triage",
+      "status": "Status",
+      "sort": "Sort",
+      "all": "All",
+      "sortId": "by id",
+      "sortFamily": "by family",
+      "sortTriage": "by triage"
+    },
+    "counters": "{{shown}} shown / {{total}} — verified {{verified}} — controversial {{controversial}}",
+    "badge": {
+      "verified": "verified ×{{count}}",
+      "controversial": "controversial"
+    }
+  },
+  "verifications": {
+    "title": "MC checks",
+    "intro": "Runs available for the session (mock / static) — no verdict is invented here.",
+    "budget": "MC budget — consumed {{consumed}} s / cap {{cap}} s — remaining {{remaining}} s (no carry-over).",
+    "witnessUnavailable": "Witness unavailable ({{status}}).",
+    "witnessTitle": "Witness {{id}} — {{kind}}",
+    "witnessCyclic": " — cyclic (back-edge {{edge}})",
+    "witnessAcyclic": " — acyclic",
+    "marking": "marking: {{marking}}",
+    "fired": "fires: {{transition}}",
+    "narrationProvenance": "(provenance: {{provenance}})",
+    "loading": "Loading verifications…",
+    "empty": "No runs for this session."
+  },
+  "synthese": {
+    "title": "Summary",
+    "intro": "The session contract, exportable as Markdown.",
+    "export": "Download contract (Markdown)",
+    "unavailable": "Contract unavailable ({{status}}).",
+    "journalTitle": "Arbitration journal",
+    "dossiers": {
+      "title": "Proof dossiers",
+      "empty": "No proof dossier for this session.",
+      "campsTitle": "Camps (exported as-is)",
+      "proof": {
+        "run": "run {{runId}}",
+        "tool": "tool {{tool}}",
+        "technique": "technique {{technique}}",
+        "cost": "cost {{cost}} s",
+        "witness": "witness {{witnessId}}",
+        "replay": "Replay the witness step by step",
+        "closeReplay": "Close the witness"
+      }
+    },
+    "loading": "Loading contract…",
+    "journalEmpty": "No entries in the arbitration journal.",
+    "view": {
+      "aria": "Contract view",
+      "preview": "Preview",
+      "source": "Markdown"
+    }
+  },
+  "common": {
+    "verdictAria": "verdict: {{verdict}}",
+    "elapsed": "{{seconds}} s elapsed"
+  },
+  "llm": {
+    "semantic-profile": "Reading the net's semantic profile…",
+    "reading": "Reading the question grid…",
+    "clarification": "Clarifying the proposal…",
+    "cluster": "Triaging the violated clauses…",
+    "narration": "Narrating the witness…"
+  }
+}

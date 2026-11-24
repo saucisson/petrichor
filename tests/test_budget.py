@@ -42,7 +42,6 @@ DONE_OUTPUT = {
 }
 
 
-
 class FakeRunner:
     """A runner that completes immediately with a fixed output."""
 

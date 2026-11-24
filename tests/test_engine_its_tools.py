@@ -1,8 +1,8 @@
 """Tests of the ITS-Tools engine adapter (issue #21, spec §17.2, §17.4, §19.4).
 
 The pure handlers of ``its_tools_server`` are unit-tested with a fake
-ITS-Tools binary. Container (@engine) tests are deferred: the ITS-Tools
-image requires an Eclipse Tycho build, tracked separately.
+ITS-Tools binary. Container (@engine) tests build the image from the pinned
+zip/native capture of the official CLI product (Dockerfile.its-tools).
 """
 
 import json
@@ -171,7 +171,7 @@ def test_build_normalized_output_satisfied_with_witness() -> None:
     assert isinstance(witness, dict)
     assert witness["kind"] == "trace"
     assert output["cost"] == {"tool_seconds": 0.5, "states_explored": 14}
-    assert output["technique"] == "its-tools-10052022"
+    assert output["technique"] == "its-tools-20260911"
 
 
 def test_build_normalized_output_violated_with_trace_is_counterexample() -> None:
@@ -200,7 +200,7 @@ def test_handle_check_with_fake_binary(tmp_path: Path, monkeypatch: pytest.Monke
     assert status == 200
     output = json.loads(payload.decode("utf-8"))
     assert output["verdict"] == "satisfied"
-    assert output["technique"] == "its-tools-10052022"
+    assert output["technique"] == "its-tools-20260911"
 
 
 def test_handle_check_rejects_missing_model() -> None:
@@ -401,7 +401,7 @@ def test_build_reducer_output_decided_carries_no_artifacts() -> None:
     assert output["verdict"] == "satisfied"
     assert output["reduced_model_pnml"] is None
     assert output["projected_formula"] is None
-    assert output["technique"] == "its-tools-10052022-reducer"
+    assert output["technique"] == "its-tools-20260911-reducer"
     assert output["cost"] == {"tool_seconds": 0.2, "states_explored": 0}
 
 
@@ -430,7 +430,7 @@ def test_handle_reduce_with_fake_binary_decided(
     assert output["verdict"] == "satisfied"
     assert output["reduced_model_pnml"] is None
     assert output["projected_formula"] is None
-    assert output["technique"] == "its-tools-10052022-reducer"
+    assert output["technique"] == "its-tools-20260911-reducer"
 
 
 def test_handle_reduce_with_fake_binary_undecided(
@@ -529,7 +529,7 @@ def _completed_record() -> RunRecord:
             verdict="satisfied",
             witness=None,
             cost=Cost(tool_seconds=0.1, states_explored=14),
-            technique="its-tools-10052022",
+            technique="its-tools-20260911",
         ),
         measured_seconds=0.2,
         archived_at="2026-11-10T00:00:00+00:00",

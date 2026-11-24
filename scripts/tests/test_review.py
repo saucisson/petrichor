@@ -207,6 +207,8 @@ def test_path_is_excluded_matches_every_machine_pattern() -> None:
     assert review.path_is_excluded(path="src/petrichor/study/pilote_v1/model.pnml")
     assert review.path_is_excluded(path="src/petrichor/api/ui/node_modules/react/package.json")
     assert review.path_is_excluded(path="node_modules/left-pad/index.js")
+    assert review.path_is_excluded(path="src/petrichor/api/static/assets/index-abc123.js")
+    assert review.path_is_excluded(path="src/petrichor/api/ui/package-lock.json")
     assert not review.path_is_excluded(path="scripts/review.py")
     assert not review.path_is_excluded(path="tests/fixtures/philosophes3.pnml")
     assert not review.path_is_excluded(path="docs/studies/pilote/v1/audit/frictions.md")
@@ -473,6 +475,21 @@ def test_run_review_propagates_the_size_refusal_as_preconditions(
     )
     arguments = parse_review_arguments(["review", "--pr-number", "64"])
     assert review.run_review(arguments=arguments) == review.EXIT_CODE_PRECONDITIONS_UNMET
+    # Fail-open regression (seen on PR #145/#148/#150): a bundle refusal must
+    # NOT write a fresh review context - a stale context is what makes the
+    # merge driver refuse instead of pairing it with a stale clean report.
+    assert not (tmp_path / "review-context.json").exists()
+
+
+def test_run_review_writes_the_context_only_after_the_session(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The context binds the report to the PR+head, and only once a session ran."""
+    _mock_github_for_run_review(monkeypatch, tmp_path, session_exit_code=0)
+    arguments = parse_review_arguments(["review", "--pr-number", "64"])
+    assert review.run_review(arguments=arguments) == _shared.EXIT_CODE_SUCCESS
+    context = json.loads((tmp_path / "review-context.json").read_text(encoding="utf-8"))
+    assert context == {"pr_number": 64, "head_sha": HEAD_SHA}
 
 
 def test_load_max_attempts_default_override_and_invalid(
