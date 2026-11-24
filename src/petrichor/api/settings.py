@@ -34,5 +34,7 @@ class ApiSettings(BaseSettings):
     """The LLM provider selected by configuration (spec §8, issue #36): the
     deterministic mock by default, the real Mistral provider with ``mistral``."""
     mistral_api_key: SecretStr | None = None
-    """The Mistral API key (env MISTRAL_API_KEY); required when llm_provider="mistral",
-    never logged (ADR-0005)."""
+    """The Mistral API key (env MISTRAL_API_KEY): local-dev fallback only (web v1 §3,
+    issue #208) - fatal in production (L3 guard in select_llm_provider, same as
+    AUTH_DISABLED); in production generations use the per-request
+    x-mistral-api-token header. Never logged (ADR-0005)."""

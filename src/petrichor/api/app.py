@@ -103,7 +103,12 @@ from petrichor.elicitation import (
     questions_converge,
 )
 from petrichor.insitu import build_net_overlay
-from petrichor.llm.provider import FormulaText, LLMDegradationError
+from petrichor.llm.provider import (
+    FormulaText,
+    LLMDegradationError,
+    LLMTokenRequiredError,
+    MistralTokenInvalidError,
+)
 from petrichor.petri_canonical import (
     Arc,
     CanonicalModel,
@@ -1515,15 +1520,18 @@ def _get_run_witness(
     if llm_provider is not None:
         model = store.get(model_id=run.model_id)
         if model is not None:
-            document = document.model_copy(
-                update={
-                    "narrations": narrate_steps(
-                        provider=llm_provider,
-                        model=model,
-                        steps=document.steps,
-                    )
-                }
-            )
+            try:
+                narrations = narrate_steps(
+                    provider=llm_provider,
+                    model=model,
+                    steps=document.steps,
+                    api_token=_mistral_token_from_environ(environ=environ),
+                )
+            except (LLMTokenRequiredError, MistralTokenInvalidError) as token_error:
+                return _token_problem_response(
+                    start_response=start_response, environ=environ, error=token_error
+                )
+            document = document.model_copy(update={"narrations": narrations})
     logger.debug(
         "api_run_witness_read",
         run_id=run.run_id,
@@ -2384,12 +2392,18 @@ def _post_question_formula(  # noqa: PLR0913 - one keyword per routed dependency
             "new_formula": payload.formula,
         },
     )
-    reading = _read_formula(
-        llm_provider=llm_provider,
-        model=model,
-        formula=payload.formula,
-        grid=tuple(FormulaText(q.formula) for q in generated),
-    )
+    try:
+        reading = _read_formula(
+            llm_provider=llm_provider,
+            model=model,
+            formula=payload.formula,
+            grid=tuple(FormulaText(q.formula) for q in generated),
+            api_token=_mistral_token_from_environ(environ=environ),
+        )
+    except (LLMTokenRequiredError, MistralTokenInvalidError) as token_error:
+        return _token_problem_response(
+            start_response=start_response, environ=environ, error=token_error
+        )
     logger.debug(
         "api_question_formula_edited",
         session_id=session_id,
@@ -2410,24 +2424,78 @@ def _post_question_formula(  # noqa: PLR0913 - one keyword per routed dependency
     )
 
 
+MISTRAL_TOKEN_HEADER = "HTTP_X_MISTRAL_API_TOKEN"  # noqa: S105 - a header name, not a secret
+"""WSGI environ key of the per-request ``x-mistral-api-token`` header (web v1 §3, issue #208)."""
+
+
+def _mistral_token_from_environ(*, environ: WSGIEnvironment) -> str | None:
+    """The per-request Mistral token, or None (web v1 §3, issue #208).
+
+    Read from the ``x-mistral-api-token`` header only - never logged, never
+    persisted, never echoed in a response. An empty header means no token.
+    """
+    raw = environ.get(MISTRAL_TOKEN_HEADER, "").strip()
+    return raw or None
+
+
+def _token_problem_response(
+    *,
+    start_response: StartResponse,
+    environ: WSGIEnvironment,
+    error: LLMTokenRequiredError | MistralTokenInvalidError,
+) -> Iterable[bytes]:
+    """Map a typed token error to its problem response (web v1 §3, issue #208).
+
+    Missing token: 428 ``llm_token_required``. Token rejected by Mistral
+    (401): 502 ``mistral_token_invalid`` - the upstream status is surfaced
+    in the detail, the token itself never appears anywhere.
+    """
+    if isinstance(error, LLMTokenRequiredError):
+        payload = _problem(
+            status=HTTPStatus.PRECONDITION_REQUIRED,
+            reason=LLMTokenRequiredError.reason,
+            detail="A Mistral API token is required for this generation: set it in the "
+            "web preferences (x-mistral-api-token), no server key is configured.",
+        )
+    else:
+        payload = _problem(
+            status=HTTPStatus.BAD_GATEWAY,
+            reason=MistralTokenInvalidError.reason,
+            detail="Mistral rejected the API token (upstream 401): check the token set in "
+            "the web preferences.",
+        )
+    logger.warning(
+        "api_mistral_token_error",
+        reason=error.reason,
+        status=payload.status.value,
+    )
+    return _problem_response(start_response=start_response, environ=environ, payload=payload)
+
+
 def _read_formula(
     *,
     llm_provider: LLMProvider | None,
     model: CanonicalModel,
     formula: str,
     grid: tuple[FormulaText, ...] = (),
+    api_token: str | None = None,
 ) -> dict[str, JsonValue] | None:
     """The inverse reading of a formula (formule → langage), an LLM proposition (spec §9).
 
     P72: the provider reads the WHOLE frozen grid in one call (document
     granularity); ``grid`` is that document. Degrades explicitly (None with
     a note) when no reading is available - never a fabricated reading.
+    ``api_token`` is the per-request Mistral token (web v1 §3, issue #208):
+    forwarded to the provider, never logged nor persisted; token errors
+    propagate to the caller (they are not degradations).
     """
     if llm_provider is None:
         return None
     document_formulas = grid if grid else (FormulaText(formula),)
     try:
-        document = llm_provider.reading(model=model, formulas=document_formulas)
+        document = llm_provider.reading(
+            model=model, formulas=document_formulas, api_token=api_token
+        )
         reading = document.readings[FormulaText(formula)]
     except LLMDegradationError, KeyError:
         logger.warning("api_formula_reading_degraded", formula=formula)
@@ -2484,7 +2552,17 @@ def _get_reading(
                 detail=f"No model with id {session.model_id!r}.",
             ),
         )
-    reading = _read_formula(llm_provider=llm_provider, model=model, formula=formula)
+    try:
+        reading = _read_formula(
+            llm_provider=llm_provider,
+            model=model,
+            formula=formula,
+            api_token=_mistral_token_from_environ(environ=environ),
+        )
+    except (LLMTokenRequiredError, MistralTokenInvalidError) as token_error:
+        return _token_problem_response(
+            start_response=start_response, environ=environ, error=token_error
+        )
     logger.debug("api_reading_read", session_id=session_id, formula=formula)
     body_out = json.dumps(
         {"formula": formula, "reading": reading},

@@ -9,7 +9,8 @@
     "sessionAria": "Session identifier (resume)",
     "resume": "Resume session",
     "themeToggle": "Switch to dark / light mode",
-    "login": "Log in"
+    "login": "Log in",
+    "preferences": "Preferences"
   },
   "nav": {
     "aria": "Steps",
@@ -20,6 +21,20 @@
       "verifications": "3. MC checks",
       "synthese": "4. Summary"
     }
+  },
+  "preferences": {
+    "title": "Preferences",
+    "mistralTokenLabel": "Mistral API token",
+    "mistralTokenPlaceholder": "sk-…",
+    "mistralTokenHint": "Stored in this browser only (localStorage); sent only on calls that trigger a generation, never logged.",
+    "clearToken": "Clear",
+    "themeLabel": "Theme",
+    "theme": {
+      "light": "Light",
+      "dark": "Dark"
+    },
+    "languageLabel": "Language",
+    "close": "Close"
   },
   "amorcage": {
     "fileAria": "PNML file",
@@ -150,7 +165,10 @@
     "badge": {
       "verified": "verified ×{{count}}",
       "controversial": "controversial"
-    }
+    },
+    "mistralTokenMissing": "AI feature disabled: no Mistral API token is set (Preferences menu).",
+    "mistralTokenRequired": "A Mistral API token is required for this generation: set it in Preferences.",
+    "mistralTokenInvalid": "The Mistral API token was rejected by Mistral (401). Check it in Preferences."
   },
   "verifications": {
     "title": "MC checks",

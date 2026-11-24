@@ -60,6 +60,27 @@ class LLMDegradationError(LLMError):
     """Explicit degradation: no valid scripted answer after the bounded re-requests."""
 
 
+class LLMTokenRequiredError(LLMError):
+    """No Mistral token available for a generation (web v1 §3, issue #208).
+
+    Neither the per-request ``x-mistral-api-token`` header nor a server-side
+    fallback key is set: the call is refused before any HTTP request. The
+    typed API reason is ``llm_token_required``.
+    """
+
+    reason = "llm_token_required"
+
+
+class MistralTokenInvalidError(LLMError):
+    """Mistral rejected the presented token with a 401 (web v1 §3, issue #208).
+
+    The error never carries the token itself - it must not be logged nor
+    persisted anywhere. The typed API reason is ``mistral_token_invalid``.
+    """
+
+    reason = "mistral_token_invalid"
+
+
 def record_call_state(states: list[CallState], state: CallState) -> None:
     """Append a call state, keeping only the most recent ``MAX_RECORDED_CALL_STATES``."""
     states.append(state)
@@ -91,39 +112,65 @@ class LLMProvider(ABC):
     """The unique LLM interface (spec §8): four usages, four typed outputs."""
 
     @abstractmethod
-    def semantic_profile(self, *, model: CanonicalModel) -> SemanticProfilePublic:
+    def semantic_profile(
+        self, *, model: CanonicalModel, api_token: str | None = None
+    ) -> SemanticProfilePublic:
         """Extract the semantic profile of a model (P73: the net digest is sent along).
 
         The declared output is the PUBLIC schema (no mock-only ``wrong``
         field); the mock returns the richer :class:`SemanticProfile`.
+        ``api_token`` is the per-request Mistral token (web v1 §3, issue
+        #208): used instead of any server key, never persisted nor logged.
         """
 
     @abstractmethod
     def reading(
-        self, *, model: CanonicalModel, formulas: tuple[FormulaText, ...]
+        self,
+        *,
+        model: CanonicalModel,
+        formulas: tuple[FormulaText, ...],
+        api_token: str | None = None,
     ) -> FormulaReadings:
         """Read the whole frozen question grid in ONE call (P72, spec §15).
 
         The document is the grid: one HTTP call per document, never one call
         per formula. The returned document maps each formula to its reading.
+        ``api_token`` is the per-request Mistral token (web v1 §3, issue #208).
         """
 
     @abstractmethod
-    def clarification(self, *, model: CanonicalModel, text: HumanMessage) -> Clarification:
-        """Reformulate a human proposal and propose option chips."""
+    def clarification(
+        self, *, model: CanonicalModel, text: HumanMessage, api_token: str | None = None
+    ) -> Clarification:
+        """Reformulate a human proposal and propose option chips.
+
+        ``api_token`` is the per-request Mistral token (web v1 §3, issue #208).
+        """
 
     @abstractmethod
-    def cluster(self, *, model: CanonicalModel) -> tuple[Cluster, ...]:
-        """Cluster the violations of a model with their causes and remediations."""
+    def cluster(
+        self, *, model: CanonicalModel, api_token: str | None = None
+    ) -> tuple[Cluster, ...]:
+        """Cluster the violations of a model with their causes and remediations.
+
+        ``api_token`` is the per-request Mistral token (web v1 §3, issue #208).
+        """
 
     @abstractmethod
-    def narrate(self, *, model: CanonicalModel, transitions: tuple[str, ...]) -> NarrationCorpus:
+    def narrate(
+        self,
+        *,
+        model: CanonicalModel,
+        transitions: tuple[str, ...],
+        api_token: str | None = None,
+    ) -> NarrationCorpus:
         """Narrate the COMPLETE witness in ONE call (P72, spec §16, issue #32).
 
         The document is the witness: one HTTP call per document, stored once
         (P32), never one call per transition. The returned corpus maps each
         fired transition to its sentence; a transition absent from the
         corpus simply gets no narration - never an invented one.
+        ``api_token`` is the per-request Mistral token (web v1 §3, issue #208).
         """
 
     @abstractmethod
@@ -174,38 +221,55 @@ class DeterministicMockProvider(LLMProvider):
             "total_tokens": 0,
         }
 
-    def semantic_profile(self, *, model: CanonicalModel) -> SemanticProfile:
-        """Serve the scripted profile of the corpus."""
+    def semantic_profile(
+        self, *, model: CanonicalModel, api_token: str | None = None
+    ) -> SemanticProfile:
+        """Serve the scripted profile of the corpus (the mock needs no token)."""
         return self._load(
             usage="semantic-profile", model_hash=model.content_hash, output_type=SemanticProfile
         )
 
     def reading(
-        self, *, model: CanonicalModel, formulas: tuple[FormulaText, ...]
+        self,
+        *,
+        model: CanonicalModel,
+        formulas: tuple[FormulaText, ...],
+        api_token: str | None = None,
     ) -> FormulaReadings:
         """Serve the scripted reading document of the whole grid (P72: one load per document).
 
         The document is served verbatim; a formula absent from it gets no
-        reading from the caller - the mock never invents one.
+        reading from the caller - the mock never invents one. The mock needs
+        no token: ``api_token`` is accepted and ignored.
         """
         return self._load(
             usage="reading", model_hash=model.content_hash, output_type=FormulaReadings
         )
 
-    def clarification(self, *, model: CanonicalModel, text: HumanMessage) -> Clarification:
+    def clarification(
+        self, *, model: CanonicalModel, text: HumanMessage, api_token: str | None = None
+    ) -> Clarification:
         """Serve the scripted clarification; the initial corpus scripts none."""
         return self._load(
             usage="clarification", model_hash=model.content_hash, output_type=Clarification
         )
 
-    def cluster(self, *, model: CanonicalModel) -> tuple[Cluster, ...]:
+    def cluster(
+        self, *, model: CanonicalModel, api_token: str | None = None
+    ) -> tuple[Cluster, ...]:
         """Serve the scripted clusters of the corpus."""
         document = self._load(
             usage="cluster", model_hash=model.content_hash, output_type=ClusterList
         )
         return document.clusters
 
-    def narrate(self, *, model: CanonicalModel, transitions: tuple[str, ...]) -> NarrationCorpus:
+    def narrate(
+        self,
+        *,
+        model: CanonicalModel,
+        transitions: tuple[str, ...],
+        api_token: str | None = None,
+    ) -> NarrationCorpus:
         """Serve the scripted narration document of the whole witness (P72: one load per document).
 
         The corpus is served verbatim; a transition absent from it gets no

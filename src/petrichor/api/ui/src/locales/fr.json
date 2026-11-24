@@ -9,7 +9,8 @@
     "sessionAria": "Identifiant de session (reprise)",
     "resume": "Reprendre la session",
     "themeToggle": "Basculer en mode sombre / clair",
-    "login": "Se connecter"
+    "login": "Se connecter",
+    "preferences": "Préférences"
   },
   "nav": {
     "aria": "Étapes",
@@ -20,6 +21,20 @@
       "verifications": "3. Vérifications MC",
       "synthese": "4. Synthèse"
     }
+  },
+  "preferences": {
+    "title": "Préférences",
+    "mistralTokenLabel": "Token d'API Mistral",
+    "mistralTokenPlaceholder": "sk-…",
+    "mistralTokenHint": "Stocké uniquement dans ce navigateur (localStorage) ; envoyé uniquement sur les appels qui déclenchent une génération, jamais journalisé.",
+    "clearToken": "Effacer",
+    "themeLabel": "Thème",
+    "theme": {
+      "light": "Clair",
+      "dark": "Sombre"
+    },
+    "languageLabel": "Langue",
+    "close": "Fermer"
   },
   "amorcage": {
     "title": "Amorçage",
@@ -150,7 +165,10 @@
     "badge": {
       "verified": "vérifiée ×{{count}}",
       "controversial": "controversée"
-    }
+    },
+    "mistralTokenMissing": "Fonction IA désactivée : aucun token d'API Mistral n'est défini (menu Préférences).",
+    "mistralTokenRequired": "Un token d'API Mistral est requis pour cette génération : définissez-le dans les Préférences.",
+    "mistralTokenInvalid": "Le token d'API Mistral a été rejeté par Mistral (401). Vérifiez-le dans les Préférences."
   },
   "verifications": {
     "title": "Vérifications MC",

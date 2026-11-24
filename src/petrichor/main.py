@@ -166,15 +166,28 @@ def build_server(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
     return make_server(host, port, app)
 
 
-def select_llm_provider(*, settings: ApiSettings) -> LLMProvider:
+def select_llm_provider(
+    *, settings: ApiSettings, environment: dict[str, str] | None = None
+) -> LLMProvider:
     """Select the LLM provider by configuration (spec §8, issue #36).
 
     ``mock`` (default) serves the golden corpus; ``mistral`` calls the real
-    API and fails at startup when the key is missing - never open by default.
+    API. Web v1 §3 (issue #208): the global ``MISTRAL_API_KEY`` is a
+    local-dev fallback only - combining it with ``PETRICHOR_ENV=production``
+    is a fatal configuration error (same L3 guard as ``AUTH_DISABLED``);
+    in production every generation uses the per-request
+    ``x-mistral-api-token`` header instead.
     """
     if settings.llm_provider == "mistral":
-        if settings.mistral_api_key is None:
-            raise SystemExit("PETRICHOR_LLM_PROVIDER=mistral requires MISTRAL_API_KEY to be set.")
+        env = os.environ if environment is None else environment
+        if settings.mistral_api_key is not None and (
+            env.get(ENVIRONMENT_VARIABLE) == PRODUCTION_ENVIRONMENT
+        ):
+            raise ConfigurationError(
+                f"MISTRAL_API_KEY must never be set with {ENVIRONMENT_VARIABLE}="
+                f"{PRODUCTION_ENVIRONMENT} (web v1 §3, issue #208): in production the "
+                "per-request x-mistral-api-token header replaces the global key."
+            )
         # P74 (ADR-0108): the model is routed per usage from the pinned table.
         return MistralProvider(api_key=settings.mistral_api_key)
     return DeterministicMockProvider()

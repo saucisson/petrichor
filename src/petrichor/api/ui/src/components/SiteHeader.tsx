@@ -5,8 +5,9 @@ import type { Theme } from "../theme";
 /* Common saucisson web v1 header (contract docs/consigne-interface-web-v1.md
    §4): logo + site name, the three zones (Accueil / Découvrir / Atelier),
    language selector, persistent light/dark theme toggle, and the account
-   menu. "Se connecter" starts the OIDC browser login (issue #207); préférences
-   land with issue #208, déconnexion posts /auth/logout. */
+   menu. "Se connecter" starts the OIDC browser login (issue #207);
+   "Préférences" opens the preferences panel of issue #208 (Mistral token,
+   theme, language), déconnexion posts /auth/logout. */
 
 export const ZONE_IDS = ["accueil", "decouvrir", "atelier"] as const;
 export type Zone = (typeof ZONE_IDS)[number];
@@ -17,6 +18,7 @@ interface SiteHeaderProps {
   onNavigate: (zone: Zone) => void;
   onToggleTheme: () => void;
   onLanguageChange: (language: Language) => void;
+  onOpenPreferences: () => void;
 }
 
 export default function SiteHeader({
@@ -25,6 +27,7 @@ export default function SiteHeader({
   onNavigate,
   onToggleTheme,
   onLanguageChange,
+  onOpenPreferences,
 }: SiteHeaderProps) {
   const { t, i18n } = useTranslation();
   // The light logo variant is for dark surfaces, the dark one for light
@@ -77,6 +80,9 @@ export default function SiteHeader({
         </button>
       </div>
       <div className="header-group">
+        <button id="preferences" type="button" className="btn" onClick={onOpenPreferences}>
+          {t("header.preferences")}
+        </button>
         <button
           id="login"
           type="button"

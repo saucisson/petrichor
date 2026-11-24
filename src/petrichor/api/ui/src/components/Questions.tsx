@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { readProblemDetail, type ApiClient } from "../api";
+import { problemReason, readProblemDetail, type ApiClient } from "../api";
+import { storedMistralToken } from "../mistralToken";
 import LlmBusy from "./LlmBusy";
 import VerdictBadge from "./VerdictBadge";
 import type {
@@ -80,16 +81,26 @@ function FormulaEditor({
     setError(null);
     setDone(false);
     try {
-      const response = await client.request(
-        "/v1/sessions/" + sessionId + "/questions/" + question.question_id + "/formula",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ formula: draft }),
-        },
+      // Web v1 §3 (issue #208): this call triggers an LLM generation, so it
+      // carries the per-user Mistral token when one is stored in preferences.
+      const response = await client.postFormulaEdit(
+        sessionId,
+        question.question_id,
+        draft,
+        storedMistralToken(),
       );
       if (response.status !== 201) {
-        // The problem detail is server-produced text: displayed verbatim.
+        // Typed token errors get an explicit FR/EN message (never swallowed);
+        // any other problem detail is server-produced text, displayed verbatim.
+        const reason = await problemReason(response);
+        if (reason === "mistral_token_invalid") {
+          setError(t("questions.mistralTokenInvalid"));
+          return;
+        }
+        if (reason === "llm_token_required") {
+          setError(t("questions.mistralTokenRequired"));
+          return;
+        }
         let detail = "";
         try {
           const problem = (await response.json()) as { detail?: string };
@@ -111,6 +122,11 @@ function FormulaEditor({
     }
   };
 
+  // Web v1 §3 (issue #208): without a Mistral token the IA functions stay
+  // visible but disabled, with an explicit message.
+  const mistralToken = storedMistralToken();
+  const iaDisabled = mistralToken === "";
+
   return (
     <div className="formula-editor">
       <label htmlFor={"formula-" + question.question_id}>{t("questions.editLabel")}</label>
@@ -120,9 +136,15 @@ function FormulaEditor({
         value={draft}
         onChange={(event) => setDraft(event.target.value)}
       />
-      <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void save()}>
+      <button
+        type="button"
+        className="btn btn-primary"
+        disabled={busy || iaDisabled}
+        onClick={() => void save()}
+      >
         {t("questions.editSave")}
       </button>
+      {iaDisabled ? <p className="edit-hint">{t("questions.mistralTokenMissing")}</p> : null}
       {error !== null ? <p className="edit-error">{error}</p> : null}
       {done ? <p className="edit-done">{t("questions.editDone")}</p> : null}
       {reading !== null ? (

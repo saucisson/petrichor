@@ -8,6 +8,7 @@ import Amorcage from "./components/Amorcage";
 import Decouvrir from "./components/Decouvrir";
 import Landing from "./components/Landing";
 import Questions from "./components/Questions";
+import Preferences from "./components/Preferences";
 import SiteHeader, { type Zone } from "./components/SiteHeader";
 import Verifications from "./components/Verifications";
 import Synthese from "./components/Synthese";
@@ -45,6 +46,8 @@ export default function App() {
   const [step, setStep] = useState<Step>("amorcage");
   const [reloadToken, setReloadToken] = useState(0);
   const [resumeError, setResumeError] = useState<string | null>(null);
+  // Web v1 §3/§4 (issue #208): the preferences panel from the header account area.
+  const [preferencesOpen, setPreferencesOpen] = useState(false);
 
   // P76/web v1 (#207): the client is stateless - the session cookie carries
   // the authentication, so there is nothing to memoize on.
@@ -59,6 +62,11 @@ export default function App() {
 
   const onLanguageChange = (language: Language) => {
     applyLanguage(language);
+  };
+
+  const onThemeChange = (next: Theme) => {
+    setTheme(next);
+    applyTheme(next);
   };
 
   const resumeSession = async () => {
@@ -86,7 +94,16 @@ export default function App() {
         onNavigate={setZone}
         onToggleTheme={toggleTheme}
         onLanguageChange={onLanguageChange}
+        onOpenPreferences={() => setPreferencesOpen(true)}
       />
+      {preferencesOpen ? (
+        <Preferences
+          theme={theme}
+          onThemeChange={onThemeChange}
+          onLanguageChange={onLanguageChange}
+          onClose={() => setPreferencesOpen(false)}
+        />
+      ) : null}
       {zone === "accueil" ? <Landing onNavigate={setZone} /> : null}
       {zone === "decouvrir" ? <Decouvrir /> : null}
       {zone === "atelier" ? (

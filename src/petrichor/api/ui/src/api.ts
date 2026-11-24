@@ -2,6 +2,7 @@
 // views are rebuilt from the responses: no verdict is ever invented here
 // (spec §9, §19.4).
 
+import { MISTRAL_TOKEN_HEADER } from "./mistralToken";
 import type { CandidateList, CatalogPage, ImportedModel, LlmCallState } from "./types";
 
 export class ApiError extends Error {
@@ -72,6 +73,28 @@ export class ApiClient {
     return (await response.json()) as T;
   }
 
+  /* Web v1 §3 (issue #208): the formula edit triggers an LLM generation, so it
+     is the one call carrying the per-user Mistral token as
+     `x-mistral-api-token`. The raw Response is returned so the caller keeps
+     its typed-status handling; the token is never logged nor persisted here. */
+  async postFormulaEdit(
+    sessionId: string,
+    questionId: string,
+    formula: string,
+    mistralToken?: string,
+  ): Promise<Response> {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    const trimmed = mistralToken?.trim() ?? "";
+    if (trimmed !== "") {
+      headers[MISTRAL_TOKEN_HEADER] = trimmed;
+    }
+    return this.request(`/v1/sessions/${sessionId}/questions/${questionId}/formula`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ formula }),
+    });
+  }
+
   // P71 (issue #166, spec §21): the three import paths. Raw responses are
   // returned so the caller can branch on the typed statuses (409 candidates,
   // 422 url_not_allowed, 503 catalog_unavailable) and show server errors verbatim.
@@ -122,7 +145,7 @@ export class ApiClient {
   }
 }
 
-async function problemReason(response: Response): Promise<string | undefined> {
+export async function problemReason(response: Response): Promise<string | undefined> {
   // The typed problem payload carries the reason in extensions (ADR-0016).
   try {
     const payload = (await response.clone().json()) as { extensions?: { reason?: string } };

@@ -78,25 +78,37 @@ class SlowTestProvider(LLMProvider):
         time.sleep(self._latency_seconds)
         self._states[-1] = self._states[-1].model_copy(update={"ended_at": datetime.now(UTC)})
 
-    def semantic_profile(self, *, model: CanonicalModel) -> SemanticProfilePublic:
+    def semantic_profile(
+        self, *, model: CanonicalModel, api_token: str | None = None
+    ) -> SemanticProfilePublic:
         self._run("semantic-profile")
         raise NotImplementedError
 
     def reading(
-        self, *, model: CanonicalModel, formulas: tuple[FormulaText, ...]
+        self,
+        *,
+        model: CanonicalModel,
+        formulas: tuple[FormulaText, ...],
+        api_token: str | None = None,
     ) -> FormulaReadings:
         self._run("reading")
         raise NotImplementedError
 
-    def clarification(self, *, model: CanonicalModel, text: HumanMessage) -> Clarification:
+    def clarification(
+        self, *, model: CanonicalModel, text: HumanMessage, api_token: str | None = None
+    ) -> Clarification:
         self._run("clarification")
         raise NotImplementedError
 
-    def cluster(self, *, model: CanonicalModel) -> tuple[Cluster, ...]:
+    def cluster(
+        self, *, model: CanonicalModel, api_token: str | None = None
+    ) -> tuple[Cluster, ...]:
         self._run("cluster")
         raise NotImplementedError
 
-    def narrate(self, *, model: CanonicalModel, transitions: tuple[str, ...]) -> NarrationCorpus:
+    def narrate(
+        self, *, model: CanonicalModel, transitions: tuple[str, ...], api_token: str | None = None
+    ) -> NarrationCorpus:
         self._run("narration")
         return NarrationCorpus.model_validate(NARRATION_SAMPLE)
 
