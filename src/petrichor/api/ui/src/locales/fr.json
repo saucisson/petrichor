@@ -1,7 +1,8 @@
 {
   "app": {
     "title": "Petrichor — session d'élicitation",
-    "languageLabel": "Langue"
+    "languageLabel": "Langue",
+    "skipLink": "Aller au contenu principal"
   },
   "header": {
     "groupSession": "Session",
@@ -10,7 +11,9 @@
     "resume": "Reprendre la session",
     "themeToggle": "Basculer en mode sombre / clair",
     "login": "Se connecter",
-    "preferences": "Préférences"
+    "preferences": "Préférences",
+    "account": "Compte",
+    "logout": "Se déconnecter"
   },
   "nav": {
     "aria": "Étapes",
@@ -245,5 +248,14 @@
     "loading": "Chargement du catalogue…",
     "total": "{{count}} modèle(s) dans le catalogue.",
     "empty": "Aucun modèle ne correspond à la recherche."
+  },
+  "atelier": {
+    "gateTitle": "L'atelier est réservé aux comptes",
+    "gateMessage": "Connectez-vous avec auth.linard.fr pour importer un modèle, lancer des vérifications et consulter la synthèse. Après la connexion, vous reviendrez automatiquement sur cette page.",
+    "gateCta": "Se connecter avec auth.linard.fr"
+  },
+  "errors": {
+    "notFoundTitle": "Page introuvable (404)",
+    "notFoundBody": "Cette page n'existe pas. Utilisez la navigation pour rejoindre l'Accueil, Découvrir ou l'Atelier."
   }
 }

@@ -69,6 +69,10 @@ class TestStaticUi:
         assert "Identifiant de session (reprise)" in bundle
         assert "aria-live" in bundle
         assert "aria-current" in bundle
+        # web v1 (#209): skip-link, portail atelier sans session, page 404.
+        assert "Aller au contenu principal" in bundle
+        assert "Se connecter avec auth.linard.fr" in bundle
+        assert "Page introuvable (404)" in bundle
 
     def test_ui_spa_fallback_serves_the_shell_on_client_side_routes(self) -> None:
         client = build_client()

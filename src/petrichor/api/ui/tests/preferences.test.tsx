@@ -4,6 +4,7 @@ import App from "../src/App";
 import { renderAtelier } from "./render-atelier";
 import { applyLanguage } from "../src/i18n";
 import { MISTRAL_TOKEN_STORAGE } from "../src/mistralToken";
+import { authMeResponse } from "./auth-me-mock";
 
 /* Web v1 §3 (issue #208): the preferences panel carries the per-user Mistral
    token (password field, localStorage only, clearable), and without a token
@@ -26,6 +27,11 @@ function mockFetch(routes: { match: (call: FetchCall) => boolean; respond: () =>
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const authMe = authMeResponse(String(input));
+      if (authMe !== null) {
+        calls.push({ url: String(input), method: init?.method ?? "GET", headers: (init?.headers ?? {}) as Record<string, string>, body: init?.body as string | undefined } as (typeof calls)[number]);
+        return authMe;
+      }
       const call: FetchCall = {
         url: String(input),
         method: init?.method ?? "GET",
@@ -63,6 +69,7 @@ const CONTRACT_ROUTE = {
 
 beforeEach(() => {
   localStorage.clear();
+  window.history.replaceState(null, "", "/");
   localStorage.setItem("petrichor.sessionId", "s1");
   applyLanguage("fr");
 });
@@ -74,10 +81,10 @@ afterEach(() => {
 });
 
 describe("panneau Préférences (issue #208)", () => {
-  it("s'ouvre depuis le header, masque le token (type password) et le persiste en localStorage uniquement", () => {
+  it("s'ouvre depuis le header, masque le token (type password) et le persiste en localStorage uniquement", async () => {
     mockFetch([]);
     render(<App />);
-    fireEvent.click(screen.getByRole("button", { name: "Préférences" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Préférences" }));
     const field = screen.getByLabelText("Token d'API Mistral") as HTMLInputElement;
     expect(field.type).toBe("password");
     fireEvent.change(field, { target: { value: "sk-abc" } });
@@ -92,10 +99,10 @@ describe("panneau Préférences (issue #208)", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
-  it("le panneau expose aussi le thème et la langue", () => {
+  it("le panneau expose aussi le thème et la langue", async () => {
     mockFetch([]);
     render(<App />);
-    fireEvent.click(screen.getByRole("button", { name: "Préférences" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Préférences" }));
     const dialog = screen.getByRole("dialog");
     expect(within(dialog).getByLabelText("Thème")).toBeInTheDocument();
     expect(within(dialog).getByLabelText("Langue")).toBeInTheDocument();
@@ -105,7 +112,7 @@ describe("panneau Préférences (issue #208)", () => {
 describe("gating IA sans token (issue #208)", () => {
   it("désactive l'enregistrement sans token, avec message explicite, et n'émet aucun appel de génération", async () => {
     mockFetch([CONTRACT_ROUTE]);
-    renderAtelier();
+    await renderAtelier();
     fireEvent.click(screen.getByRole("button", { name: "2. Questions statiques" }));
     await waitFor(() => expect(screen.getByText(/AG\(philo0 thinking\)/)).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Éditer la formule" }));
@@ -136,7 +143,7 @@ describe("gating IA sans token (issue #208)", () => {
           }),
       },
     ]);
-    renderAtelier();
+    await renderAtelier();
     fireEvent.click(screen.getByRole("button", { name: "2. Questions statiques" }));
     await waitFor(() => expect(screen.getByText(/AG\(philo0 thinking\)/)).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Éditer la formule" }));
@@ -168,7 +175,7 @@ describe("gating IA sans token (issue #208)", () => {
           }),
       },
     ]);
-    renderAtelier();
+    await renderAtelier();
     fireEvent.click(screen.getByRole("button", { name: "2. Questions statiques" }));
     await waitFor(() => expect(screen.getByText(/AG\(philo0 thinking\)/)).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Éditer la formule" }));
@@ -195,7 +202,7 @@ describe("gating IA sans token (issue #208)", () => {
           }),
       },
     ]);
-    renderAtelier();
+    await renderAtelier();
     fireEvent.click(screen.getByRole("button", { name: "2. Questions statiques" }));
     await waitFor(() => expect(screen.getByText(/AG\(philo0 thinking\)/)).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Éditer la formule" }));

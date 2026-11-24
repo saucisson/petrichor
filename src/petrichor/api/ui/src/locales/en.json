@@ -1,7 +1,8 @@
 {
   "app": {
     "title": "Petrichor — elicitation session",
-    "languageLabel": "Language"
+    "languageLabel": "Language",
+    "skipLink": "Skip to main content"
   },
   "header": {
     "groupSession": "Session",
@@ -10,7 +11,9 @@
     "resume": "Resume session",
     "themeToggle": "Switch to dark / light mode",
     "login": "Log in",
-    "preferences": "Preferences"
+    "preferences": "Preferences",
+    "account": "Account",
+    "logout": "Log out"
   },
   "nav": {
     "aria": "Steps",
@@ -245,5 +248,14 @@
     "loading": "Loading the catalog…",
     "total": "{{count}} model(s) in the catalog.",
     "empty": "No model matches the search."
+  },
+  "atelier": {
+    "gateTitle": "The workshop requires an account",
+    "gateMessage": "Sign in with auth.linard.fr to import a model, run checks and read the synthesis. After signing in you will automatically return to this page.",
+    "gateCta": "Sign in with auth.linard.fr"
+  },
+  "errors": {
+    "notFoundTitle": "Page not found (404)",
+    "notFoundBody": "This page does not exist. Use the navigation to reach Home, Explore or the Workshop."
   }
 }

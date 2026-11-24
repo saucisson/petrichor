@@ -1,13 +1,15 @@
 import { useTranslation } from "react-i18next";
 import { SUPPORTED_LANGUAGES, type Language } from "../i18n";
+import { loginUrl, type AuthState } from "../authSession";
 import type { Theme } from "../theme";
 
 /* Common saucisson web v1 header (contract docs/consigne-interface-web-v1.md
    §4): logo + site name, the three zones (Accueil / Découvrir / Atelier),
    language selector, persistent light/dark theme toggle, and the account
-   menu. "Se connecter" starts the OIDC browser login (issue #207);
-   "Préférences" opens the preferences panel of issue #208 (Mistral token,
-   theme, language), déconnexion posts /auth/logout. */
+   menu. The account menu is session-aware (issue #209): "Se connecter" alone
+   when anonymous, user name + "Préférences" + "Se déconnecter" when a
+   petrichor-session cookie is active (known via /auth/me). "Se connecter"
+   starts the OIDC browser login (issue #207) and returns to the current page. */
 
 export const ZONE_IDS = ["accueil", "decouvrir", "atelier"] as const;
 export type Zone = (typeof ZONE_IDS)[number];
@@ -15,25 +17,30 @@ export type Zone = (typeof ZONE_IDS)[number];
 interface SiteHeaderProps {
   zone: Zone;
   theme: Theme;
+  auth: AuthState;
   onNavigate: (zone: Zone) => void;
   onToggleTheme: () => void;
   onLanguageChange: (language: Language) => void;
   onOpenPreferences: () => void;
+  onLogout: () => void;
 }
 
 export default function SiteHeader({
   zone,
   theme,
+  auth,
   onNavigate,
   onToggleTheme,
   onLanguageChange,
   onOpenPreferences,
+  onLogout,
 }: SiteHeaderProps) {
   const { t, i18n } = useTranslation();
   // The light logo variant is for dark surfaces, the dark one for light
   // surfaces: the header band is dark, the landing page is light.
   const logoSource =
     theme === "dark" ? "/logos/petrichor-logo-clair.svg" : "/logos/petrichor-logo-sombre.svg";
+  const returnTo = window.location.pathname + window.location.search;
 
   return (
     <header>
@@ -79,20 +86,27 @@ export default function SiteHeader({
           )}
         </button>
       </div>
-      <div className="header-group">
-        <button id="preferences" type="button" className="btn" onClick={onOpenPreferences}>
-          {t("header.preferences")}
-        </button>
-        <button
-          id="login"
-          type="button"
-          className="btn"
-          onClick={() =>
-            window.location.assign(`/auth/login?returnTo=${encodeURIComponent("/ui/")}`)
-          }
-        >
-          {t("header.login")}
-        </button>
+      <div className="header-group" aria-label={t("header.account")}>
+        {auth.status === "loading" ? null : auth.status === "authenticated" ? (
+          <>
+            <span id="account-name">{auth.userName}</span>
+            <button id="preferences" type="button" className="btn" onClick={onOpenPreferences}>
+              {t("header.preferences")}
+            </button>
+            <button id="logout" type="button" className="btn" onClick={onLogout}>
+              {t("header.logout")}
+            </button>
+          </>
+        ) : (
+          <button
+            id="login"
+            type="button"
+            className="btn"
+            onClick={() => window.location.assign(loginUrl(returnTo))}
+          >
+            {t("header.login")}
+          </button>
+        )}
       </div>
       <div className="header-group">
         <label htmlFor="language-select">{t("app.languageLabel")}</label>

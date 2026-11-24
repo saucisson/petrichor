@@ -101,7 +101,10 @@ paths:
       summary: The current applicative session
       responses:
         "200":
-          description: The session subject and issuer.
+          description: >-
+            The session subject and issuer, plus the profile claims
+            (preferred_username, name) when the IdP sent them (web v1 account
+            menu, issue #209).
           content:
             application/json:
               schema:
@@ -111,6 +114,10 @@ paths:
                   sub:
                     type: string
                   iss:
+                    type: string
+                  preferred_username:
+                    type: string
+                  name:
                     type: string
         "401":
           $ref: "#/components/responses/Unauthorized"

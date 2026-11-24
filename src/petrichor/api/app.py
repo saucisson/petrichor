@@ -4111,7 +4111,16 @@ def _dispatch_auth(  # noqa: PLR0911 - one typed response per /auth route
                     detail="No active session.",
                 ),
             )
-        body = json.dumps({"sub": session.claims.sub, "iss": session.claims.iss}).encode()
+        # Web v1 (issue #209): the account menu displays the user name, so the
+        # profile claims are surfaced when the IdP sent them (extra="allow").
+        profile = {
+            key: session.claims.model_extra[key]
+            for key in ("preferred_username", "name")
+            if session.claims.model_extra is not None
+            and isinstance(session.claims.model_extra.get(key), str)
+        }
+        payload = {"sub": session.claims.sub, "iss": session.claims.iss, **profile}
+        body = json.dumps(payload).encode()
         return _respond(
             start_response=start_response,
             status=HTTPStatus.OK,

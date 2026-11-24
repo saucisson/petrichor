@@ -2,6 +2,7 @@ import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderAtelier } from "./render-atelier";
 import { applyLanguage } from "../src/i18n";
+import { authMeResponse } from "./auth-me-mock";
 
 /* Formula editing in the UI (issue #125, P37 endpoints): the edit goes
    through POST /v1/sessions/{sid}/questions/{qid}/formula, the inverse
@@ -59,6 +60,11 @@ function mockFetch(routes: { match: (call: FetchCall) => boolean; respond: () =>
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const authMe = authMeResponse(String(input));
+      if (authMe !== null) {
+        calls.push({ url: String(input), method: init?.method ?? "GET", headers: (init?.headers ?? {}) as Record<string, string>, body: init?.body as string | undefined } as (typeof calls)[number]);
+        return authMe;
+      }
       const call: FetchCall = {
         url: String(input),
         method: init?.method ?? "GET",
@@ -81,6 +87,7 @@ const CONTRACT_ROUTE = {
 
 beforeEach(() => {
   localStorage.clear();
+  window.history.replaceState(null, "", "/");
   localStorage.setItem("petrichor.sessionId", "s1");
   // Web v1 §3 (issue #208): the IA generation needs a Mistral token.
   localStorage.setItem("petrichor.mistralToken", "sk-ui-test");
@@ -103,7 +110,7 @@ describe("formule éditable (issue #125)", () => {
         respond: () => jsonResponse(201, EDIT_RESPONSE),
       },
     ]);
-    renderAtelier();
+    await renderAtelier();
     fireEvent.click(screen.getByRole("button", { name: "2. Questions statiques" }));
     await waitFor(() => expect(screen.getByText(/AG\(philo0 thinking\)/)).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Éditer la formule" }));
@@ -150,7 +157,7 @@ describe("formule éditable (issue #125)", () => {
           }),
       },
     ]);
-    renderAtelier();
+    await renderAtelier();
     fireEvent.click(screen.getByRole("button", { name: "2. Questions statiques" }));
     await waitFor(() => expect(screen.getByText(/AG\(philo0 thinking\)/)).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Éditer la formule" }));
@@ -173,7 +180,7 @@ describe("formule éditable (issue #125)", () => {
           jsonResponse(429, { status: 429, detail: "Budget MC épuisé pour cette session." }),
       },
     ]);
-    renderAtelier();
+    await renderAtelier();
     fireEvent.click(screen.getByRole("button", { name: "2. Questions statiques" }));
     await waitFor(() => expect(screen.getByText(/AG\(philo0 thinking\)/)).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Éditer la formule" }));

@@ -2,6 +2,7 @@ import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderAtelier } from "./render-atelier";
 import { applyLanguage } from "../src/i18n";
+import { authMeResponse } from "./auth-me-mock";
 
 /* Clickable proof dossiers in the contract view (issue #126, P38, spec
    §17.4): each proof is clickable and leads to its dossier pieces (formula,
@@ -69,6 +70,7 @@ const WITNESS = {
 
 beforeEach(() => {
   localStorage.clear();
+  window.history.replaceState(null, "", "/");
   localStorage.setItem("petrichor.sessionId", "s1");
   applyLanguage("fr");
 });
@@ -85,6 +87,8 @@ describe("dossiers de preuve cliquables (issue #126)", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
+      const authMe = authMeResponse(url);
+      if (authMe !== null) return authMe;
         const headers = (init?.headers ?? {}) as Record<string, string>;
         if (url === "/v1/sessions/s1/contract" && headers.Accept?.includes("text/markdown")) {
           return textResponse(200, "# Contrat\n\n- clause");
@@ -98,7 +102,7 @@ describe("dossiers de preuve cliquables (issue #126)", () => {
         return jsonResponse(404, { status: 404 });
       }),
     );
-    renderAtelier();
+    await renderAtelier();
     fireEvent.click(screen.getByRole("button", { name: "4. Synthèse" }));
     // The dossier is clickable (details/summary) and shows the clause pieces.
     await waitFor(() => expect(screen.getByText(/AG\(philo0 thinking\)/)).toBeInTheDocument());

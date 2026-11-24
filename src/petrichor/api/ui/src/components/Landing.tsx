@@ -13,7 +13,7 @@ export default function Landing({ onNavigate }: LandingProps) {
   const { t } = useTranslation();
 
   return (
-    <main className="mt-4" id="landing">
+    <div className="mt-4" id="landing">
       <section className="card landing-hero">
         <h2>{t("landing.title")}</h2>
         <p>{t("landing.tagline")}</p>
@@ -38,6 +38,6 @@ export default function Landing({ onNavigate }: LandingProps) {
         </div>
         <p className="nav-hint">{t("landing.hintNoAuth")}</p>
       </section>
-    </main>
+    </div>
   );
 }

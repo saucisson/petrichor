@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderAtelier } from "./render-atelier";
 import { applyLanguage } from "../src/i18n";
 import { THEME_STORAGE } from "../src/theme";
+import { authMeResponse } from "./auth-me-mock";
 
 /* P81 (issue #190): dark mode - toggle in the header (data-theme on <html>,
    color-scheme for native controls), persisted in localStorage
@@ -13,12 +14,13 @@ import { THEME_STORAGE } from "../src/theme";
 function mockFetchEmpty() {
   vi.stubGlobal(
     "fetch",
-    vi.fn(async () => new Response(JSON.stringify({}), { status: 404 })),
+    vi.fn(async (input: RequestInfo | URL) => authMeResponse(String(input)) ?? new Response(JSON.stringify({}), { status: 404 })),
   );
 }
 
 beforeEach(() => {
   localStorage.clear();
+  window.history.replaceState(null, "", "/");
   applyLanguage("fr");
   document.documentElement.removeAttribute("data-theme");
   document.documentElement.style.colorScheme = "";
@@ -34,9 +36,9 @@ afterEach(() => {
 });
 
 describe("P81 — mode sombre", () => {
-  it("bascule data-theme sur <html>, color-scheme et persiste le choix", () => {
+  it("bascule data-theme sur <html>, color-scheme et persiste le choix", async () => {
     mockFetchEmpty();
-    renderAtelier();
+    await renderAtelier();
     const toggle = screen.getByRole("button", { name: "Basculer en mode sombre / clair" });
     expect(document.documentElement.dataset.theme).not.toBe("dark");
     fireEvent.click(toggle);
@@ -49,7 +51,7 @@ describe("P81 — mode sombre", () => {
     expect(localStorage.getItem(THEME_STORAGE)).toBe("light");
   });
 
-  it("utilise la préférence système (prefers-color-scheme) sans choix persisté", () => {
+  it("utilise la préférence système (prefers-color-scheme) sans choix persisté", async () => {
     vi.stubGlobal(
       "matchMedia",
       vi.fn((query: string) => ({
@@ -60,11 +62,11 @@ describe("P81 — mode sombre", () => {
       })),
     );
     mockFetchEmpty();
-    renderAtelier();
+    await renderAtelier();
     expect(document.documentElement.dataset.theme).toBe("dark");
   });
 
-  it("le choix persisté prime sur la préférence système", () => {
+  it("le choix persisté prime sur la préférence système", async () => {
     localStorage.setItem(THEME_STORAGE, "light");
     vi.stubGlobal(
       "matchMedia",
@@ -76,11 +78,11 @@ describe("P81 — mode sombre", () => {
       })),
     );
     mockFetchEmpty();
-    renderAtelier();
+    await renderAtelier();
     expect(document.documentElement.dataset.theme).toBe("light");
   });
 
-  it("surcharge tous les tokens couleur en :root[data-theme=dark] (aucun fond blanc dur)", () => {
+  it("surcharge tous les tokens couleur en :root[data-theme=dark] (aucun fond blanc dur)", async () => {
     const styles = readFileSync("src/styles.css", "utf8");
     expect(styles).not.toMatch(/bg-white/);
     const darkBlock = /:root\[data-theme="dark"\] \{([\s\S]*?)\n\}/.exec(styles)?.[1] ?? "";
