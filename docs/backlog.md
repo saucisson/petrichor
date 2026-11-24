@@ -2,7 +2,7 @@
 
 Corps de toutes les issues, prêts à peupler GitHub via le script idempotent (§19.2 : labels → milestones → issues, `--dry-run` d'abord). Conventions : **1 issue = 1 PR** d'une session ; chaque corps cite ses sections de spécification (le document « Petrichor — Conception complète », v1.4) ; critères d'acceptation vérifiables par commande ou test ; hors-périmètre explicite ; dépendances notées `blocked-by`.
 
-**Milestones** : `P0 — socle` · `P1 — MVP élicitation` · `Outillage — moteurs & transformations` · `P2 — chaîne MC` · `P3 — pilote` · `P4 — études & publication` · `UI v2 — refonte frontend` · `Outillage — fiabilité de la revue` · `UI v3 — clarté & catalogue`.
+**Milestones** : `P0 — socle` · `P1 — MVP élicitation` · `Outillage — moteurs & transformations` · `P2 — chaîne MC` · `P3 — pilote` · `P4 — études & publication` · `UI v2 — refonte frontend` · `Outillage — fiabilité de la revue` · `UI v3 — clarté & catalogue` · `Web v1 — zones publiques & connexion OIDC` (GitHub milestone #12 : issues #205–#210, contrat `docs/consigne-interface-web-v1.md`, ADR-0109 acceptée).
 
 **Labels** : `area:api` `area:ui` `area:llm` `area:engine` `area:static` `area:docs` `area:study` `area:i18n` `area:outillage` · `kind:feat` `kind:test` `kind:chore` `kind:spike`.
 

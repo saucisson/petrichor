@@ -1,7 +1,7 @@
 # ADR-0109: web v1 bascule — OIDC browser login, session cookie, X-API-Key removal
 
-- Status: proposed (drafted in the #207 PR per ADR-0010; the human accepts it)
-- Date: 2026-11-23
+- Status: accepted (drafted in the #207 PR per ADR-0010; accepted by the human on 2026-11-24 with the milestone #12 closure, issue #210)
+- Date: 2026-11-23 (accepted 2026-11-24)
 
 ## Context
 
@@ -37,4 +37,5 @@ bookmarks.
   longer interpolates `PETRICHOR_API_KEY`).
 - Sessions are in-memory and TTL-bounded (8 h): a restart logs everybody
   out. A shared session store is a deliberate non-goal of web v1.
-- Issue #210 tracks the roadmap/backlog reference updates.
+- Issue #210 (closed by this acceptance): the backlog now references milestone
+  #12, issues #205–#210 and this ADR (`docs/backlog.md` milestones line).
