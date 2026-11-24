@@ -7,7 +7,7 @@ import { test, expect } from "@playwright/test";
 test("landing publique : parcours Accueil -> Découvrir -> Atelier sans compte", async ({ page }) => {
   const authenticatedCalls: string[] = [];
   page.on("request", (request) => {
-    if (request.headers()["authorization"] !== undefined) {
+    if (request.headers()["authorization"] !== undefined || request.headers()["x-api-key"] !== undefined) {
       authenticatedCalls.push(request.url());
     }
   });
