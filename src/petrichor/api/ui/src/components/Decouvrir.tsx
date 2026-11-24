@@ -45,7 +45,7 @@ export default function Decouvrir() {
   }, [load]);
 
   return (
-    <main className="mt-4" id="decouvrir">
+    <div className="mt-4" id="decouvrir">
       <section className="card">
         <h2>{t("decouvrir.title")}</h2>
         <p>{t("decouvrir.intro")}</p>
@@ -92,6 +92,6 @@ export default function Decouvrir() {
           </>
         ) : null}
       </section>
-    </main>
+    </div>
   );
 }

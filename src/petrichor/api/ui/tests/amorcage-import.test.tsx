@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderAtelier } from "./render-atelier";
+import { authMeResponse } from "./auth-me-mock";
 
 /* Import zone of the Amorçage step (issue #163): explicit click-or-drop
    zone, file name and size shown before sending, .pnml/.xml validation,
@@ -28,6 +29,11 @@ function mockFetch(
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+      const authMe = authMeResponse(url);
+      if (authMe !== null) {
+        calls.push({ url, method: init?.method ?? "GET", headers: (init?.headers ?? {}) as Record<string, string> } as (typeof calls)[number]);
+        return authMe;
+      }
       const call = { url, method: init?.method ?? "GET", body: init?.body as string | undefined };
       calls.push(call);
       const route = routes.find((candidate) => candidate.match(call));
@@ -56,6 +62,7 @@ const IMPORT_ROUTES = (modelStatus: number) => [
 
 beforeEach(() => {
   localStorage.clear();
+  window.history.replaceState(null, "", "/");
 });
 /* P77 wizard navigation helpers: the import paths live behind the source
    cards (local file / remote source -> catalog or direct URL). */
@@ -72,7 +79,7 @@ afterEach(() => {
 describe("amorçage import zone (issue #163)", () => {
   it("shows the selected file name and size before sending, then confirms the import with the model id", async () => {
     mockFetch(IMPORT_ROUTES(201));
-    renderAtelier();
+    await renderAtelier();
     const file = new File(["<pnml/>"], "philosophes.pnml", { type: "application/pnml+xml" });
     openLocalImport();
     fireEvent.change(screen.getByLabelText("Fichier PNML"), { target: { files: [file] } });
@@ -87,7 +94,7 @@ describe("amorçage import zone (issue #163)", () => {
 
   it("signals an idempotent re-import when the model is already known (200)", async () => {
     mockFetch(IMPORT_ROUTES(200));
-    renderAtelier();
+    await renderAtelier();
     const file = new File(["<pnml/>"], "philosophes.pnml", { type: "application/pnml+xml" });
     openLocalImport();
     fireEvent.change(screen.getByLabelText("Fichier PNML"), { target: { files: [file] } });
@@ -97,9 +104,9 @@ describe("amorçage import zone (issue #163)", () => {
     );
   });
 
-  it("refuses a non .pnml/.xml extension before any request", () => {
+  it("refuses a non .pnml/.xml extension before any request", async () => {
     mockFetch(IMPORT_ROUTES(201));
-    renderAtelier();
+    await renderAtelier();
     const file = new File(["hello"], "notes.txt", { type: "text/plain" });
     openLocalImport();
     fireEvent.change(screen.getByLabelText("Fichier PNML"), { target: { files: [file] } });
@@ -110,18 +117,18 @@ describe("amorçage import zone (issue #163)", () => {
     expect(calls.find((call) => call.url === "/v1/models")).toBeUndefined();
   });
 
-  it("requires a file before sending", () => {
+  it("requires a file before sending", async () => {
     mockFetch(IMPORT_ROUTES(201));
-    renderAtelier();
+    await renderAtelier();
     openLocalImport();
     fireEvent.click(screen.getByRole("button", { name: "Importer le modèle et créer la session" }));
     expect(screen.getByRole("alert")).toHaveTextContent("Aucun fichier sélectionné.");
     expect(calls.find((call) => call.url === "/v1/models")).toBeUndefined();
   });
 
-  it("accepts a dropped file in the import zone", () => {
+  it("accepts a dropped file in the import zone", async () => {
     mockFetch(IMPORT_ROUTES(201));
-    const { container } = renderAtelier();
+    const { container } = await renderAtelier();
     openLocalImport();
     const zone = container.querySelector(".import-zone");
     expect(zone).not.toBeNull();
@@ -137,7 +144,7 @@ describe("amorçage import zone (issue #163)", () => {
         respond: () => jsonResponse(422, { detail: "PNML invalide : balise <net> manquante." }),
       },
     ]);
-    renderAtelier();
+    await renderAtelier();
     const file = new File(["<pnml/>"], "broken.pnml", { type: "application/pnml+xml" });
     openLocalImport();
     fireEvent.change(screen.getByLabelText("Fichier PNML"), { target: { files: [file] } });

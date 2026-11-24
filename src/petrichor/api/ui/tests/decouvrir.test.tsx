@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "../src/App";
 import { applyLanguage } from "../src/i18n";
+import { authMeResponse } from "./auth-me-mock";
 
 /* Zone Découvrir publique (issue #206, contrat §1/§5) : listing du catalogue
    en lecture seule via GET /v1/catalog/models, sans aucun credential. */
@@ -32,6 +33,11 @@ function mockCatalogFetch() {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const authMe = authMeResponse(String(input));
+      if (authMe !== null) {
+        calls.push({ url: String(input), method: init?.method ?? "GET", headers: (init?.headers ?? {}) as Record<string, string>, body: init?.body as string | undefined } as (typeof calls)[number]);
+        return authMe;
+      }
       calls.push({
         url: String(input),
         headers: (init?.headers ?? {}) as Record<string, string>,
@@ -46,6 +52,7 @@ function mockCatalogFetch() {
 
 beforeEach(() => {
   localStorage.clear();
+  window.history.replaceState(null, "", "/");
   applyLanguage("fr");
   document.documentElement.lang = "fr";
   mockCatalogFetch();

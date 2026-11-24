@@ -312,6 +312,29 @@ class TestSessionCookieGate:
         assert response.status_code == 401
         assert response.json()["extensions"]["reason"] == REASON_SESSION_REQUIRED
 
+    def test_auth_me_surfaces_profile_claims_when_present(self) -> None:
+        # Web v1 (issue #209): the account menu displays the user name, so the
+        # profile claims travel with /auth/me when the IdP sent them.
+        claims = TokenClaims(
+            sub="user-1",
+            iss=ISSUER,
+            aud=[make_auth_settings().auth_client_id],
+            exp=4_000_000_000,
+            preferred_username="alice",
+            name="Alice Martin",
+        )
+        verifier = StubVerifier(settings=make_auth_settings(), outcome=claims)
+        client, _, _ = make_app(oidc_flow=make_flow(), verifier=verifier)
+        cookie = self._login(client)
+        response = client.get("/auth/me", headers={"Cookie": cookie})
+        assert response.status_code == 200
+        assert response.json() == {
+            "sub": "user-1",
+            "iss": ISSUER,
+            "preferred_username": "alice",
+            "name": "Alice Martin",
+        }
+
 
 class TestLogout:
     def test_logout_destroys_the_session_and_expires_the_cookie(self) -> None:

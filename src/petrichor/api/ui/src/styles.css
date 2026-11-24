@@ -549,3 +549,18 @@
   .edit-hint {
     @apply m-0 text-sm text-muted;
   }
+
+  /* Web v1 harmonisation (issue #209, contract §4): skip-link to the main
+     content, visually-hidden live announcer, and the error pages (404,
+     workshop without session) in the site charte. */
+  .skip-link {
+    @apply sr-only focus:not-sr-only focus:absolute focus:left-3 focus:top-3 focus:z-50 focus:rounded-card focus:bg-surface focus:px-3 focus:py-2 focus:text-primary;
+  }
+
+  .error-page {
+    @apply mx-auto mt-8 flex w-96 max-w-full flex-col items-start gap-3 rounded-card border border-line bg-surface p-4 shadow-soft;
+  }
+
+  #account-name {
+    @apply max-w-48 truncate text-sm font-semibold;
+  }

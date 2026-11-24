@@ -2,6 +2,7 @@ import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderAtelier } from "./render-atelier";
 import { applyLanguage } from "../src/i18n";
+import { authMeResponse } from "./auth-me-mock";
 
 /* Convergence asymétrique affichée (issue #127, P34): les convergences
    détectées à la génération sont signalées sur la carte, l'arbitrage humain
@@ -67,6 +68,11 @@ function mockFetch(routes: { match: (call: FetchCall) => boolean; respond: () =>
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const authMe = authMeResponse(String(input));
+      if (authMe !== null) {
+        calls.push({ url: String(input), method: init?.method ?? "GET", headers: (init?.headers ?? {}) as Record<string, string>, body: init?.body as string | undefined } as (typeof calls)[number]);
+        return authMe;
+      }
       const call: FetchCall = {
         url: String(input),
         method: init?.method ?? "GET",
@@ -92,6 +98,7 @@ const CONVERGENCES_ROUTE = {
 
 beforeEach(() => {
   localStorage.clear();
+  window.history.replaceState(null, "", "/");
   localStorage.setItem("petrichor.sessionId", "s1");
   applyLanguage("fr");
 });
@@ -112,7 +119,7 @@ describe("convergence asymétrique (issue #127)", () => {
         respond: () => jsonResponse(201, CONVERGENCES.convergences[0]),
       },
     ]);
-    renderAtelier();
+    await renderAtelier();
     fireEvent.click(screen.getByRole("button", { name: "2. Questions statiques" }));
     // The detected convergence is signaled on the card.
     await waitFor(() => expect(screen.getByText(/converge avec q0/)).toBeInTheDocument());
@@ -132,7 +139,7 @@ describe("convergence asymétrique (issue #127)", () => {
 
   it("refuse la fusion localement sans appeler l'API (pas de fusion automatique)", async () => {
     mockFetch([CONTRACT_ROUTE, CONVERGENCES_ROUTE]);
-    renderAtelier();
+    await renderAtelier();
     fireEvent.click(screen.getByRole("button", { name: "2. Questions statiques" }));
     await waitFor(() => expect(screen.getByText(/converge avec q0/)).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Refuser la fusion" }));
@@ -144,7 +151,7 @@ describe("convergence asymétrique (issue #127)", () => {
 
   it("affiche la question couverte et l'historique append-only des fusions", async () => {
     mockFetch([CONTRACT_ROUTE, CONVERGENCES_ROUTE]);
-    renderAtelier();
+    await renderAtelier();
     fireEvent.click(screen.getByRole("button", { name: "2. Questions statiques" }));
     await waitFor(() =>
       expect(screen.getByText(/couverte par la fusion avec q0/)).toBeInTheDocument(),
@@ -169,7 +176,7 @@ describe("convergence asymétrique (issue #127)", () => {
           }),
       },
     ]);
-    renderAtelier();
+    await renderAtelier();
     fireEvent.click(screen.getByRole("button", { name: "2. Questions statiques" }));
     await waitFor(() => expect(screen.getByText(/converge avec q0/)).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Arbitrer la fusion (accepter)" }));
