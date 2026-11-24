@@ -1,6 +1,6 @@
 """The notification domain language.
 
-Severity is a closed set with behavior (ADR-0006): every switch over it
+Severity is a closed set with behavior (ADR-0003): every switch over it
 must be exhaustive, enforced by ``match`` + ``assert_never``. Outcomes are
 a discriminated union so ``kind`` narrows statically.
 """
@@ -18,7 +18,7 @@ MAXIMUM_EMBED_FIELD_COUNT = 25
 
 
 class NotificationSeverity(StrEnum):
-    """How urgent a notification is (escalation contract, ADR-0011)."""
+    """How urgent a notification is (escalation contract, ADR-0006)."""
 
     QUESTION = "question"
     URGENT = "urgent"

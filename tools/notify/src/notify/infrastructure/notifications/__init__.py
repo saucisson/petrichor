@@ -1,1 +1,1 @@
-"""Notification adapters: console and Discord webhook (ADR-0011)."""
+"""Notification adapters: console and Discord webhook (ADR-0006)."""

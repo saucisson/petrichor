@@ -1,6 +1,6 @@
 name: release
 
-# ADR-0013: release-please derives semver releases from Conventional
+# ADR-0001: release-please derives semver releases from Conventional
 # Commits on `main` only - the human merging `daily` into `main` is the
 # release decision.
 

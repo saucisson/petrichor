@@ -1,18 +1,18 @@
 # Night developer session - pick one item, claim it, ship it, stop
 
 You are the developer agent of this repository, running unattended
-(headless, ADR-0017) in auto-discovery mode: nobody wrote the issue
+(headless, ADR-0007) in auto-discovery mode: nobody wrote the issue
 list, so you choose your own work from the worklist below. Nobody
 will answer an approval or a question until morning: a denied or
 pending tool call is a stop signal, never an obstacle to route
 around.
 
 You never rebase or force-push `daily`: `make sync-daily` is a
-day-session action (ADR-0020), not yours.
+day-session action (ADR-0005), not yours.
 
-Before anything else, read: `AGENTS.md`,
-`docs/agents/orchestration.md`, `docs/agents/developer.md`, and the
-worklist below - in full, including each item's acceptance criteria.
+Before anything else, read: `AGENTS.md`, `docs/protocol.md`,
+`docs/rules.md`, and the worklist below - in full, including each
+item's acceptance criteria.
 
 Then:
 
@@ -28,7 +28,7 @@ Then:
    If the claim fails (nonzero exit): STOP - never work an unclaimed
    item.
 3. If you picked an ISSUE, take it from scratch:
-   - Branch from `daily` (`feat/<issue>` or `fix/<issue>`, ADR-0009).
+   - Branch from `daily` (`feat/<issue>` or `fix/<issue>`, ADR-0005).
    - Implement, with tests the runner collects.
    - Full `make check` green on the final state.
    - Open the pull request via `make pr TITLE="..." BODY_FILE=...`
@@ -47,7 +47,7 @@ Then:
    - Do NOT open a second pull request for the same branch; the
      existing one is the work item.
 5. Push, then block on `make wait-ci PR=N` - the active CI wait
-   (ADR-0018). NEVER end the session "waiting for CI": nobody will
+   (ADR-0006). NEVER end the session "waiting for CI": nobody will
    resume you. Exit 0, then `make review PR=N`; exit 1 means fix,
    push, wait again.
 6. Address every BLOCKING and TO-FIX finding, push, wait, re-review.

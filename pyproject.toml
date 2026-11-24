@@ -9,7 +9,6 @@ authors = [{ name = "Alban Linard" }]
 requires-python = ">=3.15"
 dependencies = [
     "httpx>=0.28",
-    "joserfc>=1.8.0",
     "pydantic>=2.11",
     "pydantic-settings>=2.9",
     "structlog>=25.1",
@@ -27,7 +26,6 @@ dev = [
     "pre-commit>=4.2",
     "pytest>=8.4",
     "pytest-cov>=7.0",
-    "pytest-xdist>=3.8",
     "ruff>=0.17",
 ]
 
@@ -36,18 +34,18 @@ requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-# ADR-0014: the notify tool lives in tools/ - an instance's product
+# ADR-0001: the notify tool lives in tools/ - an instance's product
 # code lives in its own directory, not in this template.
 packages = ["tools/notify/src/notify"]
 
 # ---------------------------------------------------------------------------
 # Ruff: linting, formatting and the mechanically-enforced style contract.
-# ADR-0004 (readability-first style) and ADR-0006 (precise typing) live here.
+# ADR-0002 (readability-first style) and ADR-0003 (precise typing) live here.
 # ---------------------------------------------------------------------------
 [tool.ruff]
 target-version = "py315"
 line-length = 100
-src = ["tools/notify/src", "tools/notify/tests", "scripts", "src"]
+src = ["tools/notify/src", "tools/notify/tests", "scripts"]
 
 [tool.ruff.lint]
 # T20 bans print() outside CLI entry points (see per-file-ignores below).
@@ -64,18 +62,18 @@ select = [
     "PTH",   # use pathlib, not os.path
     "RET",   # flake8-return
     "RUF",   # ruff-specific rules
-    "S",     # flake8-bandit subset: security (ADR-0008)
+    "S",     # flake8-bandit subset: security (ADR-0004)
     "SIM",   # flake8-simplify
     "T",     # flake8-print: no print() in library code
     "TC",    # type-checking-only imports
     "TID",   # banned relative imports
     "UP",    # pyupgrade: modern syntax
     "W",     # pycodestyle warnings
-    "ANN",   # annotations everywhere (ADR-0006)
+    "ANN",   # annotations everywhere (ADR-0003)
     "BLE",   # no blind except
 ]
 ignore = [
-    "ANN401", # Any is allowed in typing-only overrides documented per ADR-0006.
+    "ANN401", # Any is allowed in typing-only overrides documented per ADR-0003.
 ]
 
 [tool.ruff.lint.mccabe]
@@ -85,7 +83,7 @@ max-complexity = 10
 # annotation-only imports can live in TYPE_CHECKING blocks at zero
 # runtime cost - EXCEPT where the class introspects its own fields at
 # definition time: pydantic models and settings need their annotation
-# imports at runtime, hence the exemption below (ADR-0006).
+# imports at runtime, hence the exemption below (ADR-0003).
 [tool.ruff.lint.flake8-type-checking]
 runtime-evaluated-base-classes = [
     "pydantic.BaseModel",
@@ -99,7 +97,7 @@ max-args = 8
 convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
-# CLI entry points legitimately write to stdout (ADR-0005: console output is
+# CLI entry points legitimately write to stdout (ADR-0003: console output is
 # presentation, logging is narration - they are different channels).
 # S101: the narrowing assertion in select_dispatcher is the mypy-canonical
 # pattern for Optional narrowing after an early return.
@@ -109,24 +107,10 @@ convention = "google"
 # ever reaches argv; S607 git/uv are resolved through PATH, like every
 # documented git invocation (trusted machine, not a seccomp boundary).
 "scripts/*" = ["T201", "S603", "S607"]
-# A driver's tests live in scripts/tests/ (ADR-0014, ADR-0021) and are
+# A driver's tests live in scripts/tests/ (ADR-0001) and are
 # collected by the same gate as the tools' tests (see testpaths
 # below); they get the same test exemptions.
-"tests/*" = [
-    "S101",     # asserts are the point of tests
-    "D",        # docstrings optional in tests
-    "PLR2004",  # magic values are fine in test scenarios
-]
 "scripts/tests/*" = [
-    "S101",     # asserts are the point of tests
-    "D",        # docstrings optional in tests
-    "PLR2004",  # magic values are fine in test scenarios
-]
-# Kept until the scripts/tests/ layout lands on main via daily (the code
-# sync is on daily, this branch is constitutional-only): main still has
-# driver tests at scripts/test_*.py, and dropping this block now would
-# turn main's lint red.
-"scripts/test_*.py" = [
     "S101",     # asserts are the point of tests
     "D",        # docstrings optional in tests
     "PLR2004",  # magic values are fine in test scenarios
@@ -141,7 +125,7 @@ convention = "google"
 quote-style = "double"
 
 # ---------------------------------------------------------------------------
-# mypy: strict-plus typing (ADR-0006).
+# mypy: strict-plus typing (ADR-0003).
 # ---------------------------------------------------------------------------
 [tool.mypy]
 python_version = "3.15"
@@ -153,7 +137,7 @@ warn_unreachable = true
 plugins = ["pydantic.mypy"]
 
 # Escape hatch for untyped third-party integrations: an override MUST carry a
-# comment pointing to the issue or ADR that justifies it (ADR-0006).
+# comment pointing to the issue or ADR that justifies it (ADR-0003).
 # [[tool.mypy.overrides]]
 # module = "someuntypedlib.*"
 # disallow_any_explicit = false
@@ -181,27 +165,23 @@ layers = [
 ]
 
 # ---------------------------------------------------------------------------
-# pytest and coverage (ADR-0007): 90% minimum, no silent skips.
+# pytest and coverage (ADR-0004): 90% minimum, no silent skips.
 # ---------------------------------------------------------------------------
 [tool.pytest.ini_options]
 # scripts/ is collected too: a script's tests live in scripts/tests/
-# (ADR-0014) and run in the same gate as the tools' tests - a test the
+# (ADR-0001) and run in the same gate as the tools' tests - a test the
 # runner never collects is theater.
-testpaths = ["tools/notify/tests", "scripts/tests", "tests"]
-# ADR-0100: the product package lives in src/.
-pythonpath = ["src"]
-addopts = "--strict-markers --cov=notify --cov=petrichor --cov-branch --cov-report=term-missing --cov-fail-under=90"
+testpaths = ["tools/notify/tests", "scripts"]
+addopts = "--strict-markers --cov=notify --cov-branch --cov-report=term-missing --cov-fail-under=90"
 markers = [
     "integration: exercises adapter boundaries through injected fakes (http, filesystem).",
-    "property: hypothesis-based invariant tests (ADR-0012).",
-    "engine: runs a driver inside its real docker compose container; a failure is a CI failure, never a skip (spec §19.4).",
-    "ui: drives the built UI in a real browser (Playwright) against the real API on the real compose engines; a failure is a CI failure, never a skip (spec §20.10, issue #128).",
+    "property: hypothesis-based invariant tests (ADR-0004).",
 ]
 filterwarnings = ["error"]
 
 [tool.coverage.run]
 branch = true
-source = ["notify", "petrichor"]
+source = ["notify"]
 
 [tool.coverage.report]
 show_missing = true
@@ -212,7 +192,7 @@ exclude_lines = [
 ]
 
 # ---------------------------------------------------------------------------
-# mutmut (ADR-0012): run on `daily` at end of day, before the human review.
+# mutmut (ADR-0004): run on `daily` at end of day, before the human review.
 # ---------------------------------------------------------------------------
 [tool.mutmut]
 paths_to_mutate = ["tools/notify/src/notify/"]

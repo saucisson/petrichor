@@ -1,4 +1,4 @@
-# GitLab mirror of the GitHub CI (ADR-0007, ADR-0008).
+# GitLab mirror of the GitHub CI (ADR-0004).
 # Same gates, same order: lint, format, types, layers, tests, security.
 
 stages:
@@ -20,7 +20,7 @@ quality-gate:
     - uv run pytest
 
 # The reviewer agent runs LOCALLY on the developer machine as a headless
-# Vibe Code session (ADR-0010), spending the plan's included usage
+# Vibe Code session (ADR-0006), spending the plan's included usage
 # instead of pay-per-token API calls - there is no reviewer job here.
 # On GitLab, keep "merge when pipeline succeeds" as the merge mechanism.
 

@@ -1,74 +1,40 @@
-"""Shared GitHub API helpers for the drivers that call it (ADR-0021).
+"""Shared GitHub API helpers for the drivers that call it (ADR-0001).
 
 The drivers that talk to the GitHub API share the same fail-closed
 fetch primitives here. The modules that never touch the API
 (``day-report``, ``sync-daily``, ``review-bundle``) do not import this
-module, so they stay stdlib-only (ADR-0021).
+module, so they stay stdlib-only (ADR-0001).
 """
 
-import json
 import sys
-from typing import TYPE_CHECKING, NewType
+from typing import TYPE_CHECKING
 
 import httpx
 
 from scripts._shared import (
     EXIT_CODE_PROTOCOL_FAILURE,
     GITHUB_API_BASE_URL,
-    PullRequestIdentifier,
-    RepositorySlug,
     github_headers,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-HeadSha = NewType("HeadSha", str)
-"""A commit SHA at the pull request head."""
-
-HTTP_TIMEOUT_SECONDS = 30.0
-
 
 def open_github_client(*, token: str) -> httpx.Client:
     """Build the GitHub API client every driver uses."""
-    return httpx.Client(headers=github_headers(token=token), timeout=HTTP_TIMEOUT_SECONDS)
-
-
-def request_or_fail(
-    *,
-    http_client: httpx.Client,
-    method: str,
-    url: str,
-    json_payload: dict[str, object] | None = None,
-    params: dict[str, str] | None = None,
-) -> httpx.Response:
-    """Send one request; a transport error fails closed with exit 2.
-
-    A network failure is never a traceback and never exit 1: the
-    caller cannot distinguish "refused" from "unreachable", so the
-    protocol failure is the only honest verdict.
-    """
-    try:
-        return http_client.request(method, url, json=json_payload, params=params)
-    except httpx.TransportError as transport_error:
-        print(
-            f"Error: the GitHub API is unreachable ({method} {url}): {transport_error}",
-            file=sys.stderr,
-        )
-        raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE) from transport_error
+    return httpx.Client(headers=github_headers(token=token), timeout=30.0)
 
 
 def fetch_pull_request(
     *,
     http_client: httpx.Client,
-    repository_slug: RepositorySlug,
-    pull_request_number: PullRequestIdentifier,
+    repository_slug: str,
+    pull_request_number: int,
 ) -> dict[str, object]:
     """Fetch the pull request, or fail closed."""
-    response = request_or_fail(
-        http_client=http_client,
-        method="GET",
-        url=f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/pulls/{pull_request_number}",
+    response = http_client.get(
+        f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/pulls/{pull_request_number}"
     )
     if not response.is_success:
         print(
@@ -77,11 +43,7 @@ def fetch_pull_request(
             file=sys.stderr,
         )
         raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
-    try:
-        pull_request: object = response.json()
-    except json.JSONDecodeError as json_error:
-        print("Error: the pull request payload is not valid JSON.", file=sys.stderr)
-        raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE) from json_error
+    pull_request: object = response.json()
     if not isinstance(pull_request, dict):
         raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
     return pull_request
@@ -90,14 +52,12 @@ def fetch_pull_request(
 def fetch_check_runs(
     *,
     http_client: httpx.Client,
-    repository_slug: RepositorySlug,
-    head_sha: HeadSha,
+    repository_slug: str,
+    head_sha: str,
 ) -> list[dict[str, object]]:
     """List the CI check runs of the pull request head, or fail closed."""
-    response = request_or_fail(
-        http_client=http_client,
-        method="GET",
-        url=f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/commits/{head_sha}/check-runs",
+    response = http_client.get(
+        f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/commits/{head_sha}/check-runs"
     )
     if not response.is_success:
         print(
@@ -106,25 +66,21 @@ def fetch_check_runs(
             file=sys.stderr,
         )
         raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
-    try:
-        payload: object = response.json()
-    except json.JSONDecodeError as json_error:
-        print(f"Error: the check-runs payload of {head_sha} is not valid JSON.", file=sys.stderr)
-        raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE) from json_error
+    payload: object = response.json()
     check_runs = payload.get("check_runs", []) if isinstance(payload, dict) else []
     if not isinstance(check_runs, list):
         return []
     return [entry for entry in check_runs if isinstance(entry, dict)]
 
 
-def extract_head_sha(*, pull_request: dict[str, object]) -> HeadSha:
+def extract_head_sha(*, pull_request: dict[str, object]) -> str:
     """Return the pull request head SHA, or fail closed."""
     head_container = pull_request.get("head")
     head_sha = head_container.get("sha", "") if isinstance(head_container, dict) else ""
     if not head_sha:
         print("Error: the pull request has no head SHA.", file=sys.stderr)
         raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
-    return HeadSha(head_sha)
+    return head_sha
 
 
 def extract_head_ref(*, pull_request: dict[str, object]) -> str:

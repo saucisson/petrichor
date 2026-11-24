@@ -1,33 +1,20 @@
-r"""The reviewer agent: one local session, one structured verdict (ADR-0010).
+r"""The reviewer agent: one local session, one structured verdict (ADR-0006).
 
 The reviewer is a headless Vibe Code session (``vibe --prompt-file``)
 launched in an ISOLATED empty directory whose only content is the
 review bundle (built by ``make review-bundle``). Isolation is enforced
 by construction: the session sees no repository, no AGENTS.md and no
-session history - only the bundle (ADR-0010). It answers with a JSON
+session history - only the bundle (ADR-0006). It answers with a JSON
 report; this driver recomputes every count locally, fails closed on
 anything it cannot verify, and exits with a status the merge driver
 (``make merge-pr``) gates on.
 
 The session spends the INCLUDED usage of the local Vibe Code plan,
-not pay-per-token API calls - that is the point of ADR-0010.
-
-P60 (issue #132): the turn budget is configurable (``REVIEWER_MAX_TOURS``,
-default 12, was a hard-coded 8), the CLI binary is pinnable
-(``REVIEWER_CLI_COMMAND``), and a preflight checks presence, version
-(>= 3.x) and ``--prompt-file`` capability before launching - a refusal
-exits 3 (preconditions unmet), never an opaque exit 2.
-
-P61 (issue #133): every session failure carries a TYPED cause
-(``FailureCause``: deadline / turn-limit / preconditions / protocol),
-written into the report file as ``failure_cause`` - never a bare
-"exit 2". The review driver (``scripts/review.py``) reads it to journal
-bounded attempts and escalate to the human.
+not pay-per-token API calls - that is the point of ADR-0006.
 """
 
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -41,21 +28,12 @@ if TYPE_CHECKING:
     import argparse
     from collections.abc import Sequence
 
-CLI_COMMAND_VARIABLE = "REVIEWER_CLI_COMMAND"
-DEFAULT_CLI_COMMAND = "vibe"
+REVIEWER_CLI_COMMAND = "vibe"
 REVIEWER_MODEL_VARIABLE = "REVIEWER_MODEL"
 REVIEWER_MAX_TOKENS_VARIABLE = "REVIEWER_MAX_TOKENS"
 SESSION_TIME_LIMIT_VARIABLE = "REVIEWER_TIME_LIMIT_SECONDS"
 DEFAULT_SESSION_TIME_LIMIT_SECONDS = 600
-SESSION_MAX_TURNS_VARIABLE = "REVIEWER_MAX_TOURS"
-# P60 (issue #132): the turn budget becomes configurable, default raised from
-# 8 to 12 - the P40/P42 reviews hit the old limit of 8 mid-session.
-DEFAULT_MAXIMUM_SESSION_TURNS = 12
-# The driver invokes the CLI with --prompt-file, which requires vibe >= 3.x.
-MINIMUM_CLI_MAJOR_VERSION = 3
-REQUIRED_CLI_OPTION = "--prompt-file"
-
-EXIT_CODE_PRECONDITIONS_UNMET = 3  # preflight refusal: the session never started
+MAXIMUM_SESSION_TURNS = 8
 
 BUNDLE_FILE_NAME = "bundle.md"
 SYSTEM_PROMPT_FILE_NAME = "system-prompt.md"
@@ -74,62 +52,8 @@ class ReviewProtocolError(RuntimeError):
     """The reviewer answer violated the report contract."""
 
 
-class FailureCause(StrEnum):
-    """The typed cause of a failed review session (P61, issue #133).
-
-    A closed set: the journal and the escalation message never carry a
-    bare exit code, always one of these causes.
-    """
-
-    DEADLINE = "deadline"
-    TURN_LIMIT = "turn-limit"
-    PRECONDITIONS = "preconditions"
-    PROTOCOL = "protocol"
-
-
-class SessionFailure(SystemExit):
-    """A failed session exit carrying its typed cause (P61).
-
-    Subclasses ``SystemExit`` so the existing exit-code contract is
-    unchanged; ``failure_cause`` lets the caller journal the failure
-    without re-parsing stderr.
-    """
-
-    def __init__(self, *, code: int, failure_cause: FailureCause) -> None:
-        """Carry the exit code (SystemExit contract) and the typed cause."""
-        super().__init__(code)
-        self.failure_cause = failure_cause
-
-
-def classify_session_failure(*, returncode: int, stderr: str) -> FailureCause:
-    """Map a session exit to its typed cause (P61).
-
-    Exit 3 is always preconditions (the session never started). For a
-    runtime failure (exit 2), the CLI's stderr names the budget that was
-    reached: deadline (wall-clock) or turn limit - the two budgets that
-    killed the P40/P42 reviews. Anything else is a protocol failure.
-    """
-    if returncode == EXIT_CODE_PRECONDITIONS_UNMET:
-        return FailureCause.PRECONDITIONS
-    lowered_stderr = stderr.lower()
-    if (
-        "time limit" in lowered_stderr
-        or "time-limit" in lowered_stderr
-        or "deadline" in lowered_stderr
-    ):
-        return FailureCause.DEADLINE
-    if (
-        "max turns" in lowered_stderr
-        or "max-turns" in lowered_stderr
-        or "turn limit" in lowered_stderr
-        or "turn budget" in lowered_stderr
-    ):
-        return FailureCause.TURN_LIMIT
-    return FailureCause.PROTOCOL
-
-
 class FindingSeverity(StrEnum):
-    """The severity ladder of the review report (ADR-0010)."""
+    """The severity ladder of the review report (ADR-0006)."""
 
     BLOCKING = "BLOCKING"
     TO_FIX = "TO-FIX"
@@ -193,11 +117,11 @@ evidence, then recommendation). Zero findings is a valid answer."""
 
 
 def load_model_name() -> str:
-    """The reviewing model; empty means the CLI's active model (ADR-0010).
+    """The reviewing model; empty means the CLI's active model (ADR-0006).
 
     Set ``REVIEWER_MODEL`` to point the session at a different model
     family than the developer agent - the model-diversity lever of
-    ADR-0010 survives the move to local sessions.
+    ADR-0006 survives the move to local sessions.
     """
     return os.environ.get(REVIEWER_MODEL_VARIABLE, "").strip()
 
@@ -222,76 +146,6 @@ def load_time_limit_seconds() -> int:
         raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE) from None
 
 
-def load_max_turns() -> int:
-    """The session's turn budget (``--max-turns``); ``REVIEWER_MAX_TOURS`` (P60)."""
-    raw_value = os.environ.get(SESSION_MAX_TURNS_VARIABLE, "").strip()
-    if not raw_value:
-        return DEFAULT_MAXIMUM_SESSION_TURNS
-    try:
-        return int(raw_value)
-    except ValueError:
-        print(
-            f"Error: {SESSION_MAX_TURNS_VARIABLE} is not an integer: {raw_value}.",
-            file=sys.stderr,
-        )
-        raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE) from None
-
-
-def load_cli_command() -> str:
-    """The reviewer CLI binary; ``REVIEWER_CLI_COMMAND`` pins an exact one (P60).
-
-    This replaces the ad-hoc PATH wrappers used when the local binary was too
-    old: point the variable at a vibe 3.x binary instead.
-    """
-    return os.environ.get(CLI_COMMAND_VARIABLE, "").strip() or DEFAULT_CLI_COMMAND
-
-
-VERSION_PATTERN = re.compile(r"(\d+)\.(\d+)\.(\d+)")
-
-
-def cli_preflight(*, command: str) -> str | None:
-    """Check the reviewer CLI before launching: presence, version, capability (P60).
-
-    Returns the refusal reason, or None when the CLI can run the session. A
-    refusal exits with the "preconditions unmet" code (3): the session never
-    started - this replaces the opaque exit 2 of a too-old binary.
-    """
-    if shutil.which(command) is None:
-        return (
-            f"the reviewer CLI {command!r} is not on PATH"
-            f" - set {CLI_COMMAND_VARIABLE} to the exact binary to use"
-        )
-    try:
-        version_run = subprocess.run(
-            [command, "--version"], capture_output=True, text=True, check=False
-        )
-        help_run = subprocess.run([command, "--help"], capture_output=True, text=True, check=False)
-    except OSError as probe_error:
-        return f"could not run {command!r} --version/--help: {probe_error}"
-    version_output = version_run.stdout + version_run.stderr
-    version_match = VERSION_PATTERN.search(version_output)
-    if version_match is None:
-        return (
-            f"could not parse the version of {command!r}"
-            f" (--version output: {version_output.strip()!r})"
-            f" - set {CLI_COMMAND_VARIABLE} to a vibe {MINIMUM_CLI_MAJOR_VERSION}.x binary"
-        )
-    major_version = int(version_match.group(1))
-    if major_version < MINIMUM_CLI_MAJOR_VERSION:
-        return (
-            f"the review driver requires vibe >= {MINIMUM_CLI_MAJOR_VERSION}.x"
-            f" ({REQUIRED_CLI_OPTION} support), found {version_match.group(0)}"
-            f" - set {CLI_COMMAND_VARIABLE} to a vibe {MINIMUM_CLI_MAJOR_VERSION}.x binary"
-        )
-    help_output = help_run.stdout + help_run.stderr
-    if REQUIRED_CLI_OPTION not in help_output:
-        return (
-            f"{command!r} does not support {REQUIRED_CLI_OPTION}"
-            f" - set {CLI_COMMAND_VARIABLE} to a vibe {MINIMUM_CLI_MAJOR_VERSION}.x binary"
-        )
-    return None
-
-
 def run_reviewer_session(*, model_name: str, bundle_path: Path) -> str:
     """Run the headless reviewer session; return its final answer text.
 
@@ -301,16 +155,7 @@ def run_reviewer_session(*, model_name: str, bundle_path: Path) -> str:
     session cannot spend approval prompts either: programmatic mode
     denies any tool call that would need one, so the review answers
     from the bundle alone.
-
-    P60: the CLI is preflighted first (presence, version >= 3.x,
-    ``--prompt-file`` capability); a refusal exits 3 (preconditions
-    unmet), never the opaque exit 2 of a launch failure.
     """
-    cli_command = load_cli_command()
-    preflight_refusal = cli_preflight(command=cli_command)
-    if preflight_refusal is not None:
-        print(f"Reviewer CLI preflight refused: {preflight_refusal}.", file=sys.stderr)
-        raise SystemExit(EXIT_CODE_PRECONDITIONS_UNMET)
     session_directory = Path(tempfile.mkdtemp(prefix="reviewer-session-"))
     try:
         shutil.copyfile(bundle_path, session_directory / BUNDLE_FILE_NAME)
@@ -319,7 +164,7 @@ def run_reviewer_session(*, model_name: str, bundle_path: Path) -> str:
         )
         (session_directory / PROMPT_FILE_NAME).write_text(REVIEWER_PROMPT_TEXT, encoding="utf-8")
         command = [
-            cli_command,
+            REVIEWER_CLI_COMMAND,
             "--prompt-file",
             str(session_directory / PROMPT_FILE_NAME),
             "--system-prompt-file",
@@ -327,7 +172,7 @@ def run_reviewer_session(*, model_name: str, bundle_path: Path) -> str:
             "--output",
             "json",
             "--max-turns",
-            str(load_max_turns()),
+            str(MAXIMUM_SESSION_TURNS),
             "--time-limit",
             str(load_time_limit_seconds()),
         ]
@@ -335,34 +180,23 @@ def run_reviewer_session(*, model_name: str, bundle_path: Path) -> str:
             command += ["--model", model_name]
         if load_max_tokens():
             command += ["--max-tokens", load_max_tokens()]
-        try:
-            completed_process = subprocess.run(
-                command,
-                cwd=session_directory,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-        except OSError as launch_error:
-            print(
-                f"Error: the reviewer session could not start ({cli_command}): {launch_error}",
-                file=sys.stderr,
-            )
-            raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE) from launch_error
+        completed_process = subprocess.run(
+            command,
+            cwd=session_directory,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
     finally:
         shutil.rmtree(session_directory, ignore_errors=True)
     if completed_process.returncode != EXIT_CODE_REVIEWED_CLEAN:
-        failure_cause = classify_session_failure(
-            returncode=completed_process.returncode,
-            stderr=completed_process.stderr,
-        )
         print(
-            f"Error: the reviewer session failed with cause {failure_cause.value}"
-            f" (exit code {completed_process.returncode}):"
-            f" {completed_process.stderr.strip()}",
+            f"Error: the reviewer session exited with code"
+            f" {completed_process.returncode} (not started, runtime failure,"
+            f" or a budget limit reached): {completed_process.stderr.strip()}",
             file=sys.stderr,
         )
-        raise SessionFailure(code=EXIT_CODE_PROTOCOL_FAILURE, failure_cause=failure_cause)
+        raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
     return extract_answer_text(raw_session_output=completed_process.stdout)
 
 
@@ -525,10 +359,10 @@ def render_markdown_comment(
         comment_sections.append("Zero findings.")
     comment_sections.append("")
     comment_sections.append(
-        "The reviewer never merges and never modifies code (ADR-0010)."
+        "The reviewer never merges and never modifies code (ADR-0006)."
         " The merge driver (`make merge-pr`) refuses to merge while any"
         " BLOCKING finding stands; merging into `daily` is executed by"
-        " the developer agent on this report (ADR-0009)."
+        " the developer agent on this report (ADR-0005)."
     )
     return "\n".join(comment_sections)
 
@@ -537,8 +371,8 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     """Register the agent-review subcommand."""
     subparser = subparsers.add_parser(
         "agent-review",
-        help="Run the local reviewer session on a review bundle (ADR-0010).",
-        description="Run the local reviewer session on a review bundle (ADR-0010).",
+        help="Run the local reviewer session on a review bundle (ADR-0006).",
+        description="Run the local reviewer session on a review bundle (ADR-0006).",
     )
     subparser.add_argument(
         "--bundle-file",
@@ -558,50 +392,18 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     subparser.set_defaults(runner=run)
 
 
-def write_failure_report(*, report_file: str, exit_code: int, failure_cause: FailureCause) -> None:
-    """Write a failure report so the driver can journal the typed cause (P61).
-
-    A failed session still produces a report file - with ``failure_cause``
-    instead of findings - so ``scripts/review.py`` never journals a bare
-    exit code.
-    """
-    Path(report_file).write_text(
-        json.dumps({"exit_code": exit_code, "failure_cause": failure_cause.value}, indent=2),
-        encoding="utf-8",
-    )
-
-
 def run(*, arguments: argparse.Namespace) -> int:
     """Entry point: bundle in, verified verdict out."""
-    try:
-        answer_text = run_reviewer_session(
-            model_name=load_model_name(),
-            bundle_path=Path(arguments.bundle_file),
-        )
-    except SystemExit as exit_error:
-        exit_code = (
-            exit_error.code if isinstance(exit_error.code, int) else EXIT_CODE_PROTOCOL_FAILURE
-        )
-        failure_cause = getattr(exit_error, "failure_cause", None)
-        if not isinstance(failure_cause, FailureCause):
-            failure_cause = classify_session_failure(returncode=exit_code, stderr="")
-        write_failure_report(
-            report_file=arguments.report_file,
-            exit_code=exit_code,
-            failure_cause=failure_cause,
-        )
-        return exit_code
+    answer_text = run_reviewer_session(
+        model_name=load_model_name(),
+        bundle_path=Path(arguments.bundle_file),
+    )
     try:
         reported_findings = parse_report(answer_text=narrow_json_answer(answer_text=answer_text))
     except ReviewProtocolError as protocol_error:
         print(
             f"Error: the reviewer answer violated the contract: {protocol_error}",
             file=sys.stderr,
-        )
-        write_failure_report(
-            report_file=arguments.report_file,
-            exit_code=EXIT_CODE_PROTOCOL_FAILURE,
-            failure_cause=FailureCause.PROTOCOL,
         )
         return EXIT_CODE_PROTOCOL_FAILURE
     findings = reported_findings

@@ -6,10 +6,8 @@
 
 # Constitutional files are never changed by agents.
 /docs/decisions/ @YOUR_GITHUB_USERNAME
-/docs/architecture.md @YOUR_GITHUB_USERNAME
-/docs/branching.md @YOUR_GITHUB_USERNAME
-/docs/review-checklist.md @YOUR_GITHUB_USERNAME
-/docs/agents/ @YOUR_GITHUB_USERNAME
+/docs/rules.md @YOUR_GITHUB_USERNAME
+/docs/protocol.md @YOUR_GITHUB_USERNAME
 /AGENTS.md @YOUR_GITHUB_USERNAME
 /pyproject.toml @YOUR_GITHUB_USERNAME
 /.pre-commit-config.yaml @YOUR_GITHUB_USERNAME

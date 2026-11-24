@@ -1,4 +1,4 @@
-# Renovate configuration (ADR-0013): scheduled, grouped dependency maintenance.
+# Renovate configuration (ADR-0001): scheduled, grouped dependency maintenance.
 # Agents never bump dependencies themselves - this bot owns that job.
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
@@ -13,12 +13,12 @@
       "automerge": false
     },
     {
-      "description": "Patch-only updates may automerge when CI is green (ADR-0009 criteria).",
+      "description": "Patch-only updates may automerge when CI is green (ADR-0005 criteria).",
       "matchUpdateTypes": ["patch"],
       "automerge": true
     },
     {
-      "description": "Major bumps always require the human owner (escalation list, ADR-0010).",
+      "description": "Major bumps always require the human owner (escalation list, ADR-0006).",
       "matchUpdateTypes": ["major"],
       "automerge": false,
       "labels": ["needs-human"]

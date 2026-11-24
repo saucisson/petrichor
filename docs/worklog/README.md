@@ -1,23 +1,24 @@
-# Worklog — enregistrements du dépôt (destination humaine)
+# Worklog - repository records (human destination)
 
-Ce dossier contient les enregistrements d'audit du dépôt, destinés à
-l'humain qui relit la journée avant de merger `daily` dans `main`.
+This folder holds the audit records of the repository, meant for the
+human who reviews the day before merging `daily` into `main`.
 
 ## Conventions
 
-- `YYYY-MM-DD-pr-<N>.md` : une carte d'index par pull request, générée
-  automatiquement par `make pr` au moment de la création du PR. Le driver
-  la commit sur la branche du PR (`worklog: PR #N`) et la pousse.
-- `YYYY-MM-DD-direct-<slug>.md` : une entrée par commit direct sur `daily`
-  (revert, correction docs-only, hotfix), créée depuis `_template.md`
-  dans le même commit.
-- `archive-2026-11-12.md` : l'ancien fichier monolithique d'audit,
-  archivé inchangé lors de la migration vers le worklog v2 (ADR-0022).
+- `YYYY-MM-DD-pr-<N>.md`: one index card per pull request, generated
+  automatically by `make pr` when the pull request is created. The
+  driver commits it on the PR branch (`worklog: PR #N`) and pushes it.
+- `YYYY-MM-DD-direct-<slug>.md`: one entry per direct commit on `daily`
+  (revert, docs-only fix, hotfix), created from `_template.md` in the
+  same commit.
+- `README.md` and `_template.md`: this documentation and the entry
+  template for direct commits.
 
-## Règles
+## Rules
 
-- Aucun agent ne lit ce dossier : la génération est automatique (PR) ou
-  depuis le template (commit direct).
-- Jamais de modification d'une entrée existante, jamais de purge.
-- L'audit du soir passe par `make day-report`, qui liste les entrées du
-  jour.
+- No agent reads this folder: generation is automatic (pull requests)
+  or from the template (direct commits).
+- Never modify an existing entry, never purge one: the git history is
+  the tamper-evident backstop.
+- The evening audit goes through `make day-report`, which lists the
+  day's entries.

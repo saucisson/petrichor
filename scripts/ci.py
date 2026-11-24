@@ -1,4 +1,4 @@
-"""Active CI wait: block until CI concludes on the pull request head (ADR-0018).
+"""Active CI wait: block until CI concludes on the pull request head (ADR-0006).
 
 A session that ends with "the review will happen once CI finishes" is
 attended thinking: a headless session never resumes, and nobody types
@@ -19,19 +19,17 @@ waiting, the driver switches to the new head and keeps waiting -
 exactly like the review, it never judges a stale head.
 """
 
-import json
 import os
 import sys
 import time
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
-from scripts._github import extract_head_sha, open_github_client, request_or_fail
+from scripts._github import extract_head_sha, open_github_client
 from scripts._shared import (
     EXIT_CODE_CRITERIA_UNMET,
     EXIT_CODE_PROTOCOL_FAILURE,
     EXIT_CODE_SUCCESS,
     GITHUB_API_BASE_URL,
-    PullRequestIdentifier,
     load_github_token,
     resolve_repository_slug,
 )
@@ -47,24 +45,11 @@ DEFAULT_POLL_INTERVAL_SECONDS = 20
 DEFAULT_TIMEOUT_SECONDS = 1800
 NOT_FOUND_STATUS_CODE = 404
 
-PollStatus = Literal[
-    "fetch-failed",
-    "no-checks",
-    "pending",
-    "green",
-    "failed",
-]
-"""The closed set of poll verdicts (ADR-0006)."""
-
-POLL_STATUS_FETCH_FAILED: PollStatus = "fetch-failed"
-POLL_STATUS_NO_CHECKS: PollStatus = "no-checks"
-POLL_STATUS_PENDING: PollStatus = "pending"
-POLL_STATUS_GREEN: PollStatus = "green"
-POLL_STATUS_FAILED: PollStatus = "failed"
-
-UNNAMED_CHECK_NAME = "unnamed check"
-CHECK_RUN_COMPLETED_STATUS = "completed"
-CHECK_RUN_SUCCESS_CONCLUSION = "success"
+POLL_STATUS_FETCH_FAILED = "fetch-failed"
+POLL_STATUS_NO_CHECKS = "no-checks"
+POLL_STATUS_PENDING = "pending"
+POLL_STATUS_GREEN = "green"
+POLL_STATUS_FAILED = "failed"
 
 EXIT_CODE_GREEN = EXIT_CODE_SUCCESS  # a subcommand-local alias, same protocol code
 EXIT_CODE_CI_FAILED = EXIT_CODE_CRITERIA_UNMET  # CI red or timed out: criteria unmet
@@ -74,13 +59,11 @@ def try_fetch_pull_request(
     *,
     http_client: httpx.Client,
     repository_slug: str,
-    pull_request_number: PullRequestIdentifier,
+    pull_request_number: int,
 ) -> dict[str, object] | None:
     """Fetch the pull request; None means a transient API refusal."""
-    response = request_or_fail(
-        http_client=http_client,
-        method="GET",
-        url=f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/pulls/{pull_request_number}",
+    response = http_client.get(
+        f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/pulls/{pull_request_number}"
     )
     if response.status_code == NOT_FOUND_STATUS_CODE:
         print(
@@ -91,10 +74,7 @@ def try_fetch_pull_request(
         raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
     if not response.is_success:
         return None
-    try:
-        pull_request: object = response.json()
-    except json.JSONDecodeError:
-        return None
+    pull_request: object = response.json()
     return pull_request if isinstance(pull_request, dict) else None
 
 
@@ -105,17 +85,12 @@ def try_fetch_check_runs(
     head_sha: str,
 ) -> list[dict[str, object]] | None:
     """List the head's CI check runs; None means the API refused them."""
-    response = request_or_fail(
-        http_client=http_client,
-        method="GET",
-        url=f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/commits/{head_sha}/check-runs",
+    response = http_client.get(
+        f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/commits/{head_sha}/check-runs"
     )
     if not response.is_success:
         return None
-    try:
-        payload: object = response.json()
-    except json.JSONDecodeError:
-        return None
+    payload: object = response.json()
     if not isinstance(payload, dict):
         return None
     check_runs = payload.get("check_runs", [])
@@ -128,8 +103,8 @@ def poll_once(
     *,
     http_client: httpx.Client,
     repository_slug: str,
-    pull_request_number: PullRequestIdentifier,
-) -> tuple[PollStatus, str, str]:
+    pull_request_number: int,
+) -> tuple[str, str, str]:
     """One poll: (status, head_sha, progress detail)."""
     pull_request = try_fetch_pull_request(
         http_client=http_client,
@@ -149,18 +124,13 @@ def poll_once(
     if not check_runs:
         return POLL_STATUS_NO_CHECKS, head_sha, ""
     failed = [
-        str(check_run.get("name", UNNAMED_CHECK_NAME))
+        str(check_run.get("name", "unnamed check"))
         for check_run in check_runs
-        if check_run.get("status") == CHECK_RUN_COMPLETED_STATUS
-        and check_run.get("conclusion") != CHECK_RUN_SUCCESS_CONCLUSION
+        if check_run.get("status") == "completed" and check_run.get("conclusion") != "success"
     ]
     if failed:
         return POLL_STATUS_FAILED, head_sha, ", ".join(failed)
-    running = [
-        check_run
-        for check_run in check_runs
-        if check_run.get("status") != CHECK_RUN_COMPLETED_STATUS
-    ]
+    running = [check_run for check_run in check_runs if check_run.get("status") != "completed"]
     if not running:
         return POLL_STATUS_GREEN, head_sha, str(len(check_runs))
     return (
@@ -170,7 +140,7 @@ def poll_once(
     )
 
 
-def interpret_status(*, status: PollStatus, detail: str) -> int | None:
+def interpret_status(*, status: str, detail: str) -> int | None:
     """Map one poll to an exit code; None means: keep waiting."""
     if status == POLL_STATUS_GREEN:
         print(f"CI is green on the head ({detail} check runs): the review can start.")
@@ -228,8 +198,8 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     """Register the wait-ci subcommand."""
     subparser = subparsers.add_parser(
         "wait-ci",
-        help="Block until CI concludes on the pull request head (ADR-0018).",
-        description="Block until CI concludes on the pull request head (ADR-0018).",
+        help="Block until CI concludes on the pull request head (ADR-0006).",
+        description="Block until CI concludes on the pull request head (ADR-0006).",
     )
     subparser.add_argument(
         "--pr-number",
@@ -262,7 +232,7 @@ def run_watch(
     *,
     http_client: httpx.Client,
     repository_slug: str,
-    pull_request_number: PullRequestIdentifier,
+    pull_request_number: int,
     interval_seconds: int,
     timeout_seconds: int,
 ) -> int:
@@ -311,7 +281,7 @@ def run(*, arguments: argparse.Namespace) -> int:
         return run_watch(
             http_client=http_client,
             repository_slug=repository_slug,
-            pull_request_number=PullRequestIdentifier(arguments.pr_number),
+            pull_request_number=arguments.pr_number,
             interval_seconds=arguments.interval_seconds,
             timeout_seconds=arguments.timeout_seconds,
         )

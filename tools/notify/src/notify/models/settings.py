@@ -1,7 +1,7 @@
 """Application settings, loaded from the environment.
 
 Secrets arrive as ``SecretStr`` so no log call can leak them by accident
-(ADR-0005, ADR-0008). Every field is optional-friendly: the application
+(ADR-0003, ADR-0004). Every field is optional-friendly: the application
 must start in the barest possible environment (console fallback).
 """
 

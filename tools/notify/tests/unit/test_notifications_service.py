@@ -1,6 +1,6 @@
 """Unit tests for the pure notification service.
 
-These tests assert *log narration* as well as behavior (ADR-0005): the
+These tests assert *log narration* as well as behavior (ADR-0003): the
 DEBUG events are the executable comments of the service, so they are part
 of its contract and must not silently disappear.
 """

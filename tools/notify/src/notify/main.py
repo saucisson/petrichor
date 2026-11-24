@@ -1,6 +1,6 @@
 """Composition root: CLI entry point of the ``notify`` package.
 
-This is the ONLY module where logging is configured (ADR-0005) and where
+This is the ONLY module where logging is configured (ADR-0003) and where
 adapters are constructed (ADR-0002). ``print`` is allowed here and nowhere
 else: a CLI speaks to its user on stdout, everything else speaks in logs.
 """
@@ -57,7 +57,7 @@ def configure_logging(*, settings: ApplicationSettings) -> None:
         add_logger_name,
         TimeStamper(fmt="iso"),
     ]
-    # force=True: the composition root owns the root logger (ADR-0005), so
+    # force=True: the composition root owns the root logger (ADR-0003), so
     # pre-existing handlers (e.g. a test runner's capture handler) are
     # replaced instead of silently kept, which would make basicConfig a no-op.
     logging.basicConfig(stream=sys.stdout, level=settings.log_level, force=True)

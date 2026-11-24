@@ -1,8 +1,8 @@
 """Tests for the composition root: CLI contract, wiring and exit codes.
 
 ``notify.main`` is the only module where logging is configured and adapters
-are constructed (ADR-0002, ADR-0005); these tests pin that wiring, the
-``send``/``smoke`` CLI contract, and the fail-closed urgent path (ADR-0011).
+are constructed (ADR-0002, ADR-0003); these tests pin that wiring, the
+``send``/``smoke`` CLI contract, and the fail-closed urgent path (ADR-0006).
 """
 
 import json

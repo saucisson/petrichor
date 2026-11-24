@@ -1,22 +1,19 @@
 """Day-cycle drivers: the end-of-day report and the daily integration sync.
 
 ``day-report`` prints the end-of-day Markdown report for the daily
-branch, measured from the morning tag. It also summarizes the review
-attempts journaled in ``.review/review-attempts.jsonl`` (P61/P62):
-attempts per pull request, failures by typed cause, escalations and
-bundle sizes - no hand-entered data. Stdlib only, on purpose: the
+branch, measured from the morning tag. Stdlib only, on purpose: the
 report must run in the bareest possible environment, because it is
 executed exactly when the working day is being closed.
 
-``sync-daily`` reconciles ``daily`` with ``origin/main`` (ADR-0020).
-The merge flow is one-directional (ADR-0009): work lands in ``daily``
+``sync-daily`` reconciles ``daily`` with ``origin/main`` (ADR-0005).
+The merge flow is one-directional (ADR-0005): work lands in ``daily``
 through reviewed pull requests, and the human merges ``daily`` into
 ``main`` at the end of the day. But ``main`` can also move WITHOUT
 passing through ``daily``: a template sync the human commits on
 ``main``, a hotfix, a release. The branches then diverge, and merging
 ``main`` into ``daily`` would write a merge commit (linear history
 forbids it), while a raw rebase rewrites a protected branch. The sync
-driver is the one sanctioned path (ADR-0020):
+driver is the one sanctioned path (ADR-0005):
 
 - run it from a clean ``daily`` checkout, early in the day (right
   after ``make day-start``, before opening pull requests);
@@ -31,14 +28,13 @@ driver is the one sanctioned path (ADR-0020):
   accepted ``main`` content against accepted ``daily`` work is a
   human decision, never an unattended merge;
 - ``main`` is never rewritten, and unattended (night) sessions never
-  run this driver (ADR-0020).
+  run this driver (ADR-0005).
 
 Exit codes: 0 synced (or nothing to do), 1 refused (wrong branch,
 dirty tree, conflict - nothing was written), 2 protocol failure
 (daily restored, remote untouched).
 """
 
-import json
 import sys
 from datetime import date
 from typing import TYPE_CHECKING
@@ -49,12 +45,10 @@ from scripts._shared import (
     run_git,
     try_git,
 )
-from scripts.review import ATTEMPTS_JOURNAL_FILE_NAME, REVIEW_DIRECTORY
 
 if TYPE_CHECKING:
     import argparse
     from collections.abc import Sequence
-    from pathlib import Path
 
 MERGE_COMMIT_FORMAT = "%h %s"
 DAILY_BRANCH_NAME = "daily"
@@ -94,76 +88,9 @@ def changed_files_since(*, tag_name: str) -> int:
 
 
 def worklog_entries_since(*, tag_name: str) -> list[str]:
-    """List the worklog entries changed since the tag (ADR-0022)."""
+    """List the worklog entries changed since the tag (ADR-0005)."""
     git_output = run_git(arguments=["diff", "--name-only", f"{tag_name}..HEAD", "--", WORKLOG_PATH])
     return [line for line in git_output.splitlines() if line.strip()]
-
-
-def load_review_attempts(*, journal_path: Path) -> list[dict[str, object]]:
-    """Read the review attempts journal (P61/P62); a missing journal means no attempts."""
-    if not journal_path.is_file():
-        return []
-    attempts: list[dict[str, object]] = []
-    for raw_line in journal_path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        try:
-            entry: object = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(entry, dict):
-            attempts.append(entry)
-    return attempts
-
-
-def render_review_reliability(*, attempts: Sequence[dict[str, object]]) -> list[str]:
-    """Summarize the review attempts per pull request (P62): no hand-entered data.
-
-    Per PR: invocations, session attempts, failures by typed cause (P61),
-    escalations, and the last journaled bundle sizes (total and diff part).
-    """
-    lines: list[str] = []
-    if not attempts:
-        lines.append("- No review attempts journaled yet.")
-        return lines
-    by_pr: dict[int, list[dict[str, object]]] = {}
-    for entry in attempts:
-        pr_number = entry.get("pr_number")
-        if isinstance(pr_number, int):
-            by_pr.setdefault(pr_number, []).append(entry)
-    for pr_number in sorted(by_pr):
-        entries = by_pr[pr_number]
-        session_entries = [entry for entry in entries if entry.get("attempt") is True]
-        failures: dict[str, int] = {}
-        for entry in session_entries:
-            if entry.get("exit_code") != EXIT_CODE_SUCCESS:
-                cause = str(entry.get("cause", "unknown"))
-                failures[cause] = failures.get(cause, 0) + 1
-        escalations = sum(1 for entry in entries if entry.get("escalated") is True)
-        last_bundle = next(
-            (
-                (entry.get("bundle_bytes"), entry.get("diff_bytes"))
-                for entry in reversed(session_entries)
-                if entry.get("bundle_bytes") is not None
-            ),
-            None,
-        )
-        failure_text = (
-            ", ".join(f"{cause}: {count}" for cause, count in sorted(failures.items()))
-            if failures
-            else "none"
-        )
-        line = (
-            f"- PR #{pr_number}: {len(session_entries)} session attempt(s),"
-            f" failures by cause - {failure_text},"
-            f" escalations: {escalations}"
-        )
-        if last_bundle is not None:
-            bundle_bytes, diff_bytes = last_bundle
-            line += f", last bundle: {bundle_bytes} bytes total (diff part {diff_bytes} bytes)"
-        lines.append(line + ".")
-    return lines
 
 
 def render_report(
@@ -173,7 +100,6 @@ def render_report(
     commit_count: int,
     changed_file_count: int,
     worklog_entries: Sequence[str],
-    review_reliability_lines: Sequence[str] = (),
 ) -> str:
     """Assemble the Markdown day report."""
     today = date.today().isoformat()
@@ -202,13 +128,6 @@ def render_report(
     report_sections.append("")
     report_sections.append(f"- Commits since baseline: {commit_count}")
     report_sections.append(f"- Files changed since baseline: {changed_file_count}")
-    report_sections.append("")
-    report_sections.append("## Review reliability (P61/P62)")
-    report_sections.append("")
-    if review_reliability_lines:
-        report_sections.extend(review_reliability_lines)
-    else:
-        report_sections.append("- No review attempts journaled yet.")
     report_sections.append("")
     report_sections.append("## Reminder - needs-human issues")
     report_sections.append("")
@@ -256,11 +175,6 @@ def run_day_report(*, arguments: argparse.Namespace) -> int:
         commit_count=commits_since(tag_name=tag_name),
         changed_file_count=changed_files_since(tag_name=tag_name),
         worklog_entries=worklog_entries_since(tag_name=tag_name),
-        review_reliability_lines=render_review_reliability(
-            attempts=load_review_attempts(
-                journal_path=REVIEW_DIRECTORY / ATTEMPTS_JOURNAL_FILE_NAME
-            )
-        ),
     )
     print(markdown_report)
     return EXIT_CODE_SUCCESS
@@ -311,14 +225,14 @@ def precondition_exit_code(*, branch: str) -> int | None:
         print(
             f"Error: sync-daily runs from the {DAILY_BRANCH_NAME} checkout,"
             f" not from {branch or 'a detached head'} - it rewrites"
-            f" {DAILY_BRANCH_NAME} only (ADR-0020).",
+            f" {DAILY_BRANCH_NAME} only (ADR-0005).",
             file=sys.stderr,
         )
         return EXIT_CODE_REFUSED
     if not working_tree_is_clean():
         print(
             "Error: the working tree is not clean - commit or stash first:"
-            " a rebase over a dirty tree is not honest glue (ADR-0020).",
+            " a rebase over a dirty tree is not honest glue (ADR-0005).",
             file=sys.stderr,
         )
         return EXIT_CODE_REFUSED
@@ -373,7 +287,7 @@ def fast_forward_daily(*, previous_head: str) -> int:
         print(
             f"{DAILY_BRANCH_NAME} was strictly behind: fast-forwarded onto"
             f" {MAIN_REMOTE_REFERENCE} and pushed - no commit was"
-            " rewritten (ADR-0020)."
+            " rewritten (ADR-0005)."
         )
     return push_exit_code
 
@@ -387,7 +301,7 @@ def rebase_daily_onto_main(*, previous_head: str, daily_only_before: int) -> int
             "Error: rebasing daily onto origin/main hit a conflict - the"
             " rebase is aborted and daily is untouched. Resolving accepted"
             " main content against accepted daily work is a human decision:"
-            " escalate it (needs-human), never merge it by hand (ADR-0020).",
+            " escalate it (needs-human), never merge it by hand (ADR-0005).",
             file=sys.stderr,
         )
         return EXIT_CODE_REFUSED
@@ -414,7 +328,7 @@ def rebase_daily_onto_main(*, previous_head: str, daily_only_before: int) -> int
         print(
             f"{DAILY_BRANCH_NAME} rebased onto {MAIN_REMOTE_REFERENCE}:"
             f" {daily_only_before} commit(s) replayed, pushed with"
-            " --force-with-lease - main was not touched (ADR-0020)."
+            " --force-with-lease - main was not touched (ADR-0005)."
             " Local branches based on the old daily need a rebase before"
             " their pull request."
         )
@@ -425,8 +339,8 @@ def register_sync_daily(subparsers: argparse._SubParsersAction[argparse.Argument
     """Register the sync-daily subcommand."""
     subparser = subparsers.add_parser(
         "sync-daily",
-        help="Rebase daily onto origin/main, early in the day (ADR-0020).",
-        description="Rebase daily onto origin/main, early in the day (ADR-0020).",
+        help="Rebase daily onto origin/main, early in the day (ADR-0005).",
+        description="Rebase daily onto origin/main, early in the day (ADR-0005).",
     )
     subparser.set_defaults(runner=run_sync_daily)
 

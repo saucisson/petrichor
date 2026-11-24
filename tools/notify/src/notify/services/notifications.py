@@ -1,6 +1,6 @@
 """Pure notification orchestration: no I/O, only decisions and narration.
 
-Every ``DEBUG`` event here is an executable comment (ADR-0005) - the tests
+Every ``DEBUG`` event here is an executable comment (ADR-0003) - the tests
 pin them, so the narration cannot rot the way prose comments do.
 """
 
@@ -70,7 +70,7 @@ def is_delivery_failure(outcome: NotificationOutcome) -> TypeIs[DeliveryFailure]
 
 
 def is_urgent(*, request: NotificationRequest) -> bool:
-    """Whether the request must reach a push channel (ADR-0011)."""
+    """Whether the request must reach a push channel (ADR-0006)."""
     return request.severity is NotificationSeverity.URGENT
 
 

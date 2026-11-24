@@ -1,7 +1,7 @@
 # Multi-stage build (ADR-0001): uv resolves and installs in the builder,
 # the runtime image is slim and carries only the virtual environment.
 # Build context is the REPOSITORY ROOT (docker build -f tools/notify/Dockerfile .)
-# because the root pyproject.toml owns the tool's packaging (ADR-0014).
+# because the root pyproject.toml owns the tool's packaging (ADR-0001).
 
 FROM ghcr.io/astral-sh/uv:python3.15-bookworm-slim AS builder
 

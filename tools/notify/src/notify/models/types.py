@@ -1,6 +1,6 @@
 """Domain primitives: named types that make boundaries self-documenting.
 
-A bare ``str`` at a domain boundary is a review finding (ADR-0006): these
+A bare ``str`` at a domain boundary is a review finding (ADR-0003): these
 NewTypes give every string a name the type checker can enforce.
 """
 

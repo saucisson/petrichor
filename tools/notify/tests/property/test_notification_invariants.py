@@ -1,4 +1,4 @@
-"""Property tests for notification invariants (ADR-0012).
+"""Property tests for notification invariants (ADR-0004).
 
 Hypothesis verifies invariants that hold for *every* input, not just the
 cases a human thought of - a counterexample-seeking reviewer in test form.

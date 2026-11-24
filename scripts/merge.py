@@ -1,4 +1,4 @@
-"""Merge driver: merge one reviewed pull request into daily (ADR-0009).
+"""Merge driver: merge one reviewed pull request into daily (ADR-0005).
 
 The developer agent merges each completed pull request into ``daily``
 - through this driver and nothing else. The driver IS the codified
@@ -9,7 +9,7 @@ and mergeable, and every check run on its head has concluded
 "success". Then it merges through the GitHub API with the linear
 method the repository allows - squash preferred, a rebase merge as
 the fallback when squash is disabled; a merge commit is never issued
-(linear history on ``daily``, ADR-0009) - and deletes the branch.
+(linear history on ``daily``, ADR-0005) - and deletes the branch.
 
 The reviewer session never merges: it writes the report; this driver
 reads it. ``main`` is never merged here - that stays a human action.
@@ -20,8 +20,6 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import httpx
-
 from scripts._github import (
     check_runs_allow_merge,
     extract_head_ref,
@@ -29,7 +27,6 @@ from scripts._github import (
     fetch_check_runs,
     fetch_pull_request,
     open_github_client,
-    request_or_fail,
 )
 from scripts._shared import (
     EXIT_CODE_CRITERIA_UNMET,
@@ -43,6 +40,8 @@ from scripts._shared import (
 if TYPE_CHECKING:
     import argparse
     from collections.abc import Sequence
+
+    import httpx
 
 DEFAULT_REPORT_FILE_NAME = ".review/review-report.json"
 DEFAULT_CONTEXT_FILE_NAME = ".review/review-context.json"
@@ -141,7 +140,7 @@ def resolve_merge_method(
     http_client: httpx.Client,
     repository_slug: str,
 ) -> str:
-    """Return the linear merge method the repository allows (ADR-0009).
+    """Return the linear merge method the repository allows (ADR-0005).
 
     Squash is preferred (one commit per pull request, the whole review
     trace in one place); a rebase merge is the accepted fallback when
@@ -149,11 +148,7 @@ def resolve_merge_method(
     linear, so no merge commit is ever issued. A repository allowing
     neither is a human decision away, not an agent one.
     """
-    response = request_or_fail(
-        http_client=http_client,
-        method="GET",
-        url=f"{GITHUB_API_BASE_URL}/repos/{repository_slug}",
-    )
+    response = http_client.get(f"{GITHUB_API_BASE_URL}/repos/{repository_slug}")
     if not response.is_success:
         print(
             f"Error: the GitHub API returned {response.status_code}"
@@ -180,13 +175,13 @@ def resolve_merge_method(
     raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
 
 
-def evaluate_merge_criteria(  # noqa: PLR0911 - one return per codified criterion (ADR-0009)
+def evaluate_merge_criteria(  # noqa: PLR0911 - one return per codified criterion (ADR-0005)
     *,
     report: dict[str, object],
     pull_request: dict[str, object],
     check_runs: Sequence[dict[str, object]],
 ) -> tuple[bool, str]:
-    """Apply the codified merge criteria (ADR-0009); return (ok, reason)."""
+    """Apply the codified merge criteria (ADR-0005); return (ok, reason)."""
     blocking_count = report.get("blocking_count")
     if blocking_count is None:
         return False, "the review report has no blocking_count - rerun the review"
@@ -218,11 +213,9 @@ def merge_pull_request(
     merge_method: str,
 ) -> bool:
     """Merge the pull request with the given linear method; fail closed."""
-    response = request_or_fail(
-        http_client=http_client,
-        method="PUT",
-        url=f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/pulls/{pull_request_number}/merge",
-        json_payload={"sha": head_sha, "merge_method": merge_method},
+    response = http_client.put(
+        f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/pulls/{pull_request_number}/merge",
+        json={"sha": head_sha, "merge_method": merge_method},
     )
     if response.is_success:
         return True
@@ -251,13 +244,9 @@ def delete_branch(
     """Delete the merged branch; best effort, never a merge failure."""
     if not head_ref:
         return
-    try:
-        response = http_client.delete(
-            f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/git/refs/heads/{head_ref}"
-        )
-    except httpx.TransportError as transport_error:
-        print(f"Warning: could not delete branch {head_ref} ({transport_error}).")
-        return
+    response = http_client.delete(
+        f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/git/refs/heads/{head_ref}"
+    )
     if not response.is_success:
         print(f"Warning: could not delete branch {head_ref} (status {response.status_code}).")
 
@@ -266,8 +255,8 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     """Register the merge-pr subcommand."""
     subparser = subparsers.add_parser(
         "merge-pr",
-        help="Merge one reviewed pull request into daily (ADR-0009).",
-        description="Merge one reviewed pull request into daily (ADR-0009).",
+        help="Merge one reviewed pull request into daily (ADR-0005).",
+        description="Merge one reviewed pull request into daily (ADR-0005).",
     )
     subparser.add_argument(
         "--pr-number",

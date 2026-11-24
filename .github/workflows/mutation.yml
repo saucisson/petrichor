@@ -1,11 +1,11 @@
 name: mutation-testing
 
-# ADR-0012: mutation testing runs on `daily` at end of day, before the
+# ADR-0004: mutation testing runs on `daily` at end of day, before the
 # human review - coverage proves execution, mutants prove assertions.
 # Surviving mutants become issues for the next working day.
 #
 # A fresh instance has no `daily` branch until the day cycle starts
-# (docs/branching.md): the gate job skips the scheduled run instead of
+# (docs/protocol.md): the gate job skips the scheduled run instead of
 # failing it, and turns itself on once `daily` exists.
 
 on:

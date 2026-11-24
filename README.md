@@ -8,13 +8,11 @@ human decides at the day boundary (`main`).
 The template ships the **protocol** (constitution, decisions, review
 and merge drivers) and the **tools**, no product code: your coding
 agent (Vibe Code or any other) creates the product code per instance,
-in the language of your choice, under the same rules. Alongside the
-protocol ships the **`notify` tool** (`tools/notify/`): the contact
-channel of the agent protocol, and the worked example of every rule.
-Your coding agent calls it to tell you that something on an issue
-needs your interaction, through a Discord webhook (or console
-fallback), with a severity contract (`question` parks, `urgent` stops
-all merges).
+in the language of your choice, under the same rules. All development
+artifacts are **in English**: code, comments, documents, commit
+messages. Alongside the protocol ships the **`notify` tool**
+(`tools/notify/`): the contact channel of the agent protocol, and the
+worked example of every rule.
 
 ## Quick start
 
@@ -32,51 +30,35 @@ cp .env.example .env
 uv run notify send --severity question --message "Need a decision on X." --issue-identifier "PR-42"
 ```
 
-## Authentication
-
-The HTTP API (`/v1/`) requires an applicative session cookie (web v1 OIDC
-browser login via the Zitadel IdP, issue #207) or an OIDC Bearer JWT (a PAT,
-validated locally via JWKS); the legacy `X-API-Key` header is removed. Auth
-is active by default and `AUTH_DISABLED=1` is the local-dev bypass only. See
-`deploy/README.md` (« Authentification ») for the `AUTH_*` variables,
-`.env.example`, and curl examples (issues #182-#184, #207).
-
 ## What is in the box
 
-| Area              | Where                                                     |
-| ----------------- | --------------------------------------------------------- |
-| Architecture      | Onion, data-first, language-agnostic - `docs/architecture.md` (ADR-0002) |
-| Toolchain         | latest stable, community-standard tools, committed lockfile - ADR-0001 |
-| Style and typing  | readability first, precise typing - ADR-0004, ADR-0006 |
-| Quality gates     | one gate per failure mode, 90% coverage - ADR-0007 |
-| Security gates    | secret scan, dependency audit - ADR-0008 |
-| HTTP APIs         | REST with best practices - ADR-0016 |
-| Agent protocol    | `AGENTS.md` + `docs/agents/` (ADR-0010) |
-| Reviewer launch   | local headless Vibe Code session - ADR-0010 |
-| Merge into daily  | `make review` then `make merge-pr` - ADR-0009 |
-| Sync daily with main | `make sync-daily` (rebase with lease) - ADR-0020 |
-| Branch model      | `docs/branching.md` (ADR-0009) |
-| Agent runtime     | `.vibe/` permissions profile - ADR-0015 |
-| Human contact     | the `notify` command in `tools/notify/` - ADR-0011, ADR-0014 |
-| Decisions         | `docs/decisions/` - 21 ADRs (0001-0099); project ADRs start at 0100 |
+| Area              | Where                                                        |
+| ----------------- | ------------------------------------------------------------ |
+| Constitution      | `AGENTS.md` - the short contract every session re-reads      |
+| Working protocol  | `docs/protocol.md` - day/night cycles, merge gates, escalation |
+| Code rules        | `docs/rules.md` - architecture, style, review checklist, reviewer contract |
+| Decisions         | `docs/decisions/` - 7 ADRs (0001-0099); project ADRs start at 0100 |
+| Day audit         | `docs/worklog/` - one driver-generated file per record        |
+| Agent runtime     | `.vibe/` permissions profile - ADR-0006                      |
+| Human contact     | the `notify` tool in `tools/notify/` - ADR-0006               |
+| Drivers           | `scripts/` - one CLI package, one subcommand per make target - ADR-0001 |
 
 ## The repository layout
 
 ```text
-tools/notify/
-    src/notify/          the notification tool (reference application)
-        models/          domain language: validated data, closed sets
-        services/        pure functions behind ports
-        infrastructure/  adapters: console, Discord webhook
-        main.py          composition root - the ONLY place logging is configured
-    tests/               unit / integration / property tests
-scripts/                 day-cycle, review and merge orchestration
-docs/                    constitutional documents and ADRs
+AGENTS.md                the constitution (re-read every session)
+docs/protocol.md         day cycle, branch model, developer and escalation contracts
+docs/rules.md            architecture and style rules, review checklist, reviewer contract
+docs/decisions/          the ADRs and their process
+docs/worklog/            the human's audit trail (agents never read it)
+scripts/                 the drivers: pr, review, merge-pr, claim, night, ...
+tools/notify/            the notification tool (reference application)
+.vibe/                   the agent runtime profile and the night prompts
 ```
 
 An instance's product code is created per instance, in the language's
 conventional layout (for a Python instance: `src/`), under the same
-architecture and style rules (ADR-0014).
+architecture and style rules (ADR-0001).
 
 ## Setting up a repository from this template
 
@@ -88,23 +70,23 @@ architecture and style rules (ADR-0014).
    lockfile.
 3. At the first Vibe Code session, review `.vibe/config.toml` and
    **trust the folder** - the runtime permissions profile is then
-   loaded (ADR-0015). Keep the CLI current before widening it.
+   loaded (ADR-0006). Keep the CLI current before widening it.
 4. Create the `daily` branch from `main`
    (`git branch daily && git push -u origin daily`), then enable
-   branch protections per `docs/branching.md` (`main` and
-   `daily`, required `check` and `security` status checks, linear
-   history, force pushes allowed on `daily` only - the sync driver,
-   ADR-0020; no auto-merge, no reviewer check - ADR-0010, ADR-0009).
+   branch protections per `docs/protocol.md` (`main` and `daily`,
+   required `check` and `security` status checks, linear history,
+   force pushes allowed on `daily` only - the sync driver, ADR-0005;
+   no auto-merge, no reviewer check - ADR-0006).
 5. `uv run pre-commit install`.
-6. Enable Renovate and release-please on the repository.
+6. Enable Renovate and release-please on the repository (ADR-0001).
 7. Replace `YOUR_GITHUB_USERNAME` in `.github/CODEOWNERS`.
 8. Set `DISCORD_WEBHOOK_URL` in the CI/CD secrets or `.env`.
 9. Install the Vibe CLI on the working machine and sign in
-   (ADR-0010): `make review` runs the reviewer as a headless local
+   (ADR-0006): `make review` runs the reviewer as a headless local
    session on the plan's included usage, no API key needed. Create a
    `GITHUB_TOKEN` (fine-grained PAT: pull requests read/write,
-   contents read/write) in `.env` for `make review` and
-   `make merge-pr`. `REVIEWER_MODEL` and `REVIEWER_MAX_TOKENS` in
+   issues read/write, contents read/write) in `.env` for `make review`
+   and `make merge-pr`. `REVIEWER_MODEL` and `REVIEWER_MAX_TOKENS` in
    `.env` tune the session.
 
 ## License

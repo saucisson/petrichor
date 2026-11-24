@@ -1,4 +1,4 @@
-"""Unattended day loop: one issue, one fresh headless session (ADR-0017).
+"""Unattended day loop: one issue, one fresh headless session (ADR-0007).
 
 Runs the protocol's day loop overnight. The directive comes in two
 flavors:
@@ -10,7 +10,7 @@ flavors:
   the worklist from the repository itself (open issues, triage gate,
   minus the ``night-claimed`` label), and each session **picks one
   item and claims it first** (``make claim`` or ``make claim-pr``,
-  ADR-0017). The claim is the concurrency guard: two sessions never
+  ADR-0007). The claim is the concurrency guard: two sessions never
   work the same item, and a failed attempt stays claimed for the
   morning audit.
 
@@ -23,7 +23,7 @@ spent, or when a session claims nothing - the night never spins on
 one stuck item.
 
 Nobody answers approvals while this runs: sessions get the project's
-runtime profile (``.vibe/``, ADR-0015), allowlisted commands run, and
+runtime profile (``.vibe/``, ADR-0006), allowlisted commands run, and
 a denied call is a stop signal the session escalates honestly - never
 an obstacle to route around.
 
@@ -33,7 +33,7 @@ versioned prompt, runs the session, records the exit code, and moves
 on. The verdicts live in the repository (``docs/worklog/``, the pull
 requests, the issues) for the morning audit.
 
-Output has two channels (ADR-0017): stdout is the short, readable
+Output has two channels (ADR-0007): stdout is the short, readable
 summary - one line per session (naming the item the session claimed)
 and one verdict at the end - while the verbose trace (full candidate
 lists, anti-spin decisions, fetch warnings, a heartbeat per running
@@ -46,7 +46,6 @@ post-mortem reads the log.
 """
 
 import dataclasses
-import json
 import os
 import re
 import shutil
@@ -54,16 +53,15 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, NewType
+from typing import TYPE_CHECKING
 
-from scripts._github import open_github_client, request_or_fail
+from scripts._github import open_github_client
 from scripts._shared import (
     CLAIM_LABEL_NAME,
     EXIT_CODE_PROTOCOL_FAILURE,
     EXIT_CODE_SUCCESS,
     GITHUB_API_BASE_URL,
     REPOSITORY_ROOT,
-    PullRequestIdentifier,
     load_github_token,
     resolve_repository_slug,
 )
@@ -93,7 +91,6 @@ LOG_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 DEFAULT_MAXIMUM_SESSION_TURNS = 100
 DEFAULT_SESSION_TIME_LIMIT_SECONDS = 3600
 DEFAULT_SESSION_HEARTBEAT_SECONDS = 60
-HEARTBEAT_POLL_INTERVAL_SECONDS = 1
 DEFAULT_MAXIMUM_SESSIONS = 10
 DEFAULT_CANDIDATE_COUNT = 10
 OPEN_ISSUES_PAGE_SIZE = 100
@@ -101,26 +98,21 @@ OPEN_PULL_REQUESTS_PAGE_SIZE = 100
 DAILY_BRANCH_NAME = "daily"
 PROMPTS_DIRECTORY_NAME = ".night/sessions"
 RUN_DIRECTORY_FORMAT = "%Y%m%d-%H%M%S"
-NIGHT_HEAD_BRANCH_PATTERN = re.compile(r"^(?:feat|fix)/(\d+)(?:-.*)?$", re.ASCII)
+NIGHT_HEAD_BRANCH_PATTERN = re.compile(r"^(?:feat|fix)/(\d+)(?:-.*)?$")
 TRIAGE_SKIP_LABELS = ("blocked", "needs-human", CLAIM_LABEL_NAME)
-OPEN_STATE_FILTER = "open"
-UNKNOWN_HEAD_REF = "unknown"
-
-IssueIdentifier = NewType("IssueIdentifier", int)
-"""An issue number (ADR-0006)."""
 
 
-def parse_issue_list(*, raw_issue_list: str) -> list[IssueIdentifier]:
+def parse_issue_list(*, raw_issue_list: str) -> list[int]:
     """Parse the night directive: comma-separated issue numbers, nothing else."""
-    issue_numbers: list[IssueIdentifier] = []
+    issue_numbers = []
     for raw_number in raw_issue_list.split(","):
         stripped_number = raw_number.strip()
         if not stripped_number:
             continue
-        if not (stripped_number.isascii() and stripped_number.isdigit()):
+        if not stripped_number.isdigit():
             print(f"Error: not an issue number: {stripped_number}.", file=sys.stderr)
             raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
-        issue_numbers.append(IssueIdentifier(int(stripped_number)))
+        issue_numbers.append(int(stripped_number))
     if not issue_numbers:
         print(
             "Error: no issues to process - the night directive is the issue"
@@ -141,7 +133,7 @@ def parse_milestone_list(*, raw_milestone_list: str) -> set[int]:
         stripped_number = raw_number.strip()
         if not stripped_number:
             continue
-        if not (stripped_number.isascii() and stripped_number.isdigit()):
+        if not stripped_number.isdigit():
             print(f"Error: not a milestone number: {stripped_number}.", file=sys.stderr)
             raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
         milestone_numbers.add(int(stripped_number))
@@ -171,34 +163,28 @@ def read_integer_setting(*, variable_name: str, default_value: int) -> int:
         return default_value
     try:
         return int(raw_value)
-    except ValueError as error:
+    except ValueError:
         print(
             f"Error: {variable_name} is not an integer: {raw_value}.",
             file=sys.stderr,
         )
-        raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE) from error
+        raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE) from None
 
 
 def fetch_issue(
     *,
     http_client: httpx.Client,
     repository_slug: str,
-    issue_number: IssueIdentifier,
+    issue_number: int,
 ) -> dict[str, object] | None:
     """Fetch the issue, or report and return None if the API refuses it."""
-    response = request_or_fail(
-        http_client=http_client,
-        method="GET",
-        url=f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/issues/{issue_number}",
+    response = http_client.get(
+        f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/issues/{issue_number}"
     )
     if not response.is_success:
         print(f"Warning: could not fetch issue #{issue_number} ({response.status_code}).")
         return None
-    try:
-        issue: object = response.json()
-    except json.JSONDecodeError:
-        print(f"Warning: issue #{issue_number} has an undecodable payload.")
-        return None
+    issue: object = response.json()
     if not isinstance(issue, dict):
         print(f"Warning: issue #{issue_number} has an unexpected payload.")
         return None
@@ -210,9 +196,9 @@ def triage_issue(*, issue: dict[str, object]) -> str | None:
     if "pull_request" in issue:
         return "it is a pull request, not an issue"
     labels = issue.get("labels", [])
-    if not isinstance(labels, list) or any(not isinstance(entry, dict) for entry in labels):
-        return "its labels payload is malformed - skipped, never trusted"
-    label_names: set[str] = {str(entry.get("name", "")) for entry in labels}
+    label_names: set[str] = set()
+    if isinstance(labels, list):
+        label_names = {entry.get("name", "") for entry in labels if isinstance(entry, dict)}
     for label in TRIAGE_SKIP_LABELS:
         if label in label_names:
             return f"it is labeled {label}"
@@ -222,7 +208,7 @@ def triage_issue(*, issue: dict[str, object]) -> str | None:
     return None
 
 
-def render_issue_section(*, issue: dict[str, object], issue_number: IssueIdentifier) -> str:
+def render_issue_section(*, issue: dict[str, object], issue_number: int) -> str:
     """Render the issue (title and body) as the prompt's issue section."""
     title = issue.get("title", "")
     title_text = title if isinstance(title, str) else ""
@@ -231,40 +217,26 @@ def render_issue_section(*, issue: dict[str, object], issue_number: IssueIdentif
     return f"# Issue #{issue_number}: {title_text}\n\n{body_text}"
 
 
-def json_list_or_warn(*, response: httpx.Response, warning: str) -> list[object] | None:
-    """Decode a JSON list payload; None (with a warning) on any refusal."""
-    try:
-        payload = response.json()
-    except json.JSONDecodeError:
-        print(f"Warning: {warning} is not valid JSON.")
-        return None
-    if not isinstance(payload, list):
-        print(f"Warning: {warning} is unexpected.")
-        return None
-    return payload
-
-
 def fetch_candidate_issues(
     *,
     http_client: httpx.Client,
     repository_slug: str,
     candidate_limit: int,
     milestone_numbers: set[int],
-) -> list[tuple[IssueIdentifier, dict[str, object]]]:
+) -> list[tuple[int, dict[str, object]]]:
     """Derive the auto-discovered worklist: open, eligible, unclaimed, in scope."""
-    response = request_or_fail(
-        http_client=http_client,
-        method="GET",
-        url=f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/issues",
-        params={"state": OPEN_STATE_FILTER, "per_page": str(OPEN_ISSUES_PAGE_SIZE)},
+    response = http_client.get(
+        f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/issues",
+        params={"state": "open", "per_page": OPEN_ISSUES_PAGE_SIZE},
     )
     if not response.is_success:
         print(f"Warning: could not list open issues ({response.status_code}).")
         return []
-    payload = json_list_or_warn(response=response, warning="the open-issues payload")
-    if payload is None:
+    payload = response.json()
+    if not isinstance(payload, list):
+        print("Warning: the open-issues payload is unexpected.")
         return []
-    candidates: list[tuple[IssueIdentifier, dict[str, object]]] = []
+    candidates: list[tuple[int, dict[str, object]]] = []
     for issue in payload:
         if not isinstance(issue, dict):
             continue
@@ -275,12 +247,12 @@ def fetch_candidate_issues(
         issue_number = issue.get("number")
         if not isinstance(issue_number, int):
             continue
-        candidates.append((IssueIdentifier(issue_number), issue))
+        candidates.append((issue_number, issue))
     candidates.sort(key=lambda candidate: candidate[0])
     return candidates[:candidate_limit]
 
 
-def render_worklist(*, candidates: Sequence[tuple[IssueIdentifier, dict[str, object]]]) -> str:
+def render_worklist(*, candidates: Sequence[tuple[int, dict[str, object]]]) -> str:
     """Render the candidate issues as the prompt's worklist."""
     sections = [
         render_issue_section(issue=issue, issue_number=issue_number)
@@ -317,8 +289,8 @@ def fetch_candidate_pull_requests(
     repository_slug: str,
     candidate_limit: int,
     milestone_numbers: set[int],
-) -> list[tuple[PullRequestIdentifier, dict[str, object]]]:
-    """Derive the recoverable pull requests (ADR-0017 recovery path).
+) -> list[tuple[int, dict[str, object]]]:
+    """Derive the recoverable pull requests (ADR-0007 recovery path).
 
     A pull request is recoverable when all of these hold: it is open,
     it targets ``daily``, its head branch is ``feat/N`` or ``fix/N``,
@@ -326,28 +298,27 @@ def fetch_candidate_pull_requests(
     earlier unattended attempt), and the pull request itself is not
     already claimed by another recovery session.
     """
-    response = request_or_fail(
-        http_client=http_client,
-        method="GET",
-        url=f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/pulls",
+    response = http_client.get(
+        f"{GITHUB_API_BASE_URL}/repos/{repository_slug}/pulls",
         params={
-            "state": OPEN_STATE_FILTER,
+            "state": "open",
             "base": DAILY_BRANCH_NAME,
-            "per_page": str(OPEN_PULL_REQUESTS_PAGE_SIZE),
+            "per_page": OPEN_PULL_REQUESTS_PAGE_SIZE,
         },
     )
     if not response.is_success:
         print(f"Warning: could not list open pull requests ({response.status_code}).")
         return []
-    payload = json_list_or_warn(response=response, warning="the open-pull-requests payload")
-    if payload is None:
+    payload = response.json()
+    if not isinstance(payload, list):
+        print("Warning: the open-pull-requests payload is unexpected.")
         return []
-    candidates: list[tuple[PullRequestIdentifier, dict[str, object]]] = []
+    candidates: list[tuple[int, dict[str, object]]] = []
     for pull_request in payload:
         if not isinstance(pull_request, dict):
             continue
-        pull_request_number = pull_request.get("number")
-        if not isinstance(pull_request_number, int):
+        pr_number = pull_request.get("number")
+        if not isinstance(pr_number, int):
             continue
         if item_has_claim_label(item=pull_request):
             continue
@@ -361,11 +332,11 @@ def fetch_candidate_pull_requests(
         backing_issue = fetch_issue(
             http_client=http_client,
             repository_slug=repository_slug,
-            issue_number=IssueIdentifier(backing_issue_number),
+            issue_number=backing_issue_number,
         )
         if backing_issue is None or not item_has_claim_label(item=backing_issue):
             continue
-        candidates.append((PullRequestIdentifier(pull_request_number), pull_request))
+        candidates.append((pr_number, pull_request))
     candidates.sort(key=lambda candidate: candidate[0])
     return candidates[:candidate_limit]
 
@@ -373,13 +344,13 @@ def fetch_candidate_pull_requests(
 def render_pull_request_section(
     *,
     pull_request: dict[str, object],
-    pull_request_number: PullRequestIdentifier,
+    pr_number: int,
 ) -> str:
     """Render a recoverable pull request as the prompt's worklist section."""
     title = pull_request.get("title", "")
     title_text = title if isinstance(title, str) else ""
     head = pull_request.get("head")
-    head_ref = head.get("ref") if isinstance(head, dict) else UNKNOWN_HEAD_REF
+    head_ref = head.get("ref") if isinstance(head, dict) else "unknown"
     backing_issue_number = parse_backing_issue_number(head_ref=head_ref)
     backing_clause = (
         f", backing issue #{backing_issue_number}" if backing_issue_number is not None else ""
@@ -387,7 +358,7 @@ def render_pull_request_section(
     body = pull_request.get("body")
     body_text = body if isinstance(body, str) else ""
     return (
-        f"# Pull request #{pull_request_number}: {title_text}\n\n"
+        f"# Pull request #{pr_number}: {title_text}\n\n"
         f"An earlier session left this pull request open (branch `{head_ref}`"
         f"{backing_clause}, targeting `daily`) and never merged it. It is"
         " offered for recovery: check it out, find out where it stands, fix"
@@ -398,8 +369,8 @@ def render_pull_request_section(
 
 def render_auto_worklist(
     *,
-    issues: Sequence[tuple[IssueIdentifier, dict[str, object]]],
-    pull_requests: Sequence[tuple[PullRequestIdentifier, dict[str, object]]],
+    issues: Sequence[tuple[int, dict[str, object]]],
+    pull_requests: Sequence[tuple[int, dict[str, object]]],
 ) -> str:
     """Render the combined worklist: unclaimed issues, then recoverable PRs."""
     sections = [
@@ -407,37 +378,31 @@ def render_auto_worklist(
         for issue_number, issue in issues
     ]
     sections.extend(
-        render_pull_request_section(
-            pull_request=pull_request, pull_request_number=pull_request_number
-        )
-        for pull_request_number, pull_request in pull_requests
+        render_pull_request_section(pull_request=pull_request, pr_number=pr_number)
+        for pr_number, pull_request in pull_requests
     )
     return "\n\n---\n\n".join(sections)
 
 
 def auto_candidate_keys(
     *,
-    issues: Sequence[tuple[IssueIdentifier, dict[str, object]]],
-    pull_requests: Sequence[tuple[PullRequestIdentifier, dict[str, object]]],
+    issues: Sequence[tuple[int, dict[str, object]]],
+    pull_requests: Sequence[tuple[int, dict[str, object]]],
 ) -> set[tuple[str, int]]:
     """Build the anti-spin guard: one key per worklist item."""
     issue_keys = {("issue", issue_number) for issue_number, _ in issues}
-    pull_request_keys = {
-        ("pull request", pull_request_number) for pull_request_number, _ in pull_requests
-    }
+    pull_request_keys = {("pull request", pr_number) for pr_number, _ in pull_requests}
     return issue_keys | pull_request_keys
 
 
 def describe_auto_candidates(
     *,
-    issues: Sequence[tuple[IssueIdentifier, dict[str, object]]],
-    pull_requests: Sequence[tuple[PullRequestIdentifier, dict[str, object]]],
+    issues: Sequence[tuple[int, dict[str, object]]],
+    pull_requests: Sequence[tuple[int, dict[str, object]]],
 ) -> str:
     """Render the candidate list for the loop's own trace."""
     descriptions = [f"#{issue_number} (issue)" for issue_number, _ in issues]
-    descriptions.extend(
-        f"#{pull_request_number} (pull request)" for pull_request_number, _ in pull_requests
-    )
+    descriptions.extend(f"#{pr_number} (pull request)" for pr_number, _ in pull_requests)
     return ", ".join(descriptions)
 
 
@@ -457,7 +422,7 @@ def describe_claimed_items(
         item = fetch_issue(
             http_client=http_client,
             repository_slug=repository_slug,
-            issue_number=IssueIdentifier(number),
+            issue_number=number,
         )
         if item is not None and item_has_claim_label(item=item):
             claimed.append(f"#{number}")
@@ -465,7 +430,7 @@ def describe_claimed_items(
 
 
 def load_prompt_template(*, template_path: str) -> str:
-    """Load a versioned night-session prompt (ADR-0017); missing fails closed."""
+    """Load a versioned night-session prompt (ADR-0007); missing fails closed."""
     resolved_path = REPOSITORY_ROOT / template_path
     if not resolved_path.is_file():
         print(
@@ -536,7 +501,7 @@ def run_developer_session(
     if heartbeat_seconds > 0:
         next_heartbeat_at = time.monotonic() + heartbeat_seconds
         while process.poll() is None:
-            time.sleep(min(HEARTBEAT_POLL_INTERVAL_SECONDS, heartbeat_seconds))
+            time.sleep(min(1, heartbeat_seconds))
             if process.poll() is not None:
                 break
             if time.monotonic() >= next_heartbeat_at:
@@ -576,7 +541,7 @@ def write_log_entry(*, log_file: Path, text: str) -> None:
 
 @dataclasses.dataclass
 class NightJournal:
-    """The loop's two output channels (ADR-0017).
+    """The loop's two output channels (ADR-0007).
 
     ``record`` pairs one short stdout line for the morning audit with
     its verbose log counterpart; ``log`` writes to the trace only.
@@ -599,8 +564,8 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     """Register the night subcommand."""
     subparser = subparsers.add_parser(
         "night",
-        help="Run the unattended day loop, one session per issue (ADR-0017).",
-        description="Run the unattended day loop, one session per issue (ADR-0017).",
+        help="Run the unattended day loop, one session per issue (ADR-0007).",
+        description="Run the unattended day loop, one session per issue (ADR-0007).",
     )
     subparser.add_argument(
         "--issues",
@@ -670,7 +635,7 @@ def run_explicit_directive(
     http_client: httpx.Client,
     prompt_directory: Path,
     repository_slug: str,
-    issue_numbers: Sequence[IssueIdentifier],
+    issue_numbers: Sequence[int],
     milestone_numbers: set[int],
     prompt_template: str,
     arguments: argparse.Namespace,
@@ -713,6 +678,7 @@ def run_explicit_directive(
             ),
             encoding="utf-8",
         )
+        journal.log(text=f"issue #{issue_number} prompt: {prompt_path}")
         exit_code, elapsed_seconds = run_developer_session(
             prompt_path=prompt_path,
             maximum_session_turns=arguments.max_turns,
@@ -808,6 +774,7 @@ def run_auto_discovered_sessions(
             ),
             encoding="utf-8",
         )
+        journal.log(text=f"session {sessions_started + 1} prompt: {prompt_path}")
         exit_code, elapsed_seconds = run_developer_session(
             prompt_path=prompt_path,
             maximum_session_turns=arguments.max_turns,
@@ -881,7 +848,7 @@ def run(*, arguments: argparse.Namespace) -> int:
     if shutil.which(DEVELOPER_CLI_COMMAND) is None:
         print(
             f"Error: {DEVELOPER_CLI_COMMAND} is not on PATH - the unattended"
-            " loop needs a signed-in Vibe Code CLI (ADR-0017).",
+            " loop needs a signed-in Vibe Code CLI (ADR-0007).",
             file=sys.stderr,
         )
         return EXIT_CODE_PROTOCOL_FAILURE

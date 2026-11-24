@@ -1,13 +1,13 @@
 # notify - the agent-to-owner doorbell
 
 `notify` is a utility of the repository, not part of the product
-(ADR-0014): it is the tool your coding agent - Vibe Code or
+(ADR-0001): it is the tool your coding agent - Vibe Code or
 any other - calls to tell you that **something on an issue needs your
-interaction**. It is the implementation of the ADR-0011 contact channel
+interaction**. It is the implementation of the ADR-0006 contact channel
 and the escalation severity contract.
 
 Incidentally, it is also a small, complete Python project
-demonstrating every rule of `docs/architecture.md` - onion layers,
+demonstrating every rule of `docs/rules.md` - onion layers,
 data-first style, precise typing, logging as executable comments.
 
 ## What it does
@@ -15,7 +15,7 @@ data-first style, precise typing, logging as executable comments.
 - `notify send --severity <question|urgent|info> --message ...
   [--issue-identifier ...]` - delivers a notification to the owner
   (Discord webhook, console fallback), with the severity contract of
-  `docs/agents/escalation.md`: `question` parks the work, `urgent`
+  `docs/protocol.md`: `question` parks the work, `urgent`
   stops all merges.
 - `notify smoke` - proves the notification pipeline is alive.
 

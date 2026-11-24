@@ -1,4 +1,4 @@
-"""Shared plumbing for every driver command (ADR-0021).
+"""Shared plumbing for every driver command (ADR-0001).
 
 Each module of this package is one driver domain; the plumbing every
 driver repeats - the ``.env`` loader, the GitHub token, the repository
@@ -7,14 +7,14 @@ so a driver module carries only its own protocol.
 
 Stdlib only, on purpose: the git-only subcommands (``day-report``,
 ``sync-daily``) import this module and must run without ``httpx``
-(ADR-0021); the GitHub API helpers live in ``_github`` instead.
+(ADR-0001); the GitHub API helpers live in ``_github`` instead.
 """
 
 import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, NewType
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -23,12 +23,6 @@ GITHUB_API_BASE_URL = "https://api.github.com"
 GITHUB_TOKEN_VARIABLE = "GITHUB_TOKEN"  # noqa: S105 - an env var NAME, never a secret
 ENVIRONMENT_FILE_NAME = ".env"
 CLAIM_LABEL_NAME = "night-claimed"
-
-RepositorySlug = NewType("RepositorySlug", str)
-"""The "owner/repository" slug of the origin remote."""
-
-PullRequestIdentifier = NewType("PullRequestIdentifier", int)
-"""A pull request number."""
 
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 
@@ -69,7 +63,7 @@ def load_github_token() -> str:
     return github_token
 
 
-def resolve_repository_slug() -> RepositorySlug:
+def resolve_repository_slug() -> str:
     """Return "owner/repository" from the origin remote, or fail closed."""
     remote_url = try_git(arguments=["remote", "get-url", "origin"]).stdout.strip()
     marker = "github.com"
@@ -89,7 +83,7 @@ def resolve_repository_slug() -> RepositorySlug:
             file=sys.stderr,
         )
         raise SystemExit(EXIT_CODE_PROTOCOL_FAILURE)
-    return RepositorySlug(f"{owner}/{repository.strip('/')}")
+    return f"{owner}/{repository.strip('/')}"
 
 
 def try_git(*, arguments: Sequence[str]) -> subprocess.CompletedProcess[str]:

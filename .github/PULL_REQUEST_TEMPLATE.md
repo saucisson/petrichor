@@ -3,6 +3,12 @@
 What changed and why, in plain sentences. One paragraph maximum - the
 diff carries the rest.
 
+## Issue closure
+
+If this pull request resolves an issue, write `Closes #n` in the body
+(e.g. `Closes #12`) so GitHub closes the issue automatically when the
+pull request merges.
+
 ## Acceptance criteria mapping
 
 | Criterion | Where it is satisfied | Evidence |
@@ -29,4 +35,6 @@ What remains unhandled, and why that is acceptable.
 - [ ] No constitutional file touched (or an ADR draft is included and
       labeled `needs-human`).
 - [ ] No new dependency added.
+- [ ] `Closes #n` present in the body when the pull request resolves an
+      issue.
 - [ ] Full `make check` run on this branch.
