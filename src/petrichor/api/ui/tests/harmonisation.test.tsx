@@ -54,6 +54,14 @@ describe("harmonisation web v1 (issue #209)", () => {
     await waitFor(() => expect(announcer).toHaveTextContent("Accueil"));
   });
 
+  it("le logo du header est servi sous /ui/logos/ (base Vite, ADR-0101)", async () => {
+    const { container } = render(<App />);
+    await screen.findByRole("button", { name: "Se déconnecter" });
+    const logo = container.querySelector("header img");
+    expect(logo).not.toBeNull();
+    expect(logo?.getAttribute("src")).toBe("/ui/logos/petrichor-logo-sombre.svg");
+  });
+
   it("menu compte anonyme : seul « Se connecter », qui revient à la page courante", async () => {
     setAuthMeAuthenticated(false);
     render(<App />);
