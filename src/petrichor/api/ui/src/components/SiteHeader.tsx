@@ -38,8 +38,12 @@ export default function SiteHeader({
   const { t, i18n } = useTranslation();
   // The light logo variant is for dark surfaces, the dark one for light
   // surfaces: the header band is dark, the landing page is light.
+  // Vite base is /ui/ (ADR-0101): the built logos are served under /ui/logos/
+  // - an absolute /logos/ path would miss the /ui/ prefix in production.
   const logoSource =
-    theme === "dark" ? "/logos/petrichor-logo-clair.svg" : "/logos/petrichor-logo-sombre.svg";
+    theme === "dark"
+      ? "/ui/logos/petrichor-logo-clair.svg"
+      : "/ui/logos/petrichor-logo-sombre.svg";
   const returnTo = window.location.pathname + window.location.search;
 
   return (
