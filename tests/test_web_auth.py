@@ -138,7 +138,13 @@ class TestLoginRedirect:
 
     def test_open_redirect_return_to_is_neutralized(self) -> None:
         client, _, _pending = make_app(oidc_flow=make_flow())
-        for evil in ("//evil.example", "/\\evil.example", "https://evil.example"):
+        for evil in (
+            "//evil.example",
+            "/" + chr(92) + "evil.example",
+            "https://evil.example",
+            "/" + chr(9) + "/evil.example",
+            "/" + chr(10) + "/evil.example",
+        ):
             state = login_and_get_state(client, return_to=evil)
             response = client.get(
                 "/auth/callback",
@@ -338,3 +344,8 @@ class TestLogout:
         client, _, _ = make_app(oidc_flow=make_flow())
         response = client.get("/auth/nope")
         assert response.status_code == 404
+
+    def test_wrong_method_on_a_known_auth_route_is_405(self) -> None:
+        client, _, _ = make_app(oidc_flow=make_flow())
+        assert client.post("/auth/login").status_code == 405
+        assert client.get("/auth/logout").status_code == 405

@@ -38,6 +38,9 @@ PENDING_LOGIN_TTL_SECONDS = 600
 OIDC_SCOPES = "openid profile email"
 CODE_CHALLENGE_METHOD = "S256"
 
+ASCII_CONTROL_CHARACTERS = frozenset(chr(code) for code in range(0x20)) | {chr(0x7F)}
+"""ASCII control characters rejected in a returnTo (WHATWG strips tab/LF/CR)."""
+
 
 @dataclass(frozen=True)
 class WebSession:
@@ -160,9 +163,13 @@ def _digest(value: str) -> str:
 def is_internal_path(*, path: str) -> bool:
     r"""A returnTo is valid only as an internal path (never an open redirect).
 
-    Rejected: external URLs, protocol-relative ``//host``, and backslash
-    variants (browsers normalize ``/\host`` to ``//host``).
+    Rejected: external URLs, protocol-relative ``//host``, backslash
+    variants (browsers normalize ``/\host`` to ``//host``), and ASCII
+    control characters (WHATWG URL parsing strips tab/LF/CR, so
+    ``/%09/evil.example`` would otherwise read as ``//evil.example``).
     """
+    if any(character in ASCII_CONTROL_CHARACTERS for character in path):
+        return False
     if not path.startswith("/") or path.startswith(("//", "/\\")):
         return False
     return "\\" not in path

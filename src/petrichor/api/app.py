@@ -4039,6 +4039,17 @@ def _dispatch_auth(  # noqa: PLR0911 - one typed response per /auth route
             content_type=CONTENT_TYPE_JSON,
             body=body,
         )
+    if path in (AUTH_LOGIN_PATH, AUTH_CALLBACK_PATH, AUTH_LOGOUT_PATH, AUTH_ME_PATH):
+        # A known /auth resource with the wrong verb: truthful 405 (ADR-0016).
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.METHOD_NOT_ALLOWED,
+                reason="method_not_allowed",
+                detail=f"Method {method} is not allowed on {path}.",
+            ),
+        )
     if path.startswith("/auth/"):
         return _problem_response(
             start_response=start_response,
