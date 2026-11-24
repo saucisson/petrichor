@@ -10,12 +10,17 @@
 import json
 import tempfile
 import time
+from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING
+from wsgiref.types import StartResponse, WSGIEnvironment
 
 import httpx
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+    from wsgiref.types import StartResponse, WSGIEnvironment
+
     from petrichor.petri_canonical import CanonicalModel
 import pytest
 import structlog.testing
@@ -23,7 +28,7 @@ from api_test_support import accepting_verifier
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from petrichor.api.app import create_app
+from petrichor.api.app import _token_error_guard, create_app
 from petrichor.api.settings import ApiSettings
 from petrichor.arbitration import ArbitrationStore
 from petrichor.checks import CheckCompleted, CheckQuestion, ToolVersion
@@ -545,3 +550,38 @@ class TestMistralTokenHeader:
         )
         assert response.status_code == 428
         assert response.json()["extensions"]["reason"] == "llm_token_required"
+
+
+class TestTokenErrorGuard:
+    """The WSGI safety net (issue #208): a typed token error escaping ANY handler
+    becomes its typed problem response (428/502), never an untyped 500."""
+
+    def test_escaped_token_error_becomes_a_typed_502(self) -> None:
+        def boom(environ: WSGIEnvironment, start_response: StartResponse) -> Iterable[bytes]:
+            raise MistralTokenInvalidError("mistral 401")
+
+        guarded = _token_error_guard(boom)
+        captured: dict[str, str] = {}
+
+        def start_response(status: str, headers: list[tuple[str, str]]) -> None:
+            captured["status"] = status
+
+        body = b"".join(guarded({"PATH_INFO": "/v1/x", "REQUEST_METHOD": "GET"}, start_response))
+        assert captured["status"].startswith("502")
+        payload = json.loads(body.decode("utf-8"))
+        assert payload["extensions"]["reason"] == "mistral_token_invalid"
+
+    def test_escaped_missing_token_becomes_a_typed_428(self) -> None:
+        def boom(environ: WSGIEnvironment, start_response: StartResponse) -> Iterable[bytes]:
+            raise LLMTokenRequiredError("no token")
+
+        guarded = _token_error_guard(boom)
+        captured: dict[str, str] = {}
+
+        def start_response(status: str, headers: list[tuple[str, str]]) -> None:
+            captured["status"] = status
+
+        body = b"".join(guarded({"PATH_INFO": "/v1/x", "REQUEST_METHOD": "GET"}, start_response))
+        assert captured["status"].startswith("428")
+        payload = json.loads(body.decode("utf-8"))
+        assert payload["extensions"]["reason"] == "llm_token_required"
