@@ -41,6 +41,9 @@ from petrichor.llm.provider import (
     LLMDegradationError,
     LLMError,
     LLMProvider,
+    LLMTokenRequiredError,
+    MistralToken,
+    MistralTokenInvalidError,
     record_call_state,
 )
 from petrichor.llm.routing import (
@@ -169,17 +172,23 @@ class MistralProvider(LLMProvider):
     def __init__(
         self,
         *,
-        api_key: SecretStr,
+        api_key: SecretStr | None = None,
         http_client: httpx.Client | None = None,
         api_url: str = MISTRAL_API_URL,
         language: str = DEFAULT_SESSION_LANGUAGE,
         routing: Mapping[LlmUsage, ModelRoute] | None = None,
     ) -> None:
-        """Bind the provider to a key, an HTTP client, a session language and a routing.
+        """Bind the provider to an optional fallback key, an HTTP client, a language and a routing.
 
         P74 (ADR-0108): the model is routed per usage from the pinned,
         versioned routing table; any ``-latest`` alias in the configuration
         is rejected explicitly (guard test, replay P46).
+
+        Web v1 §3 (issue #208): ``api_key`` is the local-dev fallback only -
+        it is forbidden in production (startup guard) and every call prefers
+        the per-request ``api_token`` header when present. The key is never
+        logged; with neither key nor token, calls raise
+        :class:`LLMTokenRequiredError` before any HTTP request.
         """
         self._api_key = api_key
         self._routing: dict[LlmUsage, ModelRoute] = dict(routing or USAGE_MODEL_ROUTING)
@@ -223,6 +232,22 @@ class MistralProvider(LLMProvider):
             "total_tokens": self._total_tokens,
         }
 
+    def _resolve_token(self, *, api_token: MistralToken | None) -> str:
+        """The effective Mistral credential for one call (web v1 §3, issue #208).
+
+        The per-request ``api_token`` header wins over the server fallback
+        key; with neither, the call is refused before any HTTP request. The
+        resolved value is never logged nor persisted.
+        """
+        if api_token:
+            return api_token
+        if self._api_key is not None:
+            return self._api_key.get_secret_value()
+        raise LLMTokenRequiredError(
+            "No Mistral API token: set the per-request x-mistral-api-token header "
+            "(web v1 preferences) or a local-dev MISTRAL_API_KEY fallback."
+        )
+
     def _complete(
         self,
         *,
@@ -231,6 +256,7 @@ class MistralProvider(LLMProvider):
         data: dict[str, JsonValue],
         output_type: type[OutputType],
         route: ModelRoute | None = None,
+        api_token: MistralToken | None = None,
     ) -> OutputType:
         """One chat completion (two messages) with bounded re-request and schema validation.
 
@@ -239,8 +265,11 @@ class MistralProvider(LLMProvider):
         ``{"digest": ..., "data": ..., "language": ...}``.
         P74 (ADR-0108): the model of the request is the pinned route of the
         usage, and the archive carries its exact (model, version).
+        ``api_token`` is the per-request Mistral token (web v1 §3, issue
+        #208): it replaces the server fallback key for this call only.
         """
         route = route or route_for(self._routing, usage=usage)
+        token = self._resolve_token(api_token=api_token)
         # P75: the call state is observable while the request is in flight.
         started_at = datetime.now(UTC)
         record_call_state(
@@ -278,11 +307,22 @@ class MistralProvider(LLMProvider):
                 response = self._client.post(
                     self._api_url,
                     headers={
-                        "Authorization": f"Bearer {self._api_key.get_secret_value()}",
+                        "Authorization": f"Bearer {token}",
                         "Content-Type": "application/json",
                     },
                     json=request_body,
                 )
+                if response.status_code == httpx.codes.UNAUTHORIZED:
+                    # Web v1 §3 (issue #208): a rejected token is surfaced
+                    # explicitly, never swallowed into the retry loop - and
+                    # never logged (the token itself stays out of every record).
+                    self._call_states[state_index] = self._call_states[state_index].model_copy(
+                        update={"ended_at": datetime.now(UTC), "error": "token_invalid"}
+                    )
+                    raise MistralTokenInvalidError(
+                        "Mistral rejected the API token (401). Check the token in the "
+                        "web v1 preferences; the token itself is never logged."
+                    )
                 response.raise_for_status()
                 payload = response.json()
                 content = payload["choices"][0]["message"]["content"]
@@ -347,7 +387,9 @@ class MistralProvider(LLMProvider):
             f" after {MAX_LLM_ATTEMPTS} attempts."
         ) from last_error
 
-    def semantic_profile(self, *, model: CanonicalModel) -> SemanticProfilePublic:
+    def semantic_profile(
+        self, *, model: CanonicalModel, api_token: MistralToken | None = None
+    ) -> SemanticProfilePublic:
         """Extract the semantic profile of a model via Mistral (digest `profile`)."""
         digest = net_digest(model, "profile")
         return self._complete(
@@ -355,6 +397,7 @@ class MistralProvider(LLMProvider):
             digest=digest,
             data={},
             output_type=SemanticProfilePublic,
+            api_token=api_token,
         )
 
     def reading(
@@ -364,6 +407,7 @@ class MistralProvider(LLMProvider):
         formulas: tuple[FormulaText, ...],
         roles: dict[str, AcceptedRole] | None = None,
         relations: tuple[str, ...] = (),
+        api_token: MistralToken | None = None,
     ) -> FormulaReadings:
         """Read the whole question grid in ONE call (P72) with the `places-only` digest (P73).
 
@@ -378,7 +422,11 @@ class MistralProvider(LLMProvider):
             "relations": list(relations),
         }
         document = self._complete(
-            usage="reading", digest=digest, data=data, output_type=FormulaReadings
+            usage="reading",
+            digest=digest,
+            data=data,
+            output_type=FormulaReadings,
+            api_token=api_token,
         )
         invented = set(document.readings) - set(formula_texts)
         if invented:
@@ -387,21 +435,37 @@ class MistralProvider(LLMProvider):
             )
         return document
 
-    def clarification(self, *, model: CanonicalModel, text: HumanMessage) -> Clarification:
+    def clarification(
+        self, *, model: CanonicalModel, text: HumanMessage, api_token: MistralToken | None = None
+    ) -> Clarification:
         """Reformulate a human proposal via Mistral (one call per proposal, `places-only`)."""
         digest = net_digest(model, "places-only", formulas=(str(text),))
         data: dict[str, JsonValue] = {"proposal": str(text)}
         return self._complete(
-            usage="clarification", digest=digest, data=data, output_type=Clarification
+            usage="clarification",
+            digest=digest,
+            data=data,
+            output_type=Clarification,
+            api_token=api_token,
         )
 
-    def cluster(self, *, model: CanonicalModel) -> tuple[Cluster, ...]:
+    def cluster(
+        self, *, model: CanonicalModel, api_token: MistralToken | None = None
+    ) -> tuple[Cluster, ...]:
         """Cluster the violations of a model via Mistral (digest `profile`)."""
         digest = net_digest(model, "profile")
-        document = self._complete(usage="cluster", digest=digest, data={}, output_type=ClusterList)
+        document = self._complete(
+            usage="cluster", digest=digest, data={}, output_type=ClusterList, api_token=api_token
+        )
         return document.clusters
 
-    def narrate(self, *, model: CanonicalModel, transitions: tuple[str, ...]) -> NarrationCorpus:
+    def narrate(
+        self,
+        *,
+        model: CanonicalModel,
+        transitions: tuple[str, ...],
+        api_token: MistralToken | None = None,
+    ) -> NarrationCorpus:
         """Narrate the COMPLETE witness in ONE call (P72, P32) with the `trace` digest (P73).
 
         The corpus may only cover the requested transitions — any extra key
@@ -417,6 +481,7 @@ class MistralProvider(LLMProvider):
                 data=data,
                 output_type=NarrationCorpus,
                 route=route,
+                api_token=api_token,
             )
         except LLMDegradationError:
             if route.fallback is None:
@@ -432,6 +497,7 @@ class MistralProvider(LLMProvider):
                 data=data,
                 output_type=NarrationCorpus,
                 route=route.fallback,
+                api_token=api_token,
             )
         invented = set(corpus.narrations) - set(transitions)
         if invented:

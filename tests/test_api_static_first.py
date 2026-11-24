@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 
 import httpx
 import structlog
-from pydantic import SecretStr
+from api_test_support import accepting_verifier
 
 from petrichor.api.app import create_app
 from petrichor.api.settings import ApiSettings
@@ -41,8 +41,8 @@ if TYPE_CHECKING:
 FIXTURES = Path(__file__).parent / "fixtures"
 PHILOSOPHES3_PNML = (FIXTURES / "philosophes3.pnml").read_text(encoding="utf-8")
 
-TEST_API_KEY = "test-key"
-AUTH_HEADERS = {"X-API-Key": TEST_API_KEY}
+TEST_PAT = "test-pat"
+AUTH_HEADERS = {"Authorization": f"Bearer {TEST_PAT}"}
 JSON_HEADERS = {**AUTH_HEADERS, "Content-Type": "application/json"}
 
 FAKE_TOOL_VERSION = ToolVersion("1.0.0-fake")
@@ -138,10 +138,11 @@ def build_client(
     *, runner: RecordingRunner, prober: FakeProber, static_first: bool
 ) -> tuple[httpx.Client, str]:
     """Wire the app with the Philosophes-3 model, the recording runner and the prober."""
-    settings = ApiSettings(api_key=SecretStr(TEST_API_KEY), static_first=static_first)
+    settings = ApiSettings(static_first=static_first)
     store = ModelStore()
     model, _ = store.save(model=import_pnml(text=PHILOSOPHES3_PNML))
     app = create_app(
+        token_verifier=accepting_verifier(),
         settings=settings,
         store=store,
         run_store=RunStore(),

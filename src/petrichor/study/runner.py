@@ -23,11 +23,12 @@ from typing import TYPE_CHECKING
 
 import httpx
 import structlog
-from pydantic import BaseModel, ConfigDict, SecretStr
+from pydantic import BaseModel, ConfigDict
 
 from petrichor.api.app import create_app
 from petrichor.api.settings import ApiSettings
 from petrichor.arbitration import ArbitrationStore
+from petrichor.auth import AuthSettings, TokenClaims, TokenVerifier
 from petrichor.checks import RunId, SessionId
 from petrichor.convergence import ConvergenceStore
 from petrichor.llm.schemas import ProfileEntry, SemanticProfile
@@ -49,8 +50,9 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger(__name__)
 
-STUDY_API_KEY = "study-p"
-AUTH_HEADERS = {"X-API-Key": STUDY_API_KEY}
+STUDY_PAT = "study-pat"
+"""The Bearer PAT the study runner presents to its in-process API (issue #207)."""
+AUTH_HEADERS = {"Authorization": f"Bearer {STUDY_PAT}"}
 JSON_HEADERS = {**AUTH_HEADERS, "Content-Type": "application/json"}
 PNML_HEADERS = {**AUTH_HEADERS, "Content-Type": "application/pnml+xml"}
 CONTRACT_HEADERS = {**AUTH_HEADERS, "Accept": "application/contract+json; version=1.0"}
@@ -157,6 +159,29 @@ class PiloteReport(BaseModel):
     journal_sha256: ContentHash
     materials: dict[str, ContentHash]
     output_dir: str
+
+
+class _AcceptingVerifier(TokenVerifier):
+    """A PT-1 verifier stub for the in-process study API: accepts the study PAT."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            settings=AuthSettings.model_validate(
+                {"AUTH_ISSUER": "https://auth.test", "AUTH_CLIENT_ID": "petrichor-study"}
+            ),
+            http_client=httpx.Client(
+                transport=httpx.MockTransport(lambda request: httpx.Response(200))
+            ),
+        )
+
+    def verify_access_token(self, *, token: str) -> TokenClaims:
+        return TokenClaims(
+            sub="study-runner", iss="https://auth.test", aud=["petrichor-study"], exp=4_000_000_000
+        )
+
+
+def _accepting_verifier() -> _AcceptingVerifier:
+    return _AcceptingVerifier()
 
 
 def _sha256_bytes(*, payload: bytes) -> ContentHash:
@@ -392,13 +417,11 @@ def run_pilote(
     config = pilote.load_config()
     materials = pilote.verify_materials(config=config)
     model_content_hash = import_pnml(text=pilote.load_model_text()).content_hash
-    settings = ApiSettings(
-        api_key=SecretStr(STUDY_API_KEY),
-        check_timeout_seconds=check_timeout_seconds,
-    )
+    settings = ApiSettings(check_timeout_seconds=check_timeout_seconds)
     arbitrator = ProfileArbitrator()
     app = create_app(
         settings=settings,
+        token_verifier=_accepting_verifier(),
         store=ModelStore(),
         run_store=RunStore(),
         runner=runner,

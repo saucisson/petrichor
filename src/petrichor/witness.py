@@ -22,7 +22,7 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from petrichor.checks import RunId
-from petrichor.llm.provider import LLMDegradationError
+from petrichor.llm.provider import LLMDegradationError, MistralToken
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -185,11 +185,15 @@ def narrate_steps(
     provider: LLMProvider,
     model: CanonicalModel,
     steps: tuple[WitnessStep, ...],
+    api_token: MistralToken | None = None,
 ) -> tuple[Narration, ...]:
     """One LLM narration per fired step, labeled ``provenance: llm`` (spec §16).
 
     A transition missing from the scripted corpus degrades explicitly (the
     step gets no narration) — the mock never invents a sentence (spec §15).
+    ``api_token`` is the per-request Mistral token (web v1 §3, issue #208),
+    forwarded to the provider; token errors propagate (they are not
+    degradations).
     """
     fired = tuple(step.fired for step in steps if step.fired is not None)
     if not fired:
@@ -198,7 +202,7 @@ def narrate_steps(
     # corpus is stored once (P32). A transition absent from the corpus gets
     # no narration - never an invented sentence.
     try:
-        corpus = provider.narrate(model=model, transitions=fired)
+        corpus = provider.narrate(model=model, transitions=fired, api_token=api_token)
     except LLMDegradationError:
         logger.warning(
             "witness_narration_degraded", model_hash=model.content_hash, steps=len(steps)

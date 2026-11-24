@@ -1,7 +1,10 @@
 # OpenAPI contract of the Petrichor HTTP API (ADR-0016) - kept with the code.
 # Versioning is explicit in the URL prefix (/v1). Errors are RFC 7807
-# problem+json everywhere. Authentication is the X-API-Key header, checked
-# before any body is parsed.
+# problem+json everywhere. Web v1 (issue #206, contract
+# docs/consigne-interface-web-v1.md §1/§5): GET /catalog/models and
+# GET /models/{model_id} are public read-only routes (security: []) of the
+# Découvrir zone; every other /v1 route requires a session cookie or a Bearer
+# PAT and answers 401 reason "session_required" without one.
 openapi: 3.1.0
 info:
   title: Petrichor API
@@ -15,8 +18,109 @@ info:
 servers:
   - url: /v1
 security:
-  - apiKey: []
+  - sessionCookie: []
+  - bearerAuth: []
 paths:
+  # Web v1 browser login (issue #207, contract §2). These four endpoints are
+  # served at the server ROOT, outside the /v1 prefix below: they are public
+  # by design (the login must be reachable without a session).
+  /auth/login:
+    get:
+      summary: Start the OIDC Authorization Code + PKCE S256 login (issue #207)
+      description: >-
+        302 to the IdP authorize endpoint (discovery-driven, no hard-coded URL)
+        with state/nonce/PKCE challenge. `returnTo` must be an internal path
+        (open redirects are neutralized to /ui/). 503 oidc_not_configured when
+        AUTH_ISSUER is unset, 503 oidc_unavailable when the IdP is unreachable.
+      security: []
+      parameters:
+        - name: returnTo
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Internal path to return to after the callback (default /ui/).
+      responses:
+        "302":
+          description: Redirect to the IdP authorize endpoint.
+          headers:
+            Location:
+              schema:
+                type: string
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /auth/callback:
+    get:
+      summary: OIDC callback - verify state/nonce, exchange the code, open a session
+      security: []
+      parameters:
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: code
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "302":
+          description: >-
+            Redirect to returnTo with Set-Cookie petrichor-session (HttpOnly,
+            Secure, SameSite=Lax; a JWT is never put in a cookie).
+          headers:
+            Location:
+              schema:
+                type: string
+            Set-Cookie:
+              schema:
+                type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+  /auth/logout:
+    post:
+      summary: Destroy the session, revoke at the IdP, expire the cookie
+      security: []
+      responses:
+        "302":
+          description: >-
+            Redirect to the IdP end_session endpoint (or /ui/ without one),
+            with an expired petrichor-session cookie.
+          headers:
+            Location:
+              schema:
+                type: string
+            Set-Cookie:
+              schema:
+                type: string
+  /auth/me:
+    get:
+      summary: The current applicative session
+      responses:
+        "200":
+          description: >-
+            The session subject and issuer, plus the profile claims
+            (preferred_username, name) when the IdP sent them (web v1 account
+            menu, issue #209).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sub, iss]
+                properties:
+                  sub:
+                    type: string
+                  iss:
+                    type: string
+                  preferred_username:
+                    type: string
+                  name:
+                    type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
   /:
     get:
       summary: Redirect to the elicitation UI (spec §9, issue #18)
@@ -216,7 +320,11 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
   /models/{model_id}:
     get:
-      summary: Read a model in its canonical form
+      summary: Read a model in its canonical form (public, read-only — issue #206)
+      description: >-
+        Public route of the Découvrir zone (contract §1/§5): no session, no
+        PAT required. Serves the canonical petri+json document.
+      security: []
       parameters:
         - name: model_id
           in: path
@@ -230,8 +338,6 @@ paths:
             application/petri+json; version=1.0:
               schema:
                 $ref: "#/components/schemas/CanonicalModel"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
         "406":
@@ -244,13 +350,16 @@ paths:
                 $ref: "#/components/schemas/Problem"
   /catalog/models:
     get:
-      summary: Search the MCC model catalog (spec §21.2, ADR-0105)
+      summary: Search the MCC model catalog (spec §21.2, ADR-0105) — public, read-only (issue #206)
       description: >-
+        Public route of the Découvrir zone (contract §1/§5): no session, no
+        PAT required.
         Paginated listing of the known MCC instances with free-text search on
         name/family, facet filters (family, formalism, edition, source, size),
         a closed sort set (name, family, edition, size - size is semantic,
         small to huge) and limit/offset pagination. 503 catalog_unavailable
         when every configured source failed to refresh.
+      security: []
       parameters:
         - name: search
           in: query
@@ -311,8 +420,6 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/Problem"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
         "503":
           description: Every catalog source failed (reason catalog_unavailable).
           content:
@@ -507,6 +614,7 @@ paths:
           required: true
           schema:
             type: string
+        - $ref: "#/components/parameters/MistralApiTokenHeader"
       responses:
         "200":
           description: The §16 witness document of the run.
@@ -520,6 +628,10 @@ paths:
           $ref: "#/components/responses/NotFound"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
+        "502":
+          $ref: "#/components/responses/BadGateway"
   /witnesses/{witness_id}:
     get:
       summary: One stored witness with the runs referencing it (stored once, referenced n times)
@@ -1086,6 +1198,7 @@ paths:
           required: true
           schema:
             type: string
+        - $ref: "#/components/parameters/MistralApiTokenHeader"
       requestBody:
         required: true
         content:
@@ -1130,6 +1243,10 @@ paths:
           $ref: "#/components/responses/NotFound"
         "422":
           $ref: "#/components/responses/Unprocessable"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
+        "502":
+          $ref: "#/components/responses/BadGateway"
   /sessions/{session_id}/reading:
     get:
       summary: The inverse reading of any formula (formule → langage, spec §9, issue #37)
@@ -1144,6 +1261,7 @@ paths:
           required: true
           schema:
             type: string
+        - $ref: "#/components/parameters/MistralApiTokenHeader"
       responses:
         "200":
           description: The reading of the formula, an LLM proposition labeled provenance llm.
@@ -1164,6 +1282,10 @@ paths:
           $ref: "#/components/responses/NotFound"
         "422":
           $ref: "#/components/responses/Unprocessable"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
+        "502":
+          $ref: "#/components/responses/BadGateway"
   /sessions/{session_id}/contract:
     get:
       summary: The contract of a session, negotiated as contract+json or Markdown (spec §4.8)
@@ -1366,10 +1488,33 @@ paths:
           $ref: "#/components/responses/MethodNotAllowed"
 components:
   securitySchemes:
-    apiKey:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        A PAT or OIDC access token, validated locally against the issuer JWKS
+        (PT-1). The legacy X-API-Key header is removed (issue #207).
+    sessionCookie:
       type: apiKey
+      in: cookie
+      name: petrichor-session
+      description: >-
+        The HttpOnly applicative session cookie set by /auth/callback
+        (web v1, issue #207); a JWT is never put in a cookie.
+  parameters:
+    MistralApiTokenHeader:
+      name: x-mistral-api-token
       in: header
-      name: X-API-Key
+      required: false
+      description: >-
+        The per-user Mistral API token, set in the web v1 preferences
+        (issue #208). Sent ONLY on calls that trigger an LLM generation;
+        consumed by the llm/provider in place of any server key, never
+        persisted, never logged, never echoed in a response.
+      schema:
+        type: string
+        minLength: 1
   schemas:
     PnmlCandidate:
       type: object
@@ -2186,11 +2331,17 @@ components:
   responses:
     Unauthorized:
       description: >-
-        Missing or invalid credentials: a valid `Authorization: Bearer`
-        access token (OIDC, validated locally against the IdP JWKS) or the
-        legacy `X-API-Key` header. Reason `invalid_bearer_token` when an
-        Authorization header was present but rejected, else
-        `missing_or_invalid_api_key`.
+        Web v1 (issue #206): every non-public route requires a session cookie
+        or a PAT. Reason `session_required` when no credentials were provided,
+        `invalid_bearer_token` when an Authorization header was present but
+        rejected. Public read-only routes (GET /catalog/models,
+        GET /models/{model_id}) never answer 401.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    ServiceUnavailable:
+      description: The identity provider is not configured or not reachable.
       content:
         application/problem+json:
           schema:
@@ -2233,6 +2384,24 @@ components:
             $ref: "#/components/schemas/Problem"
     ServiceUnavailable:
       description: The server has no engine/explorer wired for this resource (e.g. runner not configured).
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    PreconditionRequired:
+      description: >-
+        Web v1 (issue #208): a generation was requested without a Mistral
+        API token. Reason `llm_token_required`; set the token in the web
+        preferences (x-mistral-api-token header).
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    BadGateway:
+      description: >-
+        Web v1 (issue #208): Mistral rejected the presented API token
+        (upstream 401). Reason `mistral_token_invalid`; the token itself is
+        never included in the payload.
       content:
         application/problem+json:
           schema:

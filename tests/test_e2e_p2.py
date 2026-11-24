@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 import httpx
 import pytest
 import structlog
-from pydantic import SecretStr
+from api_test_support import accepting_verifier
 from test_e2e_p1 import MiniStaticResolver
 
 from petrichor.api.app import create_app
@@ -56,8 +56,8 @@ if TYPE_CHECKING:
 FIXTURES = Path(__file__).parent / "fixtures"
 PHILOSOPHES3_PNML = (FIXTURES / "philosophes3.pnml").read_text(encoding="utf-8")
 
-TEST_API_KEY = "test-key"
-AUTH_HEADERS = {"X-API-Key": TEST_API_KEY}
+TEST_PAT = "test-pat"
+AUTH_HEADERS = {"Authorization": f"Bearer {TEST_PAT}"}
 JSON_HEADERS = {**AUTH_HEADERS, "Content-Type": "application/json"}
 PNML_HEADERS = {**AUTH_HEADERS, "Content-Type": "application/pnml+xml"}
 CONTRACT_HEADERS = {**AUTH_HEADERS, "Accept": "application/contract+json; version=1.0"}
@@ -111,10 +111,9 @@ def build_app(
     arbitrator: ProfileArbitrator,
 ) -> httpx.Client:
     """Wire the full app around one real-engine runner, sharing the stores."""
-    settings = ApiSettings(
-        api_key=SecretStr(TEST_API_KEY), check_timeout_seconds=E2E_CHECK_TIMEOUT_SECONDS
-    )
+    settings = ApiSettings(check_timeout_seconds=E2E_CHECK_TIMEOUT_SECONDS)
     app = create_app(
+        token_verifier=accepting_verifier(),
         settings=settings,
         store=store,
         run_store=run_store,

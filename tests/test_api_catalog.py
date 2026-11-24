@@ -12,7 +12,7 @@ from pathlib import Path
 import httpx
 import pytest
 import structlog.testing
-from pydantic import SecretStr
+from api_test_support import accepting_verifier
 
 from petrichor.api import create_app
 from petrichor.api.settings import ApiSettings
@@ -32,8 +32,8 @@ from petrichor.run_store import RunStore
 
 FIXTURES = Path(__file__).parent / "fixtures"
 PHILOSOPHES_PNML = (FIXTURES / "philosophes3.pnml").read_text(encoding="utf-8")
-TEST_API_KEY = "test-key"
-AUTH_HEADERS = {"X-API-Key": TEST_API_KEY}
+TEST_PAT = "test-pat"
+AUTH_HEADERS = {"Authorization": f"Bearer {TEST_PAT}"}
 
 
 def make_entry(*, name: str, source: str = "pnmcc-2026") -> CatalogEntry:
@@ -108,8 +108,9 @@ class FakeCatalog:
 @pytest.fixture
 def client() -> httpx.Client:
     """An HTTP client wired to the WSGI app with a fake catalog."""
-    settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+    settings = ApiSettings()
     app = create_app(
+        token_verifier=accepting_verifier(),
         settings=settings,
         store=ModelStore(),
         run_store=RunStore(),
@@ -122,8 +123,9 @@ def client() -> httpx.Client:
 @pytest.fixture
 def unavailable_client() -> httpx.Client:
     """An HTTP client wired to an unavailable catalog."""
-    settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+    settings = ApiSettings()
     app = create_app(
+        token_verifier=accepting_verifier(),
         settings=settings,
         store=ModelStore(),
         run_store=RunStore(),
@@ -172,9 +174,11 @@ class TestCatalogListing:
         assert response.status_code == 503
         assert response.json()["extensions"]["reason"] == "catalog_unavailable"
 
-    def test_listing_requires_the_api_key(self, client: httpx.Client) -> None:
+    def test_listing_is_public_read_only(self, client: httpx.Client) -> None:
+        # Web v1 (issue #206): GET /v1/catalog/models is a public route of the
+        # Découvrir zone - no credentials required.
         response = client.get("/v1/catalog/models")
-        assert response.status_code == 401
+        assert response.status_code == 200
 
 
 class TestCatalogImport:
@@ -239,9 +243,10 @@ class TestCatalogImport:
         response = client.post("/v1/catalog/import", json={"wrong": 1}, headers=AUTH_HEADERS)
         assert response.status_code == 422
 
-    def test_import_requires_the_api_key(self, client: httpx.Client) -> None:
+    def test_import_without_credentials_is_401_session_required(self, client: httpx.Client) -> None:
         response = client.post("/v1/catalog/import", json={"name": "Philosophers-PT-010"})
         assert response.status_code == 401
+        assert response.json()["extensions"]["reason"] == "session_required"
 
 
 class TestCatalogNarration:
@@ -270,7 +275,7 @@ class TestCatalogQueryDecoding:
         assert response.json()["total"] == 1
 
     def test_plus_decodes_to_space_in_search(self) -> None:
-        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+        settings = ApiSettings()
         spaced = FakeCatalog()
         spaced._entries.append(
             CatalogEntry(
@@ -284,6 +289,7 @@ class TestCatalogQueryDecoding:
             )
         )
         app = create_app(
+            token_verifier=accepting_verifier(),
             settings=settings,
             store=ModelStore(),
             run_store=RunStore(),

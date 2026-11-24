@@ -1,17 +1,19 @@
 {
   "app": {
     "title": "Petrichor — elicitation session",
-    "languageLabel": "Language"
+    "languageLabel": "Language",
+    "skipLink": "Skip to main content"
   },
   "header": {
-    "groupConnection": "Connection",
     "groupSession": "Session",
-    "apiKeyLabel": "API key",
-    "apiKeyAria": "API key",
     "sessionLabel": "Session",
     "sessionAria": "Session identifier (resume)",
     "resume": "Resume session",
-    "themeToggle": "Switch to dark / light mode"
+    "themeToggle": "Switch to dark / light mode",
+    "login": "Log in",
+    "preferences": "Preferences",
+    "account": "Account",
+    "logout": "Log out"
   },
   "nav": {
     "aria": "Steps",
@@ -22,6 +24,20 @@
       "verifications": "3. MC checks",
       "synthese": "4. Summary"
     }
+  },
+  "preferences": {
+    "title": "Preferences",
+    "mistralTokenLabel": "Mistral API token",
+    "mistralTokenPlaceholder": "sk-…",
+    "mistralTokenHint": "Stored in this browser only (localStorage); sent only on calls that trigger a generation, never logged.",
+    "clearToken": "Clear",
+    "themeLabel": "Theme",
+    "theme": {
+      "light": "Light",
+      "dark": "Dark"
+    },
+    "languageLabel": "Language",
+    "close": "Close"
   },
   "amorcage": {
     "fileAria": "PNML file",
@@ -152,7 +168,10 @@
     "badge": {
       "verified": "verified ×{{count}}",
       "controversial": "controversial"
-    }
+    },
+    "mistralTokenMissing": "AI feature disabled: no Mistral API token is set (Preferences menu).",
+    "mistralTokenRequired": "A Mistral API token is required for this generation: set it in Preferences.",
+    "mistralTokenInvalid": "The Mistral API token was rejected by Mistral (401). Check it in Preferences."
   },
   "verifications": {
     "title": "MC checks",
@@ -206,5 +225,37 @@
     "clarification": "Clarifying the proposal…",
     "cluster": "Triaging the violated clauses…",
     "narration": "Narrating the witness…"
+  },
+  "zones": {
+    "aria": "Site zones",
+    "accueil": "Home",
+    "decouvrir": "Explore",
+    "atelier": "Workshop"
+  },
+  "landing": {
+    "title": "Petrichor — property elicitation on Petri nets",
+    "tagline": "Check properties of your PNML models through guided elicitation and model checking.",
+    "description": "Petrichor accompanies the analyst from model import to proof synthesis: model setup, static questions, multi-tool model-checking verifications, and the proof dossier. The Explore zone lets you browse catalogs and examples freely; the workshop, reserved for signed-in accounts, runs the computations.",
+    "ctaExplore": "Explore the Explore zone",
+    "ctaWorkshop": "Open the workshop",
+    "hintNoAuth": "No account needed on this page or in the Explore zone."
+  },
+  "decouvrir": {
+    "title": "Explore",
+    "intro": "Read-only view of the MCC model catalog: no account needed, no writes possible.",
+    "searchLabel": "Search the catalog",
+    "searchButton": "Search",
+    "loading": "Loading the catalog…",
+    "total": "{{count}} model(s) in the catalog.",
+    "empty": "No model matches the search."
+  },
+  "atelier": {
+    "gateTitle": "The workshop requires an account",
+    "gateMessage": "Sign in with auth.linard.fr to import a model, run checks and read the synthesis. After signing in you will automatically return to this page.",
+    "gateCta": "Sign in with auth.linard.fr"
+  },
+  "errors": {
+    "notFoundTitle": "Page not found (404)",
+    "notFoundBody": "This page does not exist. Use the navigation to reach Home, Explore or the Workshop."
   }
 }

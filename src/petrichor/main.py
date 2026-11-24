@@ -2,7 +2,8 @@
 
 Wires logging, settings, the model store, the run store and the WSGI app,
 then serves with the stdlib `wsgiref` server - no adapter is constructed
-anywhere else. Run with ``PETRICHOR_API_KEY=... python -m petrichor.main``.
+anywhere else. Run with ``python -m petrichor.main`` (web v1 login is OIDC,
+issue #207; the legacy ``X-API-Key`` is gone).
 
 No check runner is wired yet: the verdict lock (spec §19.4) forbids any
 module outside ``petrichor.engines`` from importing that package, so the
@@ -19,6 +20,7 @@ import structlog
 
 from petrichor.api import create_app
 from petrichor.api.settings import ApiSettings
+from petrichor.api.web_auth import OidcFlowClient
 from petrichor.arbitration import ArbitrationStore
 from petrichor.auth import AuthSettings, TokenVerifier
 from petrichor.catalog_sources import (
@@ -65,10 +67,11 @@ def build_token_verifier(*, environment: dict[str, str] | None = None) -> TokenV
     silent open server.
 
     When ``AUTH_ISSUER`` is absent or empty, the Bearer layer is simply not
-    wired (``None``): the API stays fully protected by the mandatory legacy
-    ``X-API-Key`` — a missing optional auth layer must never take the site
-    down (502 on petrichor.linard.fr, 2026-11-21). A structured warning
-    narrates the fallback.
+    wired (``None``) and the OIDC browser login is not wired either: the API
+    stays protected by the session-cookie gate (``401 session_required`` on
+    every protected route) — a missing optional auth layer must never take
+    the site down (502 on petrichor.linard.fr, 2026-11-21). A structured
+    warning narrates the fallback.
     """
     env = os.environ if environment is None else environment
     # The L3 guard runs FIRST, on the raw environment: AUTH_DISABLED=1 in
@@ -84,12 +87,25 @@ def build_token_verifier(*, environment: dict[str, str] | None = None) -> TokenV
     if not env.get("AUTH_ISSUER", "").strip():
         structlog.get_logger(__name__).warning(
             "auth_bearer_not_configured",
-            detail="AUTH_ISSUER is unset: Bearer JWT validation is off, "
-            "the legacy X-API-Key still gates every /v1/ route.",
+            detail="AUTH_ISSUER is unset: Bearer JWT validation and the OIDC "
+            "browser login are off, protected routes answer 401 "
+            "session_required (web v1, issue #207).",
         )
         return None
     auth_settings = AuthSettings.model_validate(env)
     return TokenVerifier(settings=auth_settings)
+
+
+def build_oidc_flow(*, environment: dict[str, str] | None = None) -> OidcFlowClient | None:
+    """Build the OIDC browser-login flow client when ``AUTH_ISSUER`` is set.
+
+    Without an issuer there is no discovery document, so no login flow: the
+    ``/auth/*`` routes answer ``503 oidc_not_configured`` (issue #207).
+    """
+    env = os.environ if environment is None else environment
+    if not env.get("AUTH_ISSUER", "").strip():
+        return None
+    return OidcFlowClient(settings=AuthSettings.model_validate(env))
 
 
 """Container deployment (ADR-0102): the API listens on 0.0.0.0 inside the
@@ -125,6 +141,7 @@ def build_server(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
     catalog: CatalogService | None = None,
     url_import: UrlImportConfig | None = None,
     token_verifier: TokenVerifier | None = None,
+    oidc_flow: OidcFlowClient | None = None,
     host: str = DEFAULT_HOST,
     port: int = DEFAULT_PORT,
 ) -> WSGIServer:
@@ -144,19 +161,36 @@ def build_server(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
         catalog=catalog,
         url_import=url_import,
         token_verifier=token_verifier,
+        oidc_flow=oidc_flow,
     )
     return make_server(host, port, app)
 
 
-def select_llm_provider(*, settings: ApiSettings) -> LLMProvider:
+def select_llm_provider(
+    *, settings: ApiSettings, environment: dict[str, str] | None = None
+) -> LLMProvider:
     """Select the LLM provider by configuration (spec §8, issue #36).
 
     ``mock`` (default) serves the golden corpus; ``mistral`` calls the real
-    API and fails at startup when the key is missing - never open by default.
+    API. Web v1 §3 (issue #208): the global ``MISTRAL_API_KEY`` is a
+    local-dev fallback only - combining it with ``PETRICHOR_ENV=production``
+    is a fatal configuration error, whatever the selected provider (same L3
+    guard as ``AUTH_DISABLED``, which runs first and unconditionally); in
+    production every generation uses the per-request ``x-mistral-api-token``
+    header instead.
     """
+    env = os.environ if environment is None else environment
+    # The L3 guard runs FIRST, on the raw environment, for ANY provider:
+    # a global Mistral key in production is fatal even with the mock.
+    if settings.mistral_api_key is not None and (
+        env.get(ENVIRONMENT_VARIABLE) == PRODUCTION_ENVIRONMENT
+    ):
+        raise ConfigurationError(
+            f"MISTRAL_API_KEY must never be set with {ENVIRONMENT_VARIABLE}="
+            f"{PRODUCTION_ENVIRONMENT} (web v1 §3, issue #208): in production the "
+            "per-request x-mistral-api-token header replaces the global key."
+        )
     if settings.llm_provider == "mistral":
-        if settings.mistral_api_key is None:
-            raise SystemExit("PETRICHOR_LLM_PROVIDER=mistral requires MISTRAL_API_KEY to be set.")
         # P74 (ADR-0108): the model is routed per usage from the pinned table.
         return MistralProvider(api_key=settings.mistral_api_key)
     return DeterministicMockProvider()
@@ -209,6 +243,7 @@ def main() -> None:
         catalog=catalog,
         url_import=url_import_config,
         token_verifier=build_token_verifier(),
+        oidc_flow=build_oidc_flow(),
         host=host,
         port=port,
     )

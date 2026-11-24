@@ -13,7 +13,7 @@ from pathlib import Path
 
 import httpx
 import pytest
-from pydantic import SecretStr
+from api_test_support import accepting_verifier
 
 from petrichor.api import create_app
 from petrichor.api.settings import ApiSettings
@@ -23,8 +23,8 @@ from petrichor.model_store import ModelStore
 from petrichor.run_store import RunStore
 
 FIXTURES = Path(__file__).parent / "fixtures"
-TEST_API_KEY = "smoke-key"
-AUTH_HEADERS = {"X-API-Key": TEST_API_KEY}
+TEST_PAT = "smoke-pat"
+AUTH_HEADERS = {"Authorization": f"Bearer {TEST_PAT}"}
 JSON_HEADERS = {**AUTH_HEADERS, "Content-Type": "application/json"}
 PNML_HEADERS = {**AUTH_HEADERS, "Content-Type": "application/pnml+xml"}
 TERMINAL_POLL_SECONDS = 120.0
@@ -49,8 +49,14 @@ def test_p0_jalon_end_to_end_on_philosophes3(tmp_path: Path) -> None:
     """Import → EF DEADLOCK on the real verifypn engine → poll → read the archived run."""
     archive = RunArchive(directory=tmp_path / "runs")
     runner = VerifypnCheckRunner(archive=archive)
-    settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
-    app = create_app(settings=settings, store=ModelStore(), run_store=RunStore(), runner=runner)
+    settings = ApiSettings()
+    app = create_app(
+        token_verifier=accepting_verifier(),
+        settings=settings,
+        store=ModelStore(),
+        run_store=RunStore(),
+        runner=runner,
+    )
     client = httpx.Client(transport=httpx.WSGITransport(app=app), base_url="http://testserver")
 
     import_response = client.post(

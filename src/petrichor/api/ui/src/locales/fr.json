@@ -1,17 +1,19 @@
 {
   "app": {
     "title": "Petrichor — session d'élicitation",
-    "languageLabel": "Langue"
+    "languageLabel": "Langue",
+    "skipLink": "Aller au contenu principal"
   },
   "header": {
-    "groupConnection": "Connexion",
     "groupSession": "Session",
-    "apiKeyLabel": "Clé API",
-    "apiKeyAria": "Clé API",
     "sessionLabel": "Session",
     "sessionAria": "Identifiant de session (reprise)",
     "resume": "Reprendre la session",
-    "themeToggle": "Basculer en mode sombre / clair"
+    "themeToggle": "Basculer en mode sombre / clair",
+    "login": "Se connecter",
+    "preferences": "Préférences",
+    "account": "Compte",
+    "logout": "Se déconnecter"
   },
   "nav": {
     "aria": "Étapes",
@@ -22,6 +24,20 @@
       "verifications": "3. Vérifications MC",
       "synthese": "4. Synthèse"
     }
+  },
+  "preferences": {
+    "title": "Préférences",
+    "mistralTokenLabel": "Token d'API Mistral",
+    "mistralTokenPlaceholder": "sk-…",
+    "mistralTokenHint": "Stocké uniquement dans ce navigateur (localStorage) ; envoyé uniquement sur les appels qui déclenchent une génération, jamais journalisé.",
+    "clearToken": "Effacer",
+    "themeLabel": "Thème",
+    "theme": {
+      "light": "Clair",
+      "dark": "Sombre"
+    },
+    "languageLabel": "Langue",
+    "close": "Fermer"
   },
   "amorcage": {
     "title": "Amorçage",
@@ -152,7 +168,10 @@
     "badge": {
       "verified": "vérifiée ×{{count}}",
       "controversial": "controversée"
-    }
+    },
+    "mistralTokenMissing": "Fonction IA désactivée : aucun token d'API Mistral n'est défini (menu Préférences).",
+    "mistralTokenRequired": "Un token d'API Mistral est requis pour cette génération : définissez-le dans les Préférences.",
+    "mistralTokenInvalid": "Le token d'API Mistral a été rejeté par Mistral (401). Vérifiez-le dans les Préférences."
   },
   "verifications": {
     "title": "Vérifications MC",
@@ -206,5 +225,37 @@
     "clarification": "Clarification de la proposition…",
     "cluster": "Tri des clauses violées…",
     "narration": "Narration du témoin…"
+  },
+  "zones": {
+    "aria": "Zones du site",
+    "accueil": "Accueil",
+    "decouvrir": "Découvrir",
+    "atelier": "Atelier"
+  },
+  "landing": {
+    "title": "Petrichor — élicitation de propriétés sur réseaux de Petri",
+    "tagline": "Vérifiez des propriétés de vos modèles PNML par élicitation guidée et model checking.",
+    "description": "Petrichor accompagne l'analyste depuis l'import du modèle jusqu'à la synthèse des preuves : amorçage du modèle, questions statiques, vérifications par model checking multi-outils, et dossier de preuve. La zone Découvrir permet de consulter librement les catalogues et exemples ; l'atelier, réservé aux comptes, lance les calculs.",
+    "ctaExplore": "Explorer la zone Découvrir",
+    "ctaWorkshop": "Ouvrir l'atelier",
+    "hintNoAuth": "Aucun compte requis sur cette page ni sur la zone Découvrir."
+  },
+  "decouvrir": {
+    "title": "Découvrir",
+    "intro": "Consultation en lecture seule du catalogue de modèles MCC : aucun compte requis, aucune écriture possible.",
+    "searchLabel": "Recherche dans le catalogue",
+    "searchButton": "Rechercher",
+    "loading": "Chargement du catalogue…",
+    "total": "{{count}} modèle(s) dans le catalogue.",
+    "empty": "Aucun modèle ne correspond à la recherche."
+  },
+  "atelier": {
+    "gateTitle": "L'atelier est réservé aux comptes",
+    "gateMessage": "Connectez-vous avec auth.linard.fr pour importer un modèle, lancer des vérifications et consulter la synthèse. Après la connexion, vous reviendrez automatiquement sur cette page.",
+    "gateCta": "Se connecter avec auth.linard.fr"
+  },
+  "errors": {
+    "notFoundTitle": "Page introuvable (404)",
+    "notFoundBody": "Cette page n'existe pas. Utilisez la navigation pour rejoindre l'Accueil, Découvrir ou l'Atelier."
   }
 }

@@ -1,9 +1,10 @@
-"""Tests of the API authentication middleware (PT-2, issue #183).
+"""Tests of the API authentication middleware (PT-2, issue #183; #207).
 
-The middleware accepts a valid ``Authorization: Bearer`` JWT (validated by a
-stubbed PT-1 verifier — no network) alongside the legacy ``X-API-Key``; any
-other request gets a uniform 401 problem response and a structured
-``api_request_unauthorized`` log with the exact reason (ADR-0005).
+The middleware accepts only a valid ``Authorization: Bearer`` JWT (validated
+by a stubbed PT-1 verifier — no network); the legacy ``X-API-Key`` is removed
+(web v1 bascule, issue #207). Any other request gets a uniform 401 problem
+response and a structured ``api_request_unauthorized`` log with the exact
+reason (ADR-0005).
 """
 
 from typing import TYPE_CHECKING
@@ -11,7 +12,6 @@ from typing import TYPE_CHECKING
 import httpx
 import pytest
 import structlog.testing
-from pydantic import SecretStr
 
 if TYPE_CHECKING:
     from wsgiref.types import WSGIEnvironment
@@ -20,7 +20,7 @@ from petrichor.api import create_app
 from petrichor.api.auth import (
     ENVIRON_AUTH_CLAIMS,
     REASON_INVALID_BEARER,
-    REASON_MISSING_CREDENTIALS,
+    REASON_SESSION_REQUIRED,
     auth_claims_from_environ,
     authenticate_request,
 )
@@ -31,7 +31,6 @@ from petrichor.main import ConfigurationError, build_token_verifier
 from petrichor.model_store import ModelStore
 from petrichor.run_store import RunStore
 
-TEST_API_KEY = "test-key"
 ISSUER = "https://auth.test"
 CLIENT_ID = "petrichor-test"
 
@@ -68,7 +67,7 @@ PROBE_PATH = "/v1/llm/usage"
 
 
 def make_app(verifier: TokenVerifier | None) -> httpx.Client:
-    settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+    settings = ApiSettings()
     app = create_app(
         settings=settings,
         store=ModelStore(),
@@ -122,13 +121,14 @@ class TestBearerAuthentication:
         assert response.status_code == 401
 
 
-class TestLegacyApiKey:
-    def test_legacy_api_key_still_passes_the_same_middleware(
+class TestLegacyApiKeyRemoved:
+    def test_legacy_api_key_header_is_no_longer_accepted(
         self, accepting_verifier: StubVerifier
     ) -> None:
         client = make_app(accepting_verifier)
-        response = client.get(PROBE_PATH, headers={"X-API-Key": TEST_API_KEY})
-        assert response.status_code == 200
+        response = client.get(PROBE_PATH, headers={"X-API-Key": "any-key"})
+        assert response.status_code == 401
+        assert response.json()["extensions"]["reason"] == REASON_SESSION_REQUIRED
 
     def test_missing_credentials_return_the_uniform_401(
         self, accepting_verifier: StubVerifier
@@ -136,11 +136,13 @@ class TestLegacyApiKey:
         client = make_app(accepting_verifier)
         response = client.get(PROBE_PATH)
         assert response.status_code == 401
-        assert response.json()["extensions"]["reason"] == REASON_MISSING_CREDENTIALS
+        assert response.json()["extensions"]["reason"] == REASON_SESSION_REQUIRED
 
-    def test_wrong_api_key_returns_401(self, accepting_verifier: StubVerifier) -> None:
-        client = make_app(accepting_verifier)
-        response = client.get(PROBE_PATH, headers={"X-API-Key": "wrong"})
+    def test_wrong_bearer_token_returns_401(
+        self, accepting_verifier: StubVerifier, rejecting_verifier: StubVerifier
+    ) -> None:
+        client = make_app(rejecting_verifier)
+        response = client.get(PROBE_PATH, headers={"Authorization": "Bearer wrong"})
         assert response.status_code == 401
 
 
@@ -160,7 +162,7 @@ class TestIdentityExposure:
     def test_valid_bearer_claims_are_exposed_to_handlers(
         self, accepting_verifier: StubVerifier
     ) -> None:
-        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
+        settings = ApiSettings()
         environ: WSGIEnvironment = {"HTTP_AUTHORIZATION": "Bearer good-token"}
         decision = authenticate_request(
             environ=environ,
@@ -172,15 +174,15 @@ class TestIdentityExposure:
         environ[ENVIRON_AUTH_CLAIMS] = decision.claims
         assert auth_claims_from_environ(environ) == VALID_CLAIMS
 
-    def test_legacy_key_carries_no_identity(self) -> None:
-        settings = ApiSettings(api_key=SecretStr(TEST_API_KEY))
-        environ: WSGIEnvironment = {"HTTP_X_API_KEY": TEST_API_KEY}
+    def test_legacy_key_header_carries_no_identity(self) -> None:
+        settings = ApiSettings()
+        environ: WSGIEnvironment = {"HTTP_X_API_KEY": "any-key"}
         decision = authenticate_request(
             environ=environ,
             settings=settings,
             token_verifier=None,
         )
-        assert decision.allowed
+        assert not decision.allowed
         assert decision.claims is None
         assert auth_claims_from_environ(environ) is None
 
@@ -222,16 +224,17 @@ class TestL3Guard:
 
 
 class TestBearerFallback:
-    def test_missing_auth_issuer_falls_back_to_legacy_key_only(self) -> None:
+    def test_missing_auth_issuer_falls_back_to_session_required_only(self) -> None:
         # 2026-11-21: a missing AUTH_ISSUER must never crash the server (the
-        # 502 on petrichor.linard.fr); the legacy X-API-Key still gates /v1/.
+        # 502 on petrichor.linard.fr); without a Bearer verifier every
+        # protected route answers 401 session_required (issue #207).
         with structlog.testing.capture_logs() as logs:
-            verifier = build_token_verifier(environment={"PETRICHOR_API_KEY": TEST_API_KEY})
+            verifier = build_token_verifier(environment={})
         assert verifier is None
         events = [event["event"] for event in logs]
         assert "auth_bearer_not_configured" in events
 
-    def test_empty_auth_issuer_falls_back_to_legacy_key_only(self) -> None:
+    def test_empty_auth_issuer_falls_back_to_session_required_only(self) -> None:
         verifier = build_token_verifier(environment={"AUTH_ISSUER": "  "})
         assert verifier is None
 
@@ -239,9 +242,10 @@ class TestBearerFallback:
         client = make_app(build_token_verifier(environment={}))
         response = client.get(PROBE_PATH)
         assert response.status_code == 401
-        assert response.json()["extensions"]["reason"] == REASON_MISSING_CREDENTIALS
+        assert response.json()["extensions"]["reason"] == REASON_SESSION_REQUIRED
 
-    def test_fallback_app_still_accepts_the_legacy_key(self) -> None:
+    def test_fallback_app_rejects_the_legacy_key_header(self) -> None:
         client = make_app(build_token_verifier(environment={}))
-        response = client.get(PROBE_PATH, headers={"X-API-Key": TEST_API_KEY})
-        assert response.status_code == 200
+        response = client.get(PROBE_PATH, headers={"X-API-Key": "any-key"})
+        assert response.status_code == 401
+        assert response.json()["extensions"]["reason"] == REASON_SESSION_REQUIRED

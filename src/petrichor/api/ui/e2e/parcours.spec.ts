@@ -11,18 +11,29 @@ import { fileURLToPath } from "node:url";
    texts (formulas, verdicts, narrations) are asserted verbatim, never
    translated. */
 
-const API_KEY = process.env.PETRICHOR_UI_API_KEY ?? "test-key";
+const SESSION_COOKIE = process.env.PETRICHOR_UI_SESSION_COOKIE ?? "";
 const PNML_FIXTURE =
   process.env.PETRICHOR_PNML_FIXTURE ??
   fileURLToPath(new URL("../../../../tests/fixtures/philosophes3-maquette.pnml", import.meta.url));
 
 test("parcours complet des 4 étapes + arbitrage + langue + édition + dossier + convergence", async ({
   page,
+  context,
 }) => {
+  // Web v1 (issue #207): the browser authenticates with the server-side
+  // session cookie minted by the harness (tests/test_ui_e2e.py), not a key.
+  await context.addCookies([
+    {
+      name: "petrichor-session",
+      value: SESSION_COOKIE,
+      url: process.env.PETRICHOR_UI_BASE_URL ?? "http://127.0.0.1:18090/ui/",
+    },
+  ]);
   await page.goto("/");
+  // Web v1 (issue #205): the app opens on the public landing - enter the workshop zone.
+  await page.locator("nav button[data-zone='atelier']").click();
 
-  // Étape 1 - amorçage: clé API, import PNML, création de session.
-  await page.locator("#api-key").fill(API_KEY);
+  // Étape 1 - amorçage: import PNML, création de session.
   // P77 wizard: the local file import lives behind the "Fichier local" card.
   await page.getByRole("button", { name: "Fichier local" }).click();
   await page.locator("#pnml-file").setInputFiles(PNML_FIXTURE);

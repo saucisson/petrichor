@@ -20,9 +20,11 @@
   (adapter, family) to the orchestrator (spec §17.5, issue #22); a done run
   also carries ``engine_qualified``, whether its engine is qualified for the
   family - an unqualified adapter is never alone on a clause.
-- Every request is authenticated with the ``X-API-Key`` header before it is
-  parsed deeply; every error is an RFC 7807 ``application/problem+json``
-  payload of the same shape.
+- Web v1 (issue #206, contract §1/§5): ``GET /v1/catalog/models`` and
+  ``GET /v1/models/{mid}`` are public read-only routes of the Découvrir zone;
+  every other ``/v1`` route requires a session cookie or a Bearer PAT and
+  answers ``401`` ``reason: "session_required"`` without one. Every error is
+  an RFC 7807 ``application/problem+json`` payload of the same shape.
 
 The contract document is ``openapi.yaml`` next to this module (ADR-0016).
 """
@@ -43,10 +45,18 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from petrichor.api.auth import (
     ENVIRON_AUTH_CLAIMS,
-    HEADER_API_KEY,
     REASON_INVALID_BEARER,
     REASON_MISSING_CREDENTIALS,
+    REASON_SESSION_REQUIRED,
     authenticate_request,
+)
+from petrichor.api.web_auth import (
+    SESSION_COOKIE,
+    OidcFlowClient,
+    PendingLoginStore,
+    WebSessionStore,
+    code_challenge_s256,
+    is_internal_path,
 )
 from petrichor.arbitration import ArbitrationDecisionKind, ArbitrationStore
 from petrichor.archive_ingest import (
@@ -57,6 +67,7 @@ from petrichor.archive_ingest import (
     UnsafeArchiveError,
     extract_pnml_candidates,
 )
+from petrichor.auth import TokenRejectedError
 from petrichor.catalog import (
     CatalogQuery,
     CatalogUnavailableError,
@@ -92,7 +103,13 @@ from petrichor.elicitation import (
     questions_converge,
 )
 from petrichor.insitu import build_net_overlay
-from petrichor.llm.provider import FormulaText, LLMDegradationError
+from petrichor.llm.provider import (
+    FormulaText,
+    LLMDegradationError,
+    LLMTokenRequiredError,
+    MistralToken,
+    MistralTokenInvalidError,
+)
 from petrichor.petri_canonical import (
     Arc,
     CanonicalModel,
@@ -227,6 +244,10 @@ CONTENT_TYPE_CONTRACT_JSON = "application/contract+json; version=1.0"
 CONTENT_TYPE_MARKDOWN = "text/markdown; charset=utf-8"
 UI_PATH = "/ui/"
 UI_INDEX = "index.html"
+AUTH_LOGIN_PATH = "/auth/login"
+AUTH_CALLBACK_PATH = "/auth/callback"
+AUTH_LOGOUT_PATH = "/auth/logout"
+AUTH_ME_PATH = "/auth/me"
 CONTENT_TYPE_HTML = "text/html; charset=utf-8"
 CONTENT_TYPE_JAVASCRIPT = "text/javascript; charset=utf-8"
 CONTENT_TYPE_CSS = "text/css; charset=utf-8"
@@ -1500,15 +1521,18 @@ def _get_run_witness(
     if llm_provider is not None:
         model = store.get(model_id=run.model_id)
         if model is not None:
-            document = document.model_copy(
-                update={
-                    "narrations": narrate_steps(
-                        provider=llm_provider,
-                        model=model,
-                        steps=document.steps,
-                    )
-                }
-            )
+            try:
+                narrations = narrate_steps(
+                    provider=llm_provider,
+                    model=model,
+                    steps=document.steps,
+                    api_token=_mistral_token_from_environ(environ=environ),
+                )
+            except (LLMTokenRequiredError, MistralTokenInvalidError) as token_error:
+                return _token_problem_response(
+                    start_response=start_response, environ=environ, error=token_error
+                )
+            document = document.model_copy(update={"narrations": narrations})
     logger.debug(
         "api_run_witness_read",
         run_id=run.run_id,
@@ -2369,12 +2393,18 @@ def _post_question_formula(  # noqa: PLR0913 - one keyword per routed dependency
             "new_formula": payload.formula,
         },
     )
-    reading = _read_formula(
-        llm_provider=llm_provider,
-        model=model,
-        formula=payload.formula,
-        grid=tuple(FormulaText(q.formula) for q in generated),
-    )
+    try:
+        reading = _read_formula(
+            llm_provider=llm_provider,
+            model=model,
+            formula=payload.formula,
+            grid=tuple(FormulaText(q.formula) for q in generated),
+            api_token=_mistral_token_from_environ(environ=environ),
+        )
+    except (LLMTokenRequiredError, MistralTokenInvalidError) as token_error:
+        return _token_problem_response(
+            start_response=start_response, environ=environ, error=token_error
+        )
     logger.debug(
         "api_question_formula_edited",
         session_id=session_id,
@@ -2395,24 +2425,78 @@ def _post_question_formula(  # noqa: PLR0913 - one keyword per routed dependency
     )
 
 
+MISTRAL_TOKEN_HEADER = "HTTP_X_MISTRAL_API_TOKEN"  # noqa: S105 - a header name, not a secret
+"""WSGI environ key of the per-request ``x-mistral-api-token`` header (web v1 §3, issue #208)."""
+
+
+def _mistral_token_from_environ(*, environ: WSGIEnvironment) -> MistralToken | None:
+    """The per-request Mistral token, or None (web v1 §3, issue #208).
+
+    Read from the ``x-mistral-api-token`` header only - never logged, never
+    persisted, never echoed in a response. An empty header means no token.
+    """
+    raw = environ.get(MISTRAL_TOKEN_HEADER, "").strip()
+    return MistralToken(raw) if raw else None
+
+
+def _token_problem_response(
+    *,
+    start_response: StartResponse,
+    environ: WSGIEnvironment,
+    error: LLMTokenRequiredError | MistralTokenInvalidError,
+) -> Iterable[bytes]:
+    """Map a typed token error to its problem response (web v1 §3, issue #208).
+
+    Missing token: 428 ``llm_token_required``. Token rejected by Mistral
+    (401): 502 ``mistral_token_invalid`` - the upstream status is surfaced
+    in the detail, the token itself never appears anywhere.
+    """
+    if isinstance(error, LLMTokenRequiredError):
+        payload = _problem(
+            status=HTTPStatus.PRECONDITION_REQUIRED,
+            reason=LLMTokenRequiredError.reason,
+            detail="A Mistral API token is required for this generation: set it in the "
+            "web preferences (x-mistral-api-token), no server key is configured.",
+        )
+    else:
+        payload = _problem(
+            status=HTTPStatus.BAD_GATEWAY,
+            reason=MistralTokenInvalidError.reason,
+            detail="Mistral rejected the API token (upstream 401): check the token set in "
+            "the web preferences.",
+        )
+    logger.warning(
+        "api_mistral_token_error",
+        reason=error.reason,
+        status=payload.status.value,
+    )
+    return _problem_response(start_response=start_response, environ=environ, payload=payload)
+
+
 def _read_formula(
     *,
     llm_provider: LLMProvider | None,
     model: CanonicalModel,
     formula: str,
     grid: tuple[FormulaText, ...] = (),
+    api_token: MistralToken | None = None,
 ) -> dict[str, JsonValue] | None:
     """The inverse reading of a formula (formule → langage), an LLM proposition (spec §9).
 
     P72: the provider reads the WHOLE frozen grid in one call (document
     granularity); ``grid`` is that document. Degrades explicitly (None with
     a note) when no reading is available - never a fabricated reading.
+    ``api_token`` is the per-request Mistral token (web v1 §3, issue #208):
+    forwarded to the provider, never logged nor persisted; token errors
+    propagate to the caller (they are not degradations).
     """
     if llm_provider is None:
         return None
     document_formulas = grid if grid else (FormulaText(formula),)
     try:
-        document = llm_provider.reading(model=model, formulas=document_formulas)
+        document = llm_provider.reading(
+            model=model, formulas=document_formulas, api_token=api_token
+        )
         reading = document.readings[FormulaText(formula)]
     except LLMDegradationError, KeyError:
         logger.warning("api_formula_reading_degraded", formula=formula)
@@ -2469,7 +2553,17 @@ def _get_reading(
                 detail=f"No model with id {session.model_id!r}.",
             ),
         )
-    reading = _read_formula(llm_provider=llm_provider, model=model, formula=formula)
+    try:
+        reading = _read_formula(
+            llm_provider=llm_provider,
+            model=model,
+            formula=formula,
+            api_token=_mistral_token_from_environ(environ=environ),
+        )
+    except (LLMTokenRequiredError, MistralTokenInvalidError) as token_error:
+        return _token_problem_response(
+            start_response=start_response, environ=environ, error=token_error
+        )
     logger.debug("api_reading_read", session_id=session_id, formula=formula)
     body_out = json.dumps(
         {"formula": formula, "reading": reading},
@@ -3935,21 +4029,369 @@ def _serve_ui_asset(
     )
 
 
+def _session_id_from_cookie(*, environ: WSGIEnvironment) -> str | None:
+    """The ``petrichor-session`` cookie value of the request, if any."""
+    raw: str = environ.get("HTTP_COOKIE", "")
+    for part in raw.split(";"):
+        name, _, value = part.strip().partition("=")
+        if name == SESSION_COOKIE and value:
+            return str(value)
+    return None
+
+
+def _session_cookie_header(*, session_id: str, max_age_seconds: int) -> str:
+    """The Set-Cookie header of the applicative session (contract §2)."""
+    return (
+        f"{SESSION_COOKIE}={session_id}; Path=/; HttpOnly; Secure; "
+        f"SameSite=Lax; Max-Age={max_age_seconds}"
+    )
+
+
+def _clear_session_cookie_header() -> str:
+    """The Set-Cookie header expiring the session cookie."""
+    return f"{SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0"
+
+
+def _redirect_uri(*, environ: WSGIEnvironment) -> str:
+    """The callback URL of this app, from the request host (or its Host header)."""
+    scheme = environ.get("wsgi.url_scheme", "http")
+    host = environ.get("HTTP_HOST") or environ.get("SERVER_NAME", "localhost")
+    return f"{scheme}://{host}{AUTH_CALLBACK_PATH}"
+
+
+def _dispatch_auth(  # noqa: PLR0911 - one typed response per /auth route
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    method: str,
+    path: str,
+    oidc_flow: OidcFlowClient | None,
+    pending_logins: PendingLoginStore,
+    web_sessions: WebSessionStore,
+    token_verifier: TokenVerifier | None,
+) -> Iterable[bytes] | None:
+    """Route the /auth/* endpoints of the web v1 browser login (issue #207).
+
+    These routes are public by design (the login page must be reachable
+    without a session); they never carry data of the workshop.
+    """
+    if path == AUTH_LOGIN_PATH and method == "GET":
+        return _auth_login(
+            environ=environ,
+            start_response=start_response,
+            oidc_flow=oidc_flow,
+            pending_logins=pending_logins,
+        )
+    if path == AUTH_CALLBACK_PATH and method == "GET":
+        return _auth_callback(
+            environ=environ,
+            start_response=start_response,
+            oidc_flow=oidc_flow,
+            pending_logins=pending_logins,
+            web_sessions=web_sessions,
+            token_verifier=token_verifier,
+        )
+    if path == AUTH_LOGOUT_PATH and method == "POST":
+        return _auth_logout(
+            environ=environ,
+            start_response=start_response,
+            oidc_flow=oidc_flow,
+            web_sessions=web_sessions,
+        )
+    if path == AUTH_ME_PATH and method == "GET":
+        session_id = _session_id_from_cookie(environ=environ)
+        session = web_sessions.get(session_id=session_id) if session_id else None
+        if session is None:
+            return _problem_response(
+                start_response=start_response,
+                environ=environ,
+                payload=_problem(
+                    status=HTTPStatus.UNAUTHORIZED,
+                    reason=REASON_SESSION_REQUIRED,
+                    detail="No active session.",
+                ),
+            )
+        # Web v1 (issue #209): the account menu displays the user name, so the
+        # profile claims are surfaced when the IdP sent them (extra="allow").
+        profile = {
+            key: session.claims.model_extra[key]
+            for key in ("preferred_username", "name")
+            if session.claims.model_extra is not None
+            and isinstance(session.claims.model_extra.get(key), str)
+        }
+        payload = {"sub": session.claims.sub, "iss": session.claims.iss, **profile}
+        body = json.dumps(payload).encode()
+        return _respond(
+            start_response=start_response,
+            status=HTTPStatus.OK,
+            content_type=CONTENT_TYPE_JSON,
+            body=body,
+        )
+    if path in (AUTH_LOGIN_PATH, AUTH_CALLBACK_PATH, AUTH_LOGOUT_PATH, AUTH_ME_PATH):
+        # A known /auth resource with the wrong verb: truthful 405 (ADR-0016).
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.METHOD_NOT_ALLOWED,
+                reason="method_not_allowed",
+                detail=f"Method {method} is not allowed on {path}.",
+            ),
+        )
+    if path.startswith("/auth/"):
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND, reason="not_found", detail=f"No resource at {path}."
+            ),
+        )
+    return None
+
+
+def _auth_login(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    oidc_flow: OidcFlowClient | None,
+    pending_logins: PendingLoginStore,
+) -> Iterable[bytes]:
+    """GET /auth/login?returnTo=… — start the OIDC flow (issue #207)."""
+    if oidc_flow is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+                reason="oidc_not_configured",
+                detail="OIDC login is not configured on this server (AUTH_ISSUER unset).",
+            ),
+        )
+    params = parse_qs(environ.get("QUERY_STRING", ""), keep_blank_values=True)
+    return_to = params.get("returnTo", [UI_PATH])[0]
+    if not is_internal_path(path=return_to):
+        return_to = UI_PATH
+    ui_locales = "fr" if "fr" in environ.get("HTTP_ACCEPT_LANGUAGE", "fr") else "en"
+    pending = pending_logins.create(return_to=return_to)
+    try:
+        url = oidc_flow.authorize_url(
+            redirect_uri=_redirect_uri(environ=environ),
+            state=pending.state,
+            nonce=pending.nonce,
+            code_challenge=code_challenge_s256(code_verifier=pending.code_verifier),
+            ui_locales=ui_locales,
+        )
+    except Exception as error:  # noqa: BLE001 - an unreachable IdP is narrated, never swallowed
+        logger.warning("web_auth_discovery_failed", reason=repr(error))
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+                reason="oidc_unavailable",
+                detail="The identity provider could not be reached.",
+            ),
+        )
+    logger.debug("web_auth_login_redirect", return_to=return_to, ui_locales=ui_locales)
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.FOUND,
+        content_type=CONTENT_TYPE_HTML,
+        body=b"",
+        extra_headers=[("Location", url)],
+    )
+
+
+def _auth_callback(  # noqa: PLR0911 - one typed response per failure mode
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    oidc_flow: OidcFlowClient | None,
+    pending_logins: PendingLoginStore,
+    web_sessions: WebSessionStore,
+    token_verifier: TokenVerifier | None,
+) -> Iterable[bytes]:
+    """GET /auth/callback — verify state/nonce, exchange the code, open a session."""
+    if oidc_flow is None or token_verifier is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+                reason="oidc_not_configured",
+                detail="OIDC login is not configured on this server.",
+            ),
+        )
+    params = parse_qs(environ.get("QUERY_STRING", ""), keep_blank_values=True)
+    state = params.get("state", [""])[0]
+    code = params.get("code", [""])[0]
+    pending = pending_logins.pop(state=state)
+    if pending is None or not code:
+        logger.warning("web_auth_callback_rejected", reason="unknown_or_expired_state")
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.UNAUTHORIZED,
+                reason="invalid_state",
+                detail="Unknown or expired login state.",
+            ),
+        )
+    try:
+        tokens = oidc_flow.exchange_code(
+            code=code,
+            redirect_uri=_redirect_uri(environ=environ),
+            code_verifier=pending.code_verifier,
+        )
+    except Exception as error:  # noqa: BLE001 - the IdP failure is narrated, never swallowed
+        logger.warning("web_auth_code_exchange_failed", reason=repr(error))
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.UNAUTHORIZED,
+                reason="code_exchange_failed",
+                detail="The authorization code could not be exchanged.",
+            ),
+        )
+    id_token = tokens.get("id_token")
+    access_token = tokens.get("access_token")
+    if not isinstance(id_token, str) or not isinstance(access_token, str):
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.UNAUTHORIZED,
+                reason="incomplete_token_response",
+                detail="The token response carries no id_token/access_token pair.",
+            ),
+        )
+    try:
+        claims = token_verifier.verify_access_token(token=id_token)
+    except TokenRejectedError as error:
+        logger.warning("web_auth_id_token_rejected", reason=error.reason)
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.UNAUTHORIZED,
+                reason=REASON_INVALID_BEARER,
+                detail="The id_token was rejected.",
+            ),
+        )
+    if claims.nonce is not None and claims.nonce != pending.nonce:
+        logger.warning("web_auth_callback_rejected", reason="nonce_mismatch")
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.UNAUTHORIZED,
+                reason="nonce_mismatch",
+                detail="The id_token nonce does not match the pending login.",
+            ),
+        )
+    session = web_sessions.create(claims=claims, id_token=id_token, access_token=access_token)
+    logger.info("web_auth_login_succeeded", sub=claims.sub)
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.FOUND,
+        content_type=CONTENT_TYPE_HTML,
+        body=b"",
+        extra_headers=[
+            ("Location", pending.return_to),
+            (
+                "Set-Cookie",
+                _session_cookie_header(
+                    session_id=session.session_id,
+                    max_age_seconds=int(session.expires_at - session.created_at),
+                ),
+            ),
+        ],
+    )
+
+
+def _auth_logout(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    oidc_flow: OidcFlowClient | None,
+    web_sessions: WebSessionStore,
+) -> Iterable[bytes]:
+    """POST /auth/logout — revoke, destroy the session, expire the cookie."""
+    session_id = _session_id_from_cookie(environ=environ)
+    session = web_sessions.get(session_id=session_id) if session_id else None
+    if session_id is not None:
+        web_sessions.destroy(session_id=session_id)
+    scheme = environ.get("wsgi.url_scheme", "http")
+    host = environ.get("HTTP_HOST") or environ.get("SERVER_NAME", "localhost")
+    post_logout = f"{scheme}://{host}{UI_PATH}"
+    if oidc_flow is not None:
+        if session is not None and session.access_token:
+            oidc_flow.revoke(token=session.access_token)
+        if session is not None and session.id_token:
+            post_logout = oidc_flow.end_session_url(
+                id_token_hint=session.id_token, post_logout_redirect_uri=post_logout
+            )
+    logger.debug("web_auth_logout", had_session=session_id is not None)
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.FOUND,
+        content_type=CONTENT_TYPE_HTML,
+        body=b"",
+        extra_headers=[
+            ("Location", post_logout),
+            ("Set-Cookie", _clear_session_cookie_header()),
+        ],
+    )
+
+
+def _is_public_read_route(*, method: str, path: str) -> bool:
+    """The web v1 public read-only routes (issue #206, contract §1/§5).
+
+    ``GET /v1/catalog/models`` and ``GET /v1/models/{mid}`` serve the public
+    Découvrir zone. Every other API route requires a session cookie or a PAT;
+    the gate is adapted to this public/private split, not just complemented.
+    """
+    if method != "GET":
+        return False
+    if path == CATALOG_MODELS_PATH:
+        return True
+    if path.startswith(MODEL_PATH_PREFIX):
+        model_id = path.removeprefix(MODEL_PATH_PREFIX)
+        return bool(model_id) and "/" not in model_id
+    return False
+
+
 def _auth_gate(
     *,
     environ: WSGIEnvironment,
     start_response: StartResponse,
     settings: ApiSettings,
     token_verifier: TokenVerifier | None,
+    web_sessions: WebSessionStore,
     method: str,
     path: str,
 ) -> Iterable[bytes] | None:
     """The PT-2 auth gate: a uniform 401 problem response on rejection, else None.
 
-    On a valid Bearer token the validated claims are exposed to the handlers
-    as ``environ["petrichor.auth_claims"]``; the exact rejection reason goes
-    to the structured log, never to the response body.
+    Public read-only routes (issue #206) pass without credentials; on every
+    other route a valid Bearer token exposes its validated claims to the
+    handlers as ``environ["petrichor.auth_claims"]``. A missing session answers
+    ``401`` with ``reason: "session_required"`` (contract §1); the exact
+    rejection reason goes to the structured log, never to the response body.
     """
+    if _is_public_read_route(method=method, path=path):
+        logger.debug("api_public_read_allowed", method=method, path=path)
+        return None
+    # Web v1 (issue #207): the server-side session cookie authenticates the
+    # browser; its claims are exposed like a validated Bearer token.
+    cookie_session_id = _session_id_from_cookie(environ=environ)
+    if cookie_session_id is not None:
+        cookie_session = web_sessions.get(session_id=cookie_session_id)
+        if cookie_session is not None:
+            environ[ENVIRON_AUTH_CLAIMS] = cookie_session.claims
+            logger.debug("api_session_cookie_allowed", path=path)
+            return None
     decision = authenticate_request(
         environ=environ, settings=settings, token_verifier=token_verifier
     )
@@ -3963,7 +4405,7 @@ def _auth_gate(
     problem_reason = (
         REASON_INVALID_BEARER
         if decision.rejection_reason not in (None, REASON_MISSING_CREDENTIALS)
-        else REASON_MISSING_CREDENTIALS
+        else REASON_SESSION_REQUIRED
     )
     return _problem_response(
         start_response=start_response,
@@ -3971,12 +4413,12 @@ def _auth_gate(
         payload=_problem(
             status=HTTPStatus.UNAUTHORIZED,
             reason=problem_reason,
-            detail=f"Provide a valid Authorization: Bearer token or {HEADER_API_KEY} header.",
+            detail="A session cookie or a Bearer PAT is required for this route.",
         ),
     )
 
 
-def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
+def create_app(  # noqa: PLR0913, C901 - one keyword per wired dependency (ADR-0003), one dispatch per resource family
     *,
     settings: ApiSettings,
     store: ModelStore,
@@ -3996,13 +4438,20 @@ def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
     catalog: ModelCatalog | None = None,
     url_import: UrlImportConfig | None = None,
     token_verifier: TokenVerifier | None = None,
+    oidc_flow: OidcFlowClient | None = None,
+    pending_logins: PendingLoginStore | None = None,
+    web_sessions: WebSessionStore | None = None,
 ) -> WSGIApp:
     """Build the WSGI application: auth first, then routing and negotiation.
 
     ``token_verifier`` wires the PT-2 middleware: a valid ``Authorization:
-    Bearer`` JWT (validated by the PT-1 brick) is accepted alongside the
-    legacy ``X-API-Key``; without a verifier, only the legacy key is accepted.
+    Bearer`` JWT (PAT, validated by the PT-1 brick) is accepted; the web
+    session cookie is checked by the gate from ``web_sessions``. The legacy
+    ``X-API-Key`` is gone (issue #207). ``oidc_flow``/``pending_logins`` wire
+    the browser login routes ``/auth/*``.
     """
+    pending_logins = pending_logins if pending_logins is not None else PendingLoginStore()
+    web_sessions = web_sessions if web_sessions is not None else WebSessionStore()
 
     def app(environ: WSGIEnvironment, start_response: StartResponse) -> Iterable[bytes]:
         method = environ.get("REQUEST_METHOD", "GET").upper()
@@ -4014,11 +4463,25 @@ def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
         )
         if routed is not None:
             return routed
+        # The web v1 login routes are public by design (issue #207).
+        routed = _dispatch_auth(
+            environ=environ,
+            start_response=start_response,
+            method=method,
+            path=path,
+            oidc_flow=oidc_flow,
+            pending_logins=pending_logins,
+            web_sessions=web_sessions,
+            token_verifier=token_verifier,
+        )
+        if routed is not None:
+            return routed
         rejected = _auth_gate(
             environ=environ,
             start_response=start_response,
             settings=settings,
             token_verifier=token_verifier,
+            web_sessions=web_sessions,
             method=method,
             path=path,
         )
@@ -4098,4 +4561,23 @@ def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
             ),
         )
 
-    return app
+    return _token_error_guard(app)
+
+
+def _token_error_guard(app: WSGIApp) -> WSGIApp:
+    """Safety net for the typed token errors (web v1 §3, issue #208).
+
+    The generation handlers map them explicitly; this guard guarantees that a
+    token error escaping ANY route still becomes its typed problem response
+    (428/502), never an untyped 500.
+    """
+
+    def guarded(environ: WSGIEnvironment, start_response: StartResponse) -> Iterable[bytes]:
+        try:
+            return app(environ, start_response)
+        except (LLMTokenRequiredError, MistralTokenInvalidError) as token_error:
+            return _token_problem_response(
+                start_response=start_response, environ=environ, error=token_error
+            )
+
+    return guarded

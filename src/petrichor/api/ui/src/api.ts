@@ -2,6 +2,7 @@
 // views are rebuilt from the responses: no verdict is ever invented here
 // (spec §9, §19.4).
 
+import { MISTRAL_TOKEN_HEADER } from "./mistralToken";
 import type { CandidateList, CatalogPage, ImportedModel, LlmCallState } from "./types";
 
 export class ApiError extends Error {
@@ -14,19 +15,28 @@ export class ApiError extends Error {
 }
 
 export class ApiClient {
-  constructor(private readonly apiKey: string) {}
-
+  /* Web v1 (issue #207): no API key in the browser anymore. The applicative
+     session travels in the HttpOnly cookie set by /auth/callback, sent with
+     `credentials: "include"`; a 401 session_required redirects to the OIDC
+     login. Public read calls (Découvrir) simply send no credential. */
   private headers(extra?: Record<string, string>): Record<string, string> {
-    return { "X-API-Key": this.apiKey, ...(extra ?? {}) };
+    return { ...(extra ?? {}) };
   }
 
   async request(path: string, options?: RequestInit): Promise<Response> {
     const response = await fetch(path, {
       ...options,
+      credentials: "include",
       headers: this.headers(options?.headers as Record<string, string> | undefined),
     });
     if (response.status === 401) {
-      throw new ApiError(401, "Clé API invalide (401).");
+      const reason = await problemReason(response);
+      if (reason === "session_required") {
+        const returnTo = window.location.pathname + window.location.search;
+        window.location.assign(`/auth/login?returnTo=${encodeURIComponent(returnTo)}`);
+        throw new ApiError(401, "Session requise : redirection vers la connexion (401).");
+      }
+      throw new ApiError(401, "Accès refusé (401).");
     }
     return response;
   }
@@ -61,6 +71,28 @@ export class ApiClient {
       throw new ApiError(response.status, await readProblemDetail(response));
     }
     return (await response.json()) as T;
+  }
+
+  /* Web v1 §3 (issue #208): the formula edit triggers an LLM generation, so it
+     is the one call carrying the per-user Mistral token as
+     `x-mistral-api-token`. The raw Response is returned so the caller keeps
+     its typed-status handling; the token is never logged nor persisted here. */
+  async postFormulaEdit(
+    sessionId: string,
+    questionId: string,
+    formula: string,
+    mistralToken?: string,
+  ): Promise<Response> {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    const trimmed = mistralToken?.trim() ?? "";
+    if (trimmed !== "") {
+      headers[MISTRAL_TOKEN_HEADER] = trimmed;
+    }
+    return this.request(`/v1/sessions/${sessionId}/questions/${questionId}/formula`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ formula }),
+    });
   }
 
   // P71 (issue #166, spec §21): the three import paths. Raw responses are
@@ -110,6 +142,16 @@ export class ApiClient {
       { method: "POST", headers: { "Content-Type": contentType }, body },
     );
     return parseImportResponse(response);
+  }
+}
+
+export async function problemReason(response: Response): Promise<string | undefined> {
+  // The typed problem payload carries the reason in extensions (ADR-0016).
+  try {
+    const payload = (await response.clone().json()) as { extensions?: { reason?: string } };
+    return payload.extensions?.reason;
+  } catch {
+    return undefined;
   }
 }
 

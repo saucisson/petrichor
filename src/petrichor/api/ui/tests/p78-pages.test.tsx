@@ -1,7 +1,8 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import App from "../src/App";
+import { renderAtelier } from "./render-atelier";
 import { applyLanguage } from "../src/i18n";
+import { authMeResponse } from "./auth-me-mock";
 
 /* P78 (issue #187): page 2 filter bar + badges, page 3 run rows with status
    badges, folded witnesses, verdict pictograms and the 3 s polling of active
@@ -81,6 +82,11 @@ function mockFetch(routes: { match: (call: FetchCall) => boolean; respond: () =>
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const authMe = authMeResponse(String(input));
+      if (authMe !== null) {
+        calls.push({ url: String(input), method: init?.method ?? "GET", headers: (init?.headers ?? {}) as Record<string, string>, body: init?.body as string | undefined } as (typeof calls)[number]);
+        return authMe;
+      }
       const call: FetchCall = {
         url: String(input),
         method: init?.method ?? "GET",
@@ -113,6 +119,7 @@ const BUDGET_ROUTE = {
 
 beforeEach(() => {
   localStorage.clear();
+  window.history.replaceState(null, "", "/");
   localStorage.setItem("petrichor.sessionId", "s1");
   applyLanguage("fr");
 });
@@ -126,7 +133,7 @@ afterEach(() => {
 describe("P78 — page 2 « Questions statiques »", () => {
   it("affiche la barre de filtres, les compteurs et filtre/tri en présentation seule", async () => {
     mockFetch([CONTRACT_ROUTE, CONVERGENCES_ROUTE]);
-    render(<App />);
+    await renderAtelier();
     fireEvent.click(screen.getByRole("button", { name: "2. Questions statiques" }));
     await waitFor(() =>
       expect(screen.getByText(/2 affichées \/ 2 — vérifiées 1 — controversées 1/)).toBeInTheDocument(),
@@ -168,7 +175,7 @@ describe("P78 — page 3 « Vérifications MC »", () => {
       { match: (call) => call.url === "/v1/runs/r1", respond: () => jsonResponse(200, DONE) },
       { match: (call) => call.url === "/v1/runs/r1/witness", respond: () => jsonResponse(200, WITNESS) },
     ]);
-    render(<App />);
+    await renderAtelier();
     fireEvent.click(screen.getByRole("button", { name: "3. Vérifications MC" }));
     await waitFor(() => expect(screen.getByText(/Budget MC — consommé 1.500 s/)).toBeInTheDocument());
     // Badge d'état done (vert) + triage/famille en badges + verdict pictogramme.
@@ -203,7 +210,7 @@ describe("P78 — page 3 « Vérifications MC »", () => {
       },
       { match: (call) => call.url === "/v1/runs/r1/witness", respond: () => jsonResponse(200, WITNESS) },
     ]);
-    render(<App />);
+    await renderAtelier();
     fireEvent.click(screen.getByRole("button", { name: "3. Vérifications MC" }));
     // Run actif : badge running, verdict "—" tant qu'aucun verdict.
     await waitFor(() => expect(screen.getByText("running")).toBeInTheDocument());

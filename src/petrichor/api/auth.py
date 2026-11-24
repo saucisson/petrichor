@@ -1,21 +1,23 @@
-"""API authentication middleware (PT-2, issue #183).
+"""API authentication middleware (PT-2, issue #183; web v1 bascule, issue #207).
 
-Every non-static request is authenticated before routing. Two credentials
-are accepted through the same middleware (cadrage §4.1):
+Every non-public request is authenticated before routing. Two credentials
+are accepted through the same middleware:
 
-- ``Authorization: Bearer <token>`` — an OIDC access token validated locally
-  by the PT-1 brick (:class:`petrichor.auth.TokenVerifier`); the validated
-  claims are exposed to the handlers as ``environ["petrichor.auth_claims"]``.
-- ``X-API-Key`` — the legacy static key, kept until its removal (PT-2 keeps
-  it passing through the same middleware).
+- ``Authorization: Bearer <token>`` — a PAT, an OIDC access token validated
+  locally by the PT-1 brick (:class:`petrichor.auth.TokenVerifier`); the
+  validated claims are exposed to the handlers as
+  ``environ["petrichor.auth_claims"]``.
+- The ``petrichor-session`` cookie — the applicative web session, checked by
+  the caller (``WebSessionStore``) before this middleware runs.
 
-``AUTH_DISABLED=1`` is the L3 local-dev bypass: the middleware lets every
-request through and the composition root refuses to combine it with a
-production indicator. A rejection is a uniform ``401`` problem response and
-a structured ``api_request_unauthorized`` log carrying the exact reason.
+The legacy ``X-API-Key`` is removed (web v1 bascule, issue #207): no static
+key, no shared secret remains. ``AUTH_DISABLED=1`` is the L3 local-dev
+bypass: the middleware lets every request through and the composition root
+refuses to combine it with a production indicator. A rejection is a uniform
+``401`` problem response and a structured ``api_request_unauthorized`` log
+carrying the exact reason.
 """
 
-import hmac
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -27,15 +29,16 @@ if TYPE_CHECKING:
     from petrichor.api.settings import ApiSettings
 
 HEADER_AUTHORIZATION = "Authorization"
-HEADER_API_KEY = "X-API-Key"
 BEARER_SCHEME = "bearer"
 ENVIRON_AUTH_CLAIMS = "petrichor.auth_claims"
 """WSGI environ key carrying the validated :class:`TokenClaims` of a Bearer request."""
 
-REASON_MISSING_CREDENTIALS = "missing_or_invalid_api_key"
+REASON_MISSING_CREDENTIALS = "missing_credentials"
 REASON_INVALID_BEARER = "invalid_bearer_token"
 REASON_UNSUPPORTED_SCHEME = "unsupported_authorization_scheme"
 REASON_VERIFIER_NOT_CONFIGURED = "bearer_verifier_not_configured"
+REASON_SESSION_REQUIRED = "session_required"
+"""Web v1 (issue #206): a non-public route hit without a session/PAT."""
 
 
 @dataclass(frozen=True)
@@ -47,13 +50,6 @@ class AuthDecision:
     """The validated Bearer claims, when the request used a valid Bearer token."""
     rejection_reason: str | None
     """The exact reason of a rejection (for the structured log), else ``None``."""
-
-
-def _legacy_key_matches(*, environ: WSGIEnvironment, settings: ApiSettings) -> bool:
-    """Constant-time comparison of the X-API-Key header against the configured key."""
-    provided = environ.get("HTTP_X_API_KEY", "")
-    expected = settings.api_key.get_secret_value()
-    return bool(provided) and hmac.compare_digest(provided.encode(), expected.encode())
 
 
 def _authenticate_bearer(
@@ -77,19 +73,17 @@ def _authenticate_bearer(
 def authenticate_request(
     *, environ: WSGIEnvironment, settings: ApiSettings, token_verifier: TokenVerifier | None
 ) -> AuthDecision:
-    """Authenticate one request: Bearer JWT (PT-1) or legacy X-API-Key.
+    """Authenticate one request: Bearer JWT (PAT) validated by the PT-1 brick.
 
-    The L3 bypass (``AUTH_DISABLED=1``) lets every request through. A Bearer
-    token is validated only when a verifier is wired; without one, only the
-    legacy key is accepted.
+    The L3 bypass (``AUTH_DISABLED=1``) lets every request through. The web
+    session cookie is checked by the caller before this middleware; the
+    legacy ``X-API-Key`` is gone (issue #207) — no static key is accepted.
     """
     if token_verifier is not None and not token_verifier.enabled:
         return AuthDecision(allowed=True, claims=None, rejection_reason=None)
     authorization = environ.get("HTTP_AUTHORIZATION", "")
     if authorization:
         return _authenticate_bearer(authorization=authorization, token_verifier=token_verifier)
-    if _legacy_key_matches(environ=environ, settings=settings):
-        return AuthDecision(allowed=True, claims=None, rejection_reason=None)
     return AuthDecision(allowed=False, claims=None, rejection_reason=REASON_MISSING_CREDENTIALS)
 
 
@@ -102,10 +96,10 @@ def auth_claims_from_environ(environ: WSGIEnvironment) -> TokenClaims | None:
 __all__ = [
     "BEARER_SCHEME",
     "ENVIRON_AUTH_CLAIMS",
-    "HEADER_API_KEY",
     "HEADER_AUTHORIZATION",
     "REASON_INVALID_BEARER",
     "REASON_MISSING_CREDENTIALS",
+    "REASON_SESSION_REQUIRED",
     "REASON_UNSUPPORTED_SCHEME",
     "REASON_VERIFIER_NOT_CONFIGURED",
     "AuthDecision",

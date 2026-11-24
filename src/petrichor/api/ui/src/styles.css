@@ -160,6 +160,33 @@
     @apply font-bold underline;
   }
 
+  /* Web v1 zones (contract §1/§4, issue #205): the site navigation sits in the
+     header; the active zone is underlined. The landing hero is a plain card
+     on the page background - public, no authenticated call. */
+  #zones {
+    @apply flex list-none gap-2 p-0;
+  }
+
+  #zones button[aria-current="page"] {
+    @apply font-bold underline;
+  }
+
+  .landing-hero {
+    @apply my-2 rounded-card border border-line bg-card p-4 shadow-soft;
+  }
+
+  .landing-hero h2 {
+    @apply mb-2 text-xl font-bold text-ink;
+  }
+
+  .landing-actions {
+    @apply mt-3 flex flex-wrap gap-2;
+  }
+
+  .atelier-controls {
+    @apply mt-2;
+  }
+
   .question-card {
     @apply my-2 rounded-card border border-line bg-card p-3 shadow-soft;
   }
@@ -491,4 +518,49 @@
 
   .journal-detail {
     @apply rounded bg-surface px-1 py-0.5 font-mono text-xs;
+  }
+
+  /* Web v1 Découvrir zone (issue #206): public read-only catalog listing. */
+  .decouvrir-search {
+    @apply my-2 flex flex-wrap items-center gap-2;
+  }
+
+  #decouvrir-list {
+    @apply m-0 list-none p-0;
+  }
+
+  .decouvrir-entry {
+    @apply my-1 rounded-card border border-line bg-surface px-3 py-2;
+  }
+
+  /* Web v1 preferences panel (issue #208): modal over the header account menu. */
+  .preferences-backdrop {
+    @apply fixed inset-0 z-50 flex items-center justify-center bg-black/40;
+  }
+
+  .preferences-panel {
+    @apply flex w-96 max-w-full flex-col gap-3 rounded-card border border-line bg-surface p-4 shadow-lg;
+  }
+
+  .preferences-hint {
+    @apply m-0 text-sm text-muted;
+  }
+
+  .edit-hint {
+    @apply m-0 text-sm text-muted;
+  }
+
+  /* Web v1 harmonisation (issue #209, contract §4): skip-link to the main
+     content, visually-hidden live announcer, and the error pages (404,
+     workshop without session) in the site charte. */
+  .skip-link {
+    @apply sr-only focus:not-sr-only focus:absolute focus:left-3 focus:top-3 focus:z-50 focus:rounded-card focus:bg-surface focus:px-3 focus:py-2 focus:text-primary;
+  }
+
+  .error-page {
+    @apply mx-auto mt-8 flex w-96 max-w-full flex-col items-start gap-3 rounded-card border border-line bg-surface p-4 shadow-soft;
+  }
+
+  #account-name {
+    @apply max-w-48 truncate text-sm font-semibold;
   }

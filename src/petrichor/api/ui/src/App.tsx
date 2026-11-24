@@ -1,11 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ApiClient } from "./api";
-import { applyLanguage, SUPPORTED_LANGUAGES, type Language } from "./i18n";
+import { applyLanguage, type Language } from "./i18n";
 import { applyInitialTheme, applyTheme, initialTheme, type Theme } from "./theme";
+import { fetchAuthState, logout, type AuthState } from "./authSession";
 import type { Session } from "./types";
 import Amorcage from "./components/Amorcage";
+import AtelierGate from "./components/AtelierGate";
+import Decouvrir from "./components/Decouvrir";
+import Landing from "./components/Landing";
+import NotFound from "./components/NotFound";
 import Questions from "./components/Questions";
+import Preferences from "./components/Preferences";
+import SiteHeader, { ZONE_IDS, type Zone } from "./components/SiteHeader";
 import Verifications from "./components/Verifications";
 import Synthese from "./components/Synthese";
 
@@ -13,13 +20,39 @@ type Step = "amorcage" | "questions" | "verifications" | "synthese";
 
 const STEP_IDS: Step[] = ["amorcage", "questions", "verifications", "synthese"];
 
-const API_KEY_STORAGE = "petrichor.apiKey";
 const SESSION_STORAGE = "petrichor.sessionId";
+
+/* Web v1 (issue #209): the three zones are deep-linkable client routes under
+   /ui/ - the server serves the SPA shell for every extension-less path, the
+   app maps the path to a zone and renders the 404 page for unknown ones. */
+const UI_BASE = "/ui/";
+type ZoneRoute = Zone | "notfound";
+
+function zoneFromPath(pathname: string): ZoneRoute {
+  const rest = pathname.startsWith(UI_BASE)
+    ? pathname.slice(UI_BASE.length)
+    : pathname.replace(/^\/+/, "");
+  if (rest === "" || rest === "index.html") return "accueil";
+  if ((ZONE_IDS as readonly string[]).includes(rest)) return rest as Zone;
+  return "notfound";
+}
+
+function pathForZone(zone: Zone): string {
+  return zone === "accueil" ? UI_BASE : `${UI_BASE}${zone}`;
+}
 
 applyInitialTheme();
 
 export default function App() {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
+  // Web v1 zones (contract §1, issue #205): the landing page is the default
+  // zone and emits no authenticated call; the workshop (atelier) is mounted
+  // only when its zone is active, so no API request leaves the public zones.
+  const [zone, setZone] = useState<ZoneRoute>(() => zoneFromPath(window.location.pathname));
+  const navigate = useCallback((next: Zone) => {
+    setZone(next);
+    window.history.replaceState(null, "", pathForZone(next));
+  }, []);
   // P81: dark mode toggle - persisted choice first, then system preference.
   const [theme, setTheme] = useState<Theme>(() => initialTheme());
   const toggleTheme = () => {
@@ -33,23 +66,30 @@ export default function App() {
     document.documentElement.dataset.theme = theme;
     document.documentElement.style.colorScheme = theme;
   }, [theme]);
-  const [apiKey, setApiKey] = useState<string>(() => localStorage.getItem(API_KEY_STORAGE) ?? "");
   const [sessionId, setSessionId] = useState<string>(
     () => localStorage.getItem(SESSION_STORAGE) ?? "",
   );
   const [step, setStep] = useState<Step>("amorcage");
   const [reloadToken, setReloadToken] = useState(0);
   const [resumeError, setResumeError] = useState<string | null>(null);
+  // Web v1 §3/§4 (issue #208): the preferences panel from the header account area.
+  const [preferencesOpen, setPreferencesOpen] = useState(false);
+  // Web v1 §4 (issue #209): the account menu is session-aware - /auth/me says
+  // whether the petrichor-session cookie is active and who the user is.
+  const [auth, setAuth] = useState<AuthState>({ status: "loading" });
+  useEffect(() => {
+    void fetchAuthState().then(setAuth);
+  }, []);
+  // a11y (contract §4): a global polite announcer narrates zone changes.
+  const [announcement, setAnnouncement] = useState("");
+  useEffect(() => {
+    setAnnouncement(zone === "notfound" ? t("errors.notFoundTitle") : t(`zones.${zone}`));
+  }, [zone, t]);
 
-  // P76: the client is memoized on the key - recreating it every render
-  // invalidated every useCallback depending on it and caused a fetch loop.
-  const client = useMemo(() => new ApiClient(apiKey), [apiKey]);
+  // P76/web v1 (#207): the client is stateless - the session cookie carries
+  // the authentication, so there is nothing to memoize on.
+  const client = useMemo(() => new ApiClient(), []);
   const bumpReload = useCallback(() => setReloadToken((token) => token + 1), []);
-
-  const onApiKeyChange = (value: string) => {
-    setApiKey(value);
-    localStorage.setItem(API_KEY_STORAGE, value);
-  };
 
   const onSessionCreated = (newSessionId: string) => {
     setSessionId(newSessionId);
@@ -60,6 +100,17 @@ export default function App() {
   const onLanguageChange = (language: Language) => {
     applyLanguage(language);
   };
+
+  const onThemeChange = (next: Theme) => {
+    setTheme(next);
+    applyTheme(next);
+  };
+
+  const onLogout = useCallback(() => {
+    void logout().finally(() => {
+      window.location.assign(UI_BASE);
+    });
+  }, []);
 
   const resumeSession = async () => {
     const trimmed = sessionId.trim();
@@ -80,148 +131,116 @@ export default function App() {
 
   return (
     <>
-      <header>
-        <h1>
-          {/* P80: inline monochrome SVG pictogram (currentColor), no emoji. */}
-          <svg
-            aria-hidden="true"
-            width="22"
-            height="22"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-          >
-            <circle cx="6" cy="6" r="3" />
-            <circle cx="18" cy="6" r="3" />
-            <circle cx="12" cy="18" r="3" />
-            <path d="M8.5 7.5 10.5 15.5M15.5 7.5 13.5 15.5M9 6h6" />
-          </svg>
-          {t("app.title")}
-        </h1>
-        <div className="header-group">
-          <span className="header-group-label">{t("header.groupConnection")}</span>
-          <label htmlFor="api-key">{t("header.apiKeyLabel")}</label>
-          <input
-            id="api-key"
-            type="password"
-            autoComplete="off"
-            aria-label={t("header.apiKeyAria")}
-            value={apiKey}
-            onChange={(event) => onApiKeyChange(event.target.value)}
-          />
-        </div>
-        <div className="header-group">
-          <span className="header-group-label">{t("header.groupSession")}</span>
-          <label htmlFor="session-id">{t("header.sessionLabel")}</label>
-          <input
-            id="session-id"
-            type="text"
-            autoComplete="off"
-            aria-label={t("header.sessionAria")}
-            value={sessionId}
-            onChange={(event) => setSessionId(event.target.value)}
-          />
-          <button
-            id="resume-session"
-            type="button"
-            className="btn btn-primary"
-            onClick={() => void resumeSession()}
-          >
-            {t("header.resume")}
-          </button>
-        </div>
-        <div className="header-group">
-          {/* P81: dark/light toggle - moon/sun SVG pictograms, monochrome. */}
-          <button
-            id="theme-toggle"
-            type="button"
-            className="btn"
-            aria-label={t("header.themeToggle")}
-            aria-pressed={theme === "dark"}
-            onClick={toggleTheme}
-          >
-            {theme === "dark" ? (
-              <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <circle cx="12" cy="12" r="4" />
-                <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
-              </svg>
-            ) : (
-              <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" />
-              </svg>
-            )}
-          </button>
-        </div>
-        <div className="header-group">
-          <span className="header-group-label">{t("app.languageLabel")}</span>
-          <label htmlFor="language-select">{t("app.languageLabel")}</label>
-          <select
-            id="language-select"
-            value={i18n.language}
-            onChange={(event) => onLanguageChange(event.target.value as Language)}
-          >
-            {SUPPORTED_LANGUAGES.map((language) => (
-              <option key={language} value={language}>
-                {language === "fr" ? "Français" : "English"}
-              </option>
-            ))}
-          </select>
-        </div>
-      </header>
-      <nav aria-label={t("nav.aria")}>
-        <ol id="steps">
-          {STEP_IDS.map((id) => {
-            const locked = id !== "amorcage" && !sessionActive;
-            return (
-              <li key={id}>
+      <a className="skip-link" href="#main">
+        {t("app.skipLink")}
+      </a>
+      <SiteHeader
+        zone={zone === "notfound" ? "accueil" : zone}
+        theme={theme}
+        auth={auth}
+        onNavigate={navigate}
+        onToggleTheme={toggleTheme}
+        onLanguageChange={onLanguageChange}
+        onOpenPreferences={() => setPreferencesOpen(true)}
+        onLogout={onLogout}
+      />
+      <div id="live-announcer" className="sr-only" aria-live="polite">
+        {announcement}
+      </div>
+      {preferencesOpen ? (
+        <Preferences
+          theme={theme}
+          onThemeChange={onThemeChange}
+          onLanguageChange={onLanguageChange}
+          onClose={() => setPreferencesOpen(false)}
+        />
+      ) : null}
+      <main id="main">
+        {zone === "accueil" ? <Landing onNavigate={navigate} /> : null}
+        {zone === "decouvrir" ? <Decouvrir /> : null}
+        {zone === "notfound" ? <NotFound /> : null}
+        {zone === "atelier" ? (
+          auth.status === "anonymous" ? (
+            <AtelierGate />
+          ) : auth.status === "authenticated" ? (
+            <>
+              <div className="header-group atelier-controls">
+                <span className="header-group-label">{t("header.groupSession")}</span>
+                <label htmlFor="session-id">{t("header.sessionLabel")}</label>
+                <input
+                  id="session-id"
+                  type="text"
+                  autoComplete="off"
+                  aria-label={t("header.sessionAria")}
+                  value={sessionId}
+                  onChange={(event) => setSessionId(event.target.value)}
+                />
                 <button
+                  id="resume-session"
                   type="button"
-                  className="btn"
-                  data-step={id}
-                  aria-current={step === id ? "step" : undefined}
-                  disabled={locked}
-                  onClick={() => setStep(id)}
+                  className="btn btn-primary"
+                  onClick={() => void resumeSession()}
                 >
-                  {t("nav.steps." + id)}
+                  {t("header.resume")}
                 </button>
-              </li>
-            );
-          })}
-        </ol>
-        {!sessionActive ? (
-          <p id="nav-hint" className="nav-hint">
-            {t("nav.noSession")}
-          </p>
+              </div>
+              <nav aria-label={t("nav.aria")}>
+                <ol id="steps">
+                  {STEP_IDS.map((id) => {
+                    const locked = id !== "amorcage" && !sessionActive;
+                    return (
+                      <li key={id}>
+                        <button
+                          type="button"
+                          className="btn"
+                          data-step={id}
+                          aria-current={step === id ? "step" : undefined}
+                          disabled={locked}
+                          onClick={() => setStep(id)}
+                        >
+                          {t("nav.steps." + id)}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ol>
+                {!sessionActive ? (
+                  <p id="nav-hint" className="nav-hint">
+                    {t("nav.noSession")}
+                  </p>
+                ) : null}
+              </nav>
+              <div className="mt-4">
+                <Amorcage
+                  hidden={step !== "amorcage"}
+                  client={client}
+                  sessionId={sessionId}
+                  onSessionCreated={onSessionCreated}
+                  reloadToken={reloadToken}
+                  resumeError={resumeError}
+                />
+                <Questions
+                  hidden={step !== "questions"}
+                  client={client}
+                  sessionId={sessionId}
+                  reloadToken={reloadToken}
+                />
+                <Verifications
+                  hidden={step !== "verifications"}
+                  client={client}
+                  sessionId={sessionId}
+                  reloadToken={reloadToken}
+                />
+                <Synthese
+                  hidden={step !== "synthese"}
+                  client={client}
+                  sessionId={sessionId}
+                  reloadToken={reloadToken}
+                />
+              </div>
+            </>
+          ) : null
         ) : null}
-      </nav>
-      <main className="mt-4">
-        <Amorcage
-          hidden={step !== "amorcage"}
-          client={client}
-          sessionId={sessionId}
-          onSessionCreated={onSessionCreated}
-          reloadToken={reloadToken}
-          resumeError={resumeError}
-        />
-        <Questions
-          hidden={step !== "questions"}
-          client={client}
-          sessionId={sessionId}
-          reloadToken={reloadToken}
-        />
-        <Verifications
-          hidden={step !== "verifications"}
-          client={client}
-          sessionId={sessionId}
-          reloadToken={reloadToken}
-        />
-        <Synthese
-          hidden={step !== "synthese"}
-          client={client}
-          sessionId={sessionId}
-          reloadToken={reloadToken}
-        />
       </main>
     </>
   );

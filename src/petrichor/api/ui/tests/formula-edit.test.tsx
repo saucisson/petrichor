@@ -1,7 +1,8 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import App from "../src/App";
+import { renderAtelier } from "./render-atelier";
 import { applyLanguage } from "../src/i18n";
+import { authMeResponse } from "./auth-me-mock";
 
 /* Formula editing in the UI (issue #125, P37 endpoints): the edit goes
    through POST /v1/sessions/{sid}/questions/{qid}/formula, the inverse
@@ -50,7 +51,7 @@ const EDIT_RESPONSE = {
   },
 };
 
-type FetchCall = { url: string; method: string; body?: string };
+type FetchCall = { url: string; method: string; body?: string; headers: Record<string, string> };
 
 let calls: FetchCall[] = [];
 
@@ -59,10 +60,16 @@ function mockFetch(routes: { match: (call: FetchCall) => boolean; respond: () =>
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const authMe = authMeResponse(String(input));
+      if (authMe !== null) {
+        calls.push({ url: String(input), method: init?.method ?? "GET", headers: (init?.headers ?? {}) as Record<string, string>, body: init?.body as string | undefined } as (typeof calls)[number]);
+        return authMe;
+      }
       const call: FetchCall = {
         url: String(input),
         method: init?.method ?? "GET",
         body: init?.body as string | undefined,
+        headers: (init?.headers ?? {}) as Record<string, string>,
       };
       calls.push(call);
       const route = routes.find((candidate) => candidate.match(call));
@@ -80,7 +87,10 @@ const CONTRACT_ROUTE = {
 
 beforeEach(() => {
   localStorage.clear();
+  window.history.replaceState(null, "", "/");
   localStorage.setItem("petrichor.sessionId", "s1");
+  // Web v1 §3 (issue #208): the IA generation needs a Mistral token.
+  localStorage.setItem("petrichor.mistralToken", "sk-ui-test");
   applyLanguage("fr");
 });
 
@@ -100,7 +110,7 @@ describe("formule éditable (issue #125)", () => {
         respond: () => jsonResponse(201, EDIT_RESPONSE),
       },
     ]);
-    render(<App />);
+    await renderAtelier();
     fireEvent.click(screen.getByRole("button", { name: "2. Questions statiques" }));
     await waitFor(() => expect(screen.getByText(/AG\(philo0 thinking\)/)).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Éditer la formule" }));
@@ -113,6 +123,14 @@ describe("formule éditable (issue #125)", () => {
         calls.find((call) => call.url === "/v1/sessions/s1/questions/q1/formula")?.body,
       ).toBe(JSON.stringify({ formula: "AG(philo0 eating)" })),
     );
+    // Issue #208: the generation call carries the token header, the reads don't.
+    const editCall = calls.find((call) => call.url === "/v1/sessions/s1/questions/q1/formula");
+    expect(editCall?.headers["x-mistral-api-token"]).toBe("sk-ui-test");
+    const readCalls = calls.filter((call) => call.url !== "/v1/sessions/s1/questions/q1/formula");
+    expect(readCalls.length).toBeGreaterThan(0);
+    for (const call of readCalls) {
+      expect(call.headers["x-mistral-api-token"]).toBeUndefined();
+    }
     // The inverse reading is displayed, labeled provenance: llm (server text verbatim).
     await waitFor(() => expect(screen.getByText(/Toujours, philo0 mange\./)).toBeInTheDocument());
     expect(screen.getByText("(provenance : llm)")).toBeInTheDocument();
@@ -139,7 +157,7 @@ describe("formule éditable (issue #125)", () => {
           }),
       },
     ]);
-    render(<App />);
+    await renderAtelier();
     fireEvent.click(screen.getByRole("button", { name: "2. Questions statiques" }));
     await waitFor(() => expect(screen.getByText(/AG\(philo0 thinking\)/)).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Éditer la formule" }));
@@ -162,7 +180,7 @@ describe("formule éditable (issue #125)", () => {
           jsonResponse(429, { status: 429, detail: "Budget MC épuisé pour cette session." }),
       },
     ]);
-    render(<App />);
+    await renderAtelier();
     fireEvent.click(screen.getByRole("button", { name: "2. Questions statiques" }));
     await waitFor(() => expect(screen.getByText(/AG\(philo0 thinking\)/)).toBeInTheDocument());
     fireEvent.click(screen.getByRole("button", { name: "Éditer la formule" }));
