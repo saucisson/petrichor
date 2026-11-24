@@ -42,6 +42,7 @@ from petrichor.llm.provider import (
     LLMError,
     LLMProvider,
     LLMTokenRequiredError,
+    MistralToken,
     MistralTokenInvalidError,
     record_call_state,
 )
@@ -231,7 +232,7 @@ class MistralProvider(LLMProvider):
             "total_tokens": self._total_tokens,
         }
 
-    def _resolve_token(self, *, api_token: str | None) -> str:
+    def _resolve_token(self, *, api_token: MistralToken | None) -> str:
         """The effective Mistral credential for one call (web v1 §3, issue #208).
 
         The per-request ``api_token`` header wins over the server fallback
@@ -255,7 +256,7 @@ class MistralProvider(LLMProvider):
         data: dict[str, JsonValue],
         output_type: type[OutputType],
         route: ModelRoute | None = None,
-        api_token: str | None = None,
+        api_token: MistralToken | None = None,
     ) -> OutputType:
         """One chat completion (two messages) with bounded re-request and schema validation.
 
@@ -387,7 +388,7 @@ class MistralProvider(LLMProvider):
         ) from last_error
 
     def semantic_profile(
-        self, *, model: CanonicalModel, api_token: str | None = None
+        self, *, model: CanonicalModel, api_token: MistralToken | None = None
     ) -> SemanticProfilePublic:
         """Extract the semantic profile of a model via Mistral (digest `profile`)."""
         digest = net_digest(model, "profile")
@@ -406,7 +407,7 @@ class MistralProvider(LLMProvider):
         formulas: tuple[FormulaText, ...],
         roles: dict[str, AcceptedRole] | None = None,
         relations: tuple[str, ...] = (),
-        api_token: str | None = None,
+        api_token: MistralToken | None = None,
     ) -> FormulaReadings:
         """Read the whole question grid in ONE call (P72) with the `places-only` digest (P73).
 
@@ -435,7 +436,7 @@ class MistralProvider(LLMProvider):
         return document
 
     def clarification(
-        self, *, model: CanonicalModel, text: HumanMessage, api_token: str | None = None
+        self, *, model: CanonicalModel, text: HumanMessage, api_token: MistralToken | None = None
     ) -> Clarification:
         """Reformulate a human proposal via Mistral (one call per proposal, `places-only`)."""
         digest = net_digest(model, "places-only", formulas=(str(text),))
@@ -449,7 +450,7 @@ class MistralProvider(LLMProvider):
         )
 
     def cluster(
-        self, *, model: CanonicalModel, api_token: str | None = None
+        self, *, model: CanonicalModel, api_token: MistralToken | None = None
     ) -> tuple[Cluster, ...]:
         """Cluster the violations of a model via Mistral (digest `profile`)."""
         digest = net_digest(model, "profile")
@@ -463,7 +464,7 @@ class MistralProvider(LLMProvider):
         *,
         model: CanonicalModel,
         transitions: tuple[str, ...],
-        api_token: str | None = None,
+        api_token: MistralToken | None = None,
     ) -> NarrationCorpus:
         """Narrate the COMPLETE witness in ONE call (P72, P32) with the `trace` digest (P73).
 

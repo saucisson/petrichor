@@ -17,6 +17,7 @@ from petrichor.llm.provider import (
     LLMDegradationError,
     LLMError,
     LLMProvider,
+    MistralToken,
 )
 from petrichor.petri_canonical import CanonicalModel, canonical_json
 
@@ -41,7 +42,7 @@ def run_session(
     provider: LLMProvider,
     model: CanonicalModel,
     requests: tuple[SessionRequest, ...],
-    api_token: str | None = None,
+    api_token: MistralToken | None = None,
 ) -> tuple[str, ...]:
     """Execute a session and return its journal: one canonical JSON entry per request.
 
@@ -64,7 +65,7 @@ def _dispatch_reading(
     provider: LLMProvider,
     model: CanonicalModel,
     formula: FormulaText,
-    api_token: str | None = None,
+    api_token: MistralToken | None = None,
 ) -> JsonValue:
     """One document call for the reading; the journal entry stays the single reading (§19.4).
 
@@ -85,7 +86,7 @@ def _dispatch_narration(
     provider: LLMProvider,
     model: CanonicalModel,
     transition: str,
-    api_token: str | None = None,
+    api_token: MistralToken | None = None,
 ) -> JsonValue:
     """One document call for the witness; the journal entry stays the pair (§19.4)."""
     corpus = provider.narrate(model=model, transitions=(transition,), api_token=api_token)
@@ -103,7 +104,7 @@ def _dispatch(
     provider: LLMProvider,
     model: CanonicalModel,
     request: SessionRequest,
-    api_token: str | None = None,
+    api_token: MistralToken | None = None,
 ) -> JsonValue:
     """Dispatch one request to the provider and return its JSON-serializable output.
 

@@ -22,7 +22,7 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from petrichor.checks import RunId
-from petrichor.llm.provider import LLMDegradationError
+from petrichor.llm.provider import LLMDegradationError, MistralToken
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -185,7 +185,7 @@ def narrate_steps(
     provider: LLMProvider,
     model: CanonicalModel,
     steps: tuple[WitnessStep, ...],
-    api_token: str | None = None,
+    api_token: MistralToken | None = None,
 ) -> tuple[Narration, ...]:
     """One LLM narration per fired step, labeled ``provenance: llm`` (spec §16).
 

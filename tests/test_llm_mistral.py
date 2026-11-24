@@ -24,6 +24,7 @@ from petrichor.llm.provider import (
     DeterministicMockProvider,
     LLMDegradationError,
     LLMTokenRequiredError,
+    MistralToken,
     MistralTokenInvalidError,
 )
 from petrichor.llm.routing import USAGE_MODEL_ROUTING, ModelRoute
@@ -610,7 +611,7 @@ class TestMistralToken:
             provider.narrate(
                 model=PHILOSOPHES3_MODEL,
                 transitions=("takeL_1",),
-                api_token="sk-secret-pat",  # noqa: S106 - test literal, not a secret
+                api_token=MistralToken("sk-secret-pat"),
             )
         rendered = json.dumps(logs)
         assert "sk-secret-pat" not in rendered
