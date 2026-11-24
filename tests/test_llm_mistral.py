@@ -523,6 +523,14 @@ class TestProviderSelection:
         with pytest.raises(ConfigurationError, match="MISTRAL_API_KEY"):
             select_llm_provider(settings=settings, environment={"PETRICHOR_ENV": "production"})
 
+    def test_mistral_key_in_production_is_fatal_even_with_the_mock(self) -> None:
+        # The guard is unconditional: it runs before the provider branch, so a
+        # global key in production is fatal whatever the selected provider.
+        settings = ApiSettings(mistral_api_key=SecretStr("sk-test"))
+        assert settings.llm_provider == "mock"
+        with pytest.raises(ConfigurationError, match="MISTRAL_API_KEY"):
+            select_llm_provider(settings=settings, environment={"PETRICHOR_ENV": "production"})
+
 
 class TestMistralToken:
     """The per-request Mistral token (web v1 §3, issue #208)."""

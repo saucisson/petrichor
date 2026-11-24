@@ -4552,4 +4552,23 @@ def create_app(  # noqa: PLR0913, C901 - one keyword per wired dependency (ADR-0
             ),
         )
 
-    return app
+    return _token_error_guard(app)
+
+
+def _token_error_guard(app: WSGIApp) -> WSGIApp:
+    """Safety net for the typed token errors (web v1 §3, issue #208).
+
+    The generation handlers map them explicitly; this guard guarantees that a
+    token error escaping ANY route still becomes its typed problem response
+    (428/502), never an untyped 500.
+    """
+
+    def guarded(environ: WSGIEnvironment, start_response: StartResponse) -> Iterable[bytes]:
+        try:
+            return app(environ, start_response)
+        except (LLMTokenRequiredError, MistralTokenInvalidError) as token_error:
+            return _token_problem_response(
+                start_response=start_response, environ=environ, error=token_error
+            )
+
+    return guarded
