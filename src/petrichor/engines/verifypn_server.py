@@ -30,6 +30,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from petrichor.engines.pnml_export import PnmlExportError, export_pnml
+from petrichor.pql import pql_formula
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +78,8 @@ def build_pql_query(*, family: str, formula: str) -> str:
     if family == "deadlock":
         return DEADLOCK_PQL
     if family in SUPPORTED_FAMILIES:
-        return formula
+        # PQL has no "->" implication: the MCC dialect is translated (spec §17.3).
+        return pql_formula(formula=formula)
     raise QuestionError(
         f"Family {family!r} is outside the supported scope {sorted(SUPPORTED_FAMILIES)}."
     )

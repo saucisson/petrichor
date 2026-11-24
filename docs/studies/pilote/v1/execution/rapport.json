@@ -1,0 +1,89 @@
+{
+  "study_id": "pilote",
+  "study_version": "v1",
+  "preregistered_at": "2026-11-18",
+  "executed_at": "2026-11-19T13:14:56.664160Z",
+  "model_file": "model.pnml",
+  "model_sha256": "sha256:aec46498f37608c62ff52fa933c8d17b5f583e305d45c4e1ae0717e064b624d4",
+  "model_content_hash": "sha256:10c2c09236fe45d21e203336943e5f9be4d8d2ad648836c6918bbfc3e868946c",
+  "model_id": "mdl_10c2c092",
+  "session_id": "ses_043aa4",
+  "engine": "verifypn",
+  "engine_version": "4.4.2",
+  "budget": {
+    "cap_seconds": 3600.0,
+    "consumed_seconds": 87.25997464700777,
+    "reserved_seconds": 0.0,
+    "remaining_seconds": 3512.7400253529922,
+    "run_count": 6,
+    "within_cap": true
+  },
+  "questions_total": 6,
+  "questions_arbitrated": 6,
+  "runs": [
+    {
+      "run_id": "run_8cfcce",
+      "family": "safety",
+      "kind": "safety.invariant",
+      "formula": "AG (productSlots_1 <= 1)",
+      "status": "done",
+      "verdict": "satisfied",
+      "tool_seconds": 0.0019657919910969213
+    },
+    {
+      "run_id": "run_91344e",
+      "family": "safety",
+      "kind": "safety.invariant",
+      "formula": "AG (optionSlots_1 <= 1)",
+      "status": "done",
+      "verdict": "satisfied",
+      "tool_seconds": 0.0015890399954514578
+    },
+    {
+      "run_id": "run_a97c29",
+      "family": "liveness",
+      "kind": "liveness.conditional",
+      "formula": "AG (ready_1 == 1 -> AF ready_1 == 0)",
+      "status": "done",
+      "verdict": "violated",
+      "tool_seconds": 0.03986930500832386
+    },
+    {
+      "run_id": "run_5bdada",
+      "family": "recovery",
+      "kind": "recovery.unconditional",
+      "formula": "AG EF (productSlots_1 >= 1)",
+      "status": "done",
+      "verdict": "satisfied",
+      "tool_seconds": 0.03734702798828948
+    },
+    {
+      "run_id": "run_292bb2",
+      "family": "recovery",
+      "kind": "recovery.unconditional",
+      "formula": "AG EF (optionSlots_1 >= 1)",
+      "status": "done",
+      "verdict": "satisfied",
+      "tool_seconds": 0.03937628600397147
+    },
+    {
+      "run_id": "run_41ec01",
+      "family": "safety",
+      "kind": "safety.state_invariant",
+      "formula": "AG (wait_1 <= 1)",
+      "status": "done",
+      "verdict": "satisfied",
+      "tool_seconds": 0.0013302369916345924
+    }
+  ],
+  "contract_sha256": "sha256:4502e3638b15ff251248411132ae66dcb11ec1853b0352994d1b831eb2778576",
+  "markdown_sha256": "sha256:7d7ff4055cfe6f6ad5e3d6a7b4b4759e225a2fdf64dca9a89516bc793b45e625",
+  "journal_sha256": "sha256:fb866be4b94a8f30aa549b995184d44b1e8c1c954c5bccee09676a01f82d9eb4",
+  "materials": {
+    "model.pnml": "sha256:aec46498f37608c62ff52fa933c8d17b5f583e305d45c4e1ae0717e064b624d4",
+    "catalogue-formules.v1.json": "sha256:aaafca14529d963f57f110d196abdc576003d5fb49ccfdfc079f75450cc2d5d1",
+    "grille-couverture.v1.json": "sha256:08700934e7f35060f0be53ebe0bb9f1b210f479271df27b37d1534e588dd2db8",
+    "preregistre.md": "sha256:0bb8453609d8addbb092d52d5ef67f54b04e41f3ddd1cf2c5af3649decbbd340"
+  },
+  "output_dir": "docs/studies/pilote/v1/execution"
+}

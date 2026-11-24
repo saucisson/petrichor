@@ -65,3 +65,12 @@ def _dispatch(
         case "cluster":
             clusters = provider.cluster(model_hash=model_hash)
             return [cluster.model_dump(mode="json") for cluster in clusters]
+        case "narration":
+            if request.text is None:
+                raise LLMError("A narration request requires a transition text.")
+            return {
+                "transition": str(request.text),
+                "narration": provider.narrate_transition(
+                    model_hash=model_hash, transition=str(request.text)
+                ),
+            }

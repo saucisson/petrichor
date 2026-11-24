@@ -92,3 +92,53 @@ review, run as a headless local session, costs no API tokens at all.
   correct, that is a finding in itself. The working machine needs the
   Vibe CLI installed and signed in; a session that cannot start fails
   closed (protocol failure), never fail-open.
+
+## Appendix — 2026-11-19 : deterministic exclusions in the `DIFF UNDER REVIEW` (P58, issue #130)
+
+**Status of this appendix**: accepted by the human via the session directive of
+2026-11-19 (wave 8 planning, milestone `Outillage — fiabilité de la revue`,
+issue #130) — recorded here per the escalation list, like ADR-0022 records its
+directive.
+
+The `DIFF UNDER REVIEW` section of the bundle no longer carries machine-generated
+artifacts verbatim. The following pathspecs are excluded deterministically by
+`scripts/review.py` (`MACHINE_ARTIFACT_EXCLUSIONS`), and each excluded changed path
+is replaced in the bundle by one digest line: path, size in bytes, sha256 of the
+HEAD blob, and the test or command that controls the file when applicable
+("audité par …"):
+
+- `docs/studies/**/execution/**` — audité par `make study-p-audit`
+- `**/audit.json` — audité par `make study-p-audit`
+- `src/petrichor/llm/golden/**` — audité par `tests/test_llm_guard.py::test_no_golden_file_contains_a_verdict`
+- `src/petrichor/study/**/*.pnml` — audité par `tests/test_study_pilote.py::test_verify_materials_returns_the_pinned_hashes`
+
+Rationale (constat `docs/spikes/2026-11-19-reviewer-reliability.md`): these artifacts
+grow the bundle without carrying reviewable judgment - the CI audit already controls
+them better than the reviewer can (e.g. `test_the_committed_execution_record_passes_the_audit`).
+
+The isolation doctrine is **preserved**: the bundle remains the reviewer's entire
+context; the exclusions + digests are part of the definition of the
+`DIFF UNDER REVIEW` section, not an addition to the prompt. Nothing else enters.
+
+## Appendix — 2026-11-19 : ADR selection in the review bundle (P63, issue #135)
+
+**Status of this appendix**: decided by the spike
+`docs/spikes/2026-11-19-adr-selection-in-review-bundle.md` (wave 8, milestone
+`Outillage — fiabilité de la revue`, issue #135) — a doctrine revision of this
+ADR, never a drive-by.
+
+**Decision: the full ADR compendium stays in the bundle.** `collect_decisions()`
+keeps inlining every ADR in extenso; no ADR is reduced to a one-line index.
+
+Measured on the real review bundle of PR #140 (2026-11-19, after the P58
+exclusions): bundle total 120,608 bytes (117.8 KiB), ADR part 23 ADRs /
+67,332 bytes (65.8 KiB, 56% of the bundle), diff part 33,201 bytes — under the
+P59 precondition limit of 256 KiB. The alternative weighed (PR-cited ADRs in
+full text + one-line index for the others) was rejected with its explicit
+tradeoff: the reviewer could miss a violation of an uncited ADR, which defeats
+the reviewer's role of seeking counterexamples against every recorded decision.
+
+**Reopening trigger**: if the ADR part pushes real review bundles over the
+256 KiB precondition limit (observed via the bundle sizes journaled per
+attempt, P62), the one-line-index option is re-evaluated with the day-report
+numbers — not before.

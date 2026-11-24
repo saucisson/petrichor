@@ -32,3 +32,6 @@ htmlcov/
 .idea/
 .vscode/
 .DS_Store
+
+# Dépendances frontend vendored (npm) - jamais commitées
+node_modules/

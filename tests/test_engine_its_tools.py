@@ -11,11 +11,32 @@ import stat
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
+import structlog.testing
 from hypothesis import given, settings
 from hypothesis import strategies as st
 from philosophes3 import build_philosophes3
 
-from petrichor.engines.contract import EngineQuestion
+from petrichor.checks import (
+    CheckCompleted,
+    CheckFailed,
+    CheckQuestion,
+    KindPattern,
+)
+from petrichor.engines.api_runner import ItsToolsCheckRunner
+from petrichor.engines.archive import RunArchive
+from petrichor.engines.contract import (
+    DEFAULT_TIMEOUT_SECONDS,
+    ITS_TOOLS_ENGINE_NAME,
+    ITS_TOOLS_ENGINE_VERSION,
+    Cost,
+    DriverError,
+    EngineQuestion,
+    EngineTimeoutError,
+    InputHash,
+    NormalizedOutput,
+    RunRecord,
+    new_run_id,
+)
 from petrichor.engines.its_tools_server import (
     DEADLOCK_QUERY,
     ItsToolsHandler,
@@ -23,9 +44,11 @@ from petrichor.engines.its_tools_server import (
     _pre_post_sets,
     build_its_query,
     build_normalized_output,
+    build_reducer_output,
     detect_cyclicity,
     handle_check,
     handle_health,
+    handle_reduce,
     parse_states_explored,
     parse_trace_transitions,
     parse_verdict,
@@ -332,3 +355,238 @@ def test_do_post_rejects_negative_content_length() -> None:
     handler.do_POST()
     assert answered[0][0] == 422
     assert "negative" in json.loads(answered[0][1].decode("utf-8"))["detail"]
+
+
+FAKE_ITS_REDUCER_DECIDED = """#!/bin/sh
+# Fake ITS-Tools reducer: static proof found, FORMULA TRUE, no artifacts.
+echo "FORMULA query.props TRUE"
+echo "States: 0"
+exit 0
+"""
+
+FAKE_ITS_REDUCER_UNDECIDED = """#!/bin/sh
+# Fake ITS-Tools reducer: MAYBE, writes the reduced net + projected query.
+echo "Query is MAYBE satisfied"
+dir=$(dirname "$1")
+echo "<pnml>reduced</pnml>" > "$dir/model.sr.pnml"
+echo "AG (fork_1 <= 1)" > "$dir/query.sr.props"
+echo "Reduced model written to: $dir/model.sr.pnml"
+echo "Projected query written to: $dir/query.sr.props"
+echo "States: 0"
+exit 0
+"""
+
+FAKE_ITS_REDUCER_MALFORMED = """#!/bin/sh
+# Fake ITS-Tools reducer: exit 0 with no FORMULA line (contract violation).
+echo "garbage"
+exit 0
+"""
+
+
+def _write_fake(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, script: str) -> None:
+    """Install a fake ITS-Tools binary as ITS_TOOLS_BINARY."""
+    fake = tmp_path / "its"
+    fake.write_text(script, encoding="utf-8")
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setenv("ITS_TOOLS_BINARY", str(fake))
+
+
+def test_build_reducer_output_decided_carries_no_artifacts() -> None:
+    """A decided reducer verdict is a static proof: no reduced net attached."""
+    output = build_reducer_output(
+        stdout="FORMULA query.props TRUE\nStates: 0\n",
+        artifacts={"model.sr.pnml": "<pnml/>", "query.sr.props": "AG true"},
+        tool_seconds=0.2,
+    )
+    assert output["verdict"] == "satisfied"
+    assert output["reduced_model_pnml"] is None
+    assert output["projected_formula"] is None
+    assert output["technique"] == "its-tools-10052022-reducer"
+    assert output["cost"] == {"tool_seconds": 0.2, "states_explored": 0}
+
+
+def test_build_reducer_output_unknown_carries_reduced_model_and_projected_formula() -> None:
+    """An unknown verdict carries model.sr.pnml + the projected formula (MCC « +red »)."""
+    output = build_reducer_output(
+        stdout="Query is MAYBE satisfied\nStates: 0\n",
+        artifacts={"model.sr.pnml": "<pnml>reduced</pnml>", "query.sr.props": "AG (fork_1 <= 1)"},
+        tool_seconds=0.4,
+    )
+    assert output["verdict"] == "unknown"
+    assert output["reduced_model_pnml"] == "<pnml>reduced</pnml>"
+    assert output["projected_formula"] == "AG (fork_1 <= 1)"
+
+
+def test_handle_reduce_with_fake_binary_decided(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A decided reducer probe answers 200 with the verdict and no artifacts."""
+    _write_fake(tmp_path, monkeypatch, FAKE_ITS_REDUCER_DECIDED)
+    question = _question(family="safety", formula="AG (fork_1 <= 1)")
+    body = json.dumps(question.model_dump(mode="json"))
+    status, payload = handle_reduce(body=body.encode("utf-8"), timeout_seconds=10)
+    assert status == 200
+    output = json.loads(payload.decode("utf-8"))
+    assert output["verdict"] == "satisfied"
+    assert output["reduced_model_pnml"] is None
+    assert output["projected_formula"] is None
+    assert output["technique"] == "its-tools-10052022-reducer"
+
+
+def test_handle_reduce_with_fake_binary_undecided(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An undecided reducer probe answers 200 with the reduced net + projected formula."""
+    _write_fake(tmp_path, monkeypatch, FAKE_ITS_REDUCER_UNDECIDED)
+    body = json.dumps(
+        _question(family="safety", formula="AG (fork_1 + fork_2 + fork_3 == 3)").model_dump(
+            mode="json"
+        )
+    )
+    status, payload = handle_reduce(body=body.encode("utf-8"), timeout_seconds=10)
+    assert status == 200
+    output = json.loads(payload.decode("utf-8"))
+    assert output["verdict"] == "unknown"
+    reduced_model = output["reduced_model_pnml"]
+    assert isinstance(reduced_model, str)
+    assert reduced_model.strip() == "<pnml>reduced</pnml>"
+    assert output["projected_formula"] == "AG (fork_1 <= 1)\n"
+
+
+def test_handle_reduce_malformed_stdout_is_500(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An exit-0 reducer stdout without a FORMULA line is a typed 500, never a verdict."""
+    _write_fake(tmp_path, monkeypatch, FAKE_ITS_REDUCER_MALFORMED)
+    question = _question(family="safety", formula="AG (fork_1 <= 1)")
+    body = json.dumps(question.model_dump(mode="json"))
+    status, payload = handle_reduce(body=body.encode("utf-8"), timeout_seconds=10)
+    assert status == 500
+    assert "invalid" in json.loads(payload.decode("utf-8"))["detail"]
+
+
+def test_handle_reduce_rejects_unknown_family() -> None:
+    """An unknown family is 422 on /reduce too, never reinterpreted."""
+    body = json.dumps(
+        {
+            "family": "unknown_family",
+            "formula": "EF true",
+            "pattern": "unknown",
+            "parameters": {"model": MODEL},
+        }
+    )
+    status, _ = handle_reduce(body=body.encode("utf-8"), timeout_seconds=10)
+    assert status == 422
+
+
+def test_handle_reduce_narration_events(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The handle_reduce DEBUG narration events are pinned (ADR-0005)."""
+    _write_fake(tmp_path, monkeypatch, FAKE_ITS_REDUCER_DECIDED)
+    question = _question(family="safety", formula="AG (fork_1 <= 1)")
+    body = json.dumps(question.model_dump(mode="json"))
+    with caplog.at_level(logging.DEBUG, logger="petrichor.engines.its_tools_server"):
+        handle_reduce(body=body.encode("utf-8"), timeout_seconds=10)
+    messages = [r.message for r in caplog.records]
+    assert "its_tools_reduce_received" in messages
+    assert "its_tools_reduce_question_parsed" in messages
+    assert "its_tools_reducer_completed" in messages
+
+
+class _StubDriver:
+    """A driver stub programmed with one outcome, to exercise the runner paths."""
+
+    def __init__(self, *, outcome: RunRecord | Exception) -> None:
+        self._outcome = outcome
+
+    def run(self, *, question: EngineQuestion, timeout_seconds: int) -> RunRecord:
+        if isinstance(self._outcome, Exception):
+            raise self._outcome
+        return self._outcome
+
+
+def _runner_question() -> CheckQuestion:
+    """A deadlock check question carrying the Philosophes-3 model."""
+    return CheckQuestion(
+        family="deadlock",
+        kind=KindPattern("deadlock"),
+        formula="EF DEADLOCK",
+        parameters={"model": MODEL},
+    )
+
+
+def _completed_record() -> RunRecord:
+    """The archived record of a successful run, as the driver would return it."""
+    return RunRecord(
+        run_id=new_run_id(),
+        engine=ITS_TOOLS_ENGINE_NAME,
+        engine_version=ITS_TOOLS_ENGINE_VERSION,
+        command=["docker", "compose", "run", "its-tools"],
+        timeout_seconds=DEFAULT_TIMEOUT_SECONDS,
+        input_hash=InputHash("sha256:" + "0" * 64),
+        output=NormalizedOutput(
+            verdict="satisfied",
+            witness=None,
+            cost=Cost(tool_seconds=0.1, states_explored=14),
+            technique="its-tools-10052022",
+        ),
+        measured_seconds=0.2,
+        archived_at="2026-11-10T00:00:00+00:00",
+    )
+
+
+class TestItsToolsCheckRunnerNarration:
+    """The runner's log events are part of the narration contract: pinned here.
+
+    The container itself stays deferred (the ITS-Tools image cannot build
+    yet - its pinned tag is a p2 dump, follow-up); the runner paths are
+    exercised with a stub driver, like the verifypn runner's.
+    """
+
+    def test_completed_run_is_narrated(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        runner = ItsToolsCheckRunner(archive=RunArchive(directory=tmp_path / "runs"))
+        record = _completed_record()
+        monkeypatch.setattr(runner, "_driver", _StubDriver(outcome=record))
+        with structlog.testing.capture_logs() as events:
+            outcome = runner.run(question=_runner_question(), timeout_seconds=30)
+        assert isinstance(outcome, CheckCompleted)
+        completed = [event for event in events if event["event"] == "runner_run_completed"]
+        assert len(completed) == 1
+        assert completed[0]["run_id"] == record.run_id
+        assert completed[0]["engine"] == ITS_TOOLS_ENGINE_NAME
+        assert completed[0]["verdict"] == "satisfied"
+
+    def test_timeout_is_narrated_as_a_warning(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        runner = ItsToolsCheckRunner(archive=RunArchive(directory=tmp_path / "runs"))
+        monkeypatch.setattr(
+            runner, "_driver", _StubDriver(outcome=EngineTimeoutError("exceeded 30s"))
+        )
+        with structlog.testing.capture_logs() as events:
+            outcome = runner.run(question=_runner_question(), timeout_seconds=30)
+        assert isinstance(outcome, CheckFailed)
+        assert outcome.kind == "timeout"
+        timeouts = [event for event in events if event["event"] == "runner_timeout"]
+        assert len(timeouts) == 1
+        assert timeouts[0]["family"] == "deadlock"
+        assert timeouts[0]["kind"] == "deadlock"
+
+    def test_driver_error_is_narrated_as_a_warning(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        runner = ItsToolsCheckRunner(archive=RunArchive(directory=tmp_path / "runs"))
+        monkeypatch.setattr(
+            runner, "_driver", _StubDriver(outcome=DriverError("compose up failed"))
+        )
+        with structlog.testing.capture_logs() as events:
+            outcome = runner.run(question=_runner_question(), timeout_seconds=30)
+        assert isinstance(outcome, CheckFailed)
+        assert outcome.kind == "engine_error"
+        errors = [event for event in events if event["event"] == "runner_engine_error"]
+        assert len(errors) == 1
+        assert errors[0]["family"] == "deadlock"
+        assert errors[0]["error"] == "compose up failed"

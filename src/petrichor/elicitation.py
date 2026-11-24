@@ -35,8 +35,11 @@ CATALOG_PATH = Path(__file__).with_name("elicitation_catalog.v1.json")
 
 QUESTION_ID_PREFIX = "q_"
 QUESTION_ID_HEX_DIGITS = 12
-PLACEHOLDER_COUNT = 3
+PLACEHOLDER_NAMES = ("place", "place_b", "place_c")
 """The formula placeholders ``{place}``, ``{place_b}``, ``{place_c}``."""
+
+PLACEHOLDER_INDEX = {"place": 0, "place_b": 1, "place_c": 2}
+"""The positional index of each placeholder: ``{place_b}`` is always the 2nd element."""
 
 QuestionId = NewType("QuestionId", str)
 """A stable generated-question identifier, e.g. ``q_3f9a1c2b7d4e``."""
@@ -46,6 +49,9 @@ TemplateId = NewType("TemplateId", str)
 
 _ELEMENT_RANGE_PATTERN = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)_(\d+)\.\.(\d+)")
 _FIRST_TOKEN_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_IDENTIFIER_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_SYMMETRY_INDEX_PATTERN = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)_\d+")
+"""A trailing symmetry index, e.g. the ``_2`` of ``eat_2`` (spec §14.5)."""
 
 
 class CatalogTemplate(BaseModel):
@@ -108,6 +114,8 @@ class GeneratedQuestion(BaseModel):
     scenario: str = Field(min_length=1)
     guideword: str = Field(min_length=1)
     role: str = Field(min_length=1)
+    convergence_hint: QuestionId | None = None
+    """The first earlier generated question this one converges with (spec §14.5)."""
 
 
 def load_catalog(*, path: Path = CATALOG_PATH) -> ElicitationCatalog:
@@ -139,8 +147,16 @@ def question_id(*, template_id: TemplateId, group_id: GroupId, formula: str) -> 
     return QuestionId(f"{QUESTION_ID_PREFIX}{digest[:QUESTION_ID_HEX_DIGITS]}")
 
 
-def _instantiate_formula(*, template: CatalogTemplate, elements: str, model: CanonicalModel) -> str:
-    """Fill the formula placeholders from the entry elements, e.g. ``fork_1..3``."""
+def _instantiate_formula(
+    *, template: CatalogTemplate, elements: str, model: CanonicalModel
+) -> str | None:
+    """Fill the formula placeholders from the entry elements, e.g. ``fork_1..3``.
+
+    Returns None when the entry carries fewer elements than the template
+    needs: the couple is non-productive and is documented as such by the
+    caller (spec §14.1) - never padded with an unrelated place, which would
+    produce a formula about the wrong elements.
+    """
     range_match = _ELEMENT_RANGE_PATTERN.search(elements)
     if range_match is not None:
         base = range_match.group(1)
@@ -149,9 +165,15 @@ def _instantiate_formula(*, template: CatalogTemplate, elements: str, model: Can
     else:
         token = _FIRST_TOKEN_PATTERN.search(elements)
         places = [token.group(0)] if token is not None else []
-    while len(places) < PLACEHOLDER_COUNT:
-        places.append(model.places[len(places) % len(model.places)].id)
-    return template.formula_template.format(place=places[0], place_b=places[1], place_c=places[2])
+    names = [name for name in PLACEHOLDER_NAMES if f"{{{name}}}" in template.formula_template]
+    # Positional binding, as before: {place} -> places[0], {place_b} -> places[1],
+    # {place_c} -> places[2]; a template using a later placeholder needs that many
+    # elements (a non-productive couple is skipped, never padded).
+    needed = max((PLACEHOLDER_INDEX[name] for name in names), default=-1) + 1
+    if len(places) < needed:
+        return None
+    values = {name: places[PLACEHOLDER_INDEX[name]] for name in names}
+    return template.formula_template.format(**values)
 
 
 def instantiate_questions(
@@ -173,6 +195,14 @@ def instantiate_questions(
                 )
             )
             formula = _instantiate_formula(template=template, elements=entry.elements, model=model)
+            if formula is None:
+                logger.debug(
+                    "question_generation_skipped",
+                    template_id=template.id,
+                    entry_id=entry.id,
+                    reason="non-productive couple (spec §14.1): not enough elements",
+                )
+                continue
             questions.append(
                 GeneratedQuestion(
                     question_id=question_id(
@@ -191,13 +221,69 @@ def instantiate_questions(
                     role=entry.role,
                 )
             )
+    hints = convergence_hints(questions=tuple(questions))
+    if hints:
+        questions = [
+            question.model_copy(update={"convergence_hint": hints.get(question.question_id)})
+            for question in questions
+        ]
     logger.debug(
         "elicitation_questions_generated",
         questions=len(questions),
         statique=sum(1 for question in questions if question.triage == "statique"),
         mc=sum(1 for question in questions if question.triage == "MC"),
+        convergence_hints=len(hints),
     )
     return tuple(questions)
+
+
+def normalize_formula(*, formula: str) -> str:
+    """Collapse every whitespace run of a formula (the §14.5 normalization)."""
+    return " ".join(formula.split())
+
+
+def _symmetry_normalized_tokens(*, formula: str) -> frozenset[str]:
+    """The identifiers of a formula with symmetry indices erased (``eat_1`` → ``eat_*``)."""
+    return frozenset(
+        _SYMMETRY_INDEX_PATTERN.sub(r"\1_*", token)
+        for token in _IDENTIFIER_PATTERN.findall(formula)
+    )
+
+
+def formulas_converge(*, first: str, second: str) -> bool:
+    """Whether two formulas converge (spec §14.5).
+
+    Identical after normalization, or same targets up to symmetry-index
+    substitution (``eat_1`` ≡ ``eat_2`` under a verified symmetry).
+    """
+    if normalize_formula(formula=first) == normalize_formula(formula=second):
+        return True
+    return _symmetry_normalized_tokens(formula=first) == _symmetry_normalized_tokens(formula=second)
+
+
+def questions_converge(*, first: GeneratedQuestion, second: GeneratedQuestion) -> bool:
+    """Whether two questions converge: same ``family.kind`` and converging formulas (spec §14.5)."""
+    return (
+        first.family == second.family
+        and first.kind == second.kind
+        and formulas_converge(first=first.formula, second=second.formula)
+    )
+
+
+def convergence_hints(*, questions: tuple[GeneratedQuestion, ...]) -> dict[QuestionId, QuestionId]:
+    """Map each question to the first earlier question it converges with (spec §14.5)."""
+    hints: dict[QuestionId, QuestionId] = {}
+    for index, question in enumerate(questions):
+        for earlier in questions[:index]:
+            if questions_converge(first=question, second=earlier):
+                hints[question.question_id] = earlier.question_id
+                break
+    logger.debug(
+        "elicitation_convergence_hints",
+        questions=len(questions),
+        hints=len(hints),
+    )
+    return hints
 
 
 def order_questions(

@@ -24,6 +24,7 @@ from pydantic import SecretStr
 from petrichor.api import WSGIApp, create_app
 from petrichor.api.settings import ApiSettings
 from petrichor.checks import (
+    FAMILY_PATTERNS,
     CheckCompleted,
     CheckFailed,
     CheckOutcome,
@@ -320,6 +321,33 @@ class TestPostCheck:
         assert runner.calls[0][1] == 7
 
 
+class TestPatternGuardPerFamily:
+    """An out-of-family pattern is 422 on every family, whatever the target (issue #30)."""
+
+    @pytest.mark.parametrize("family", sorted(FAMILY_PATTERNS))
+    @pytest.mark.parametrize("wired", [True, False])
+    def test_out_of_family_pattern_is_422_regardless_of_target(
+        self, family: str, wired: bool
+    ) -> None:
+        """The guard fires before any runner dispatch: no run, no runner call (spec §12.1)."""
+        foreign_kind = next(
+            kind
+            for other_family, kinds in FAMILY_PATTERNS.items()
+            if other_family != family
+            for kind in kinds
+        )
+        runner = FakeRunner() if wired else None
+        client, model_id, run_store = build_client(runner)
+        response = post_check(client, family, check_payload(model_id, kind=foreign_kind))
+        assert response.status_code == 422
+        assert response.headers["Content-Type"] == PROBLEM_JSON_CONTENT_TYPE
+        assert response.json()["extensions"]["reason"] == "pattern_not_in_family"
+        assert len(run_store) == 0
+        if wired:
+            assert isinstance(runner, FakeRunner)
+            assert runner.calls == []
+
+
 class TestRunStates:
     def test_engine_error_is_an_explicit_error_state_never_a_verdict(self) -> None:
         runner = FakeRunner(
@@ -435,6 +463,9 @@ class TestRunStates:
             "engine_qualified",
             "triage",
             "non_vacuity",
+            "session_id",
+            "fairness",
+            "semantics",
         }
         assert run["family"] == "deadlock"
         assert run["kind"] == "deadlock"

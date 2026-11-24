@@ -12,13 +12,13 @@ session is never removed (spec §4, same rule as the run archive §12.5).
 import json
 import threading
 import time
-from typing import TYPE_CHECKING, NewType
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
-from petrichor.checks import RunId
+from petrichor.checks import RunId, SessionId, new_session_id
 from petrichor.petri_canonical import JsonValue, ModelId
 
 if TYPE_CHECKING:
@@ -26,19 +26,11 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger(__name__)
 
-SessionId = NewType("SessionId", str)
-"""A session identifier, e.g. ``ses_7c2a9f``."""
-
-SESSION_ID_PREFIX = "ses_"
-SESSION_ID_HEX_DIGITS = 6
-
 SESSIONS_FILE_NAME = "sessions.jsonl"
 JOURNAL_FILE_NAME = "journal.jsonl"
 
-
-def new_session_id(*, random_hex: str) -> SessionId:
-    """Build a session id from random hex, truncated to the fixed width."""
-    return SessionId(f"{SESSION_ID_PREFIX}{random_hex[:SESSION_ID_HEX_DIGITS]}")
+DEFAULT_SESSION_BUDGET_SECONDS = 3600.0
+"""Default per-session MC budget cap in tool seconds (spec §12.4, §20.2)."""
 
 
 class JournalEntry(BaseModel):
@@ -72,6 +64,13 @@ class StoredSession(BaseModel):
     updated_at: float = Field(gt=0)
     run_ids: list[RunId] = Field(default_factory=list)
     """The runs attached to this session, in append order."""
+    budget_seconds: float = Field(default=DEFAULT_SESSION_BUDGET_SECONDS, gt=0)
+    """The session's own MC budget cap in tool seconds (spec §12.4, issue #33).
+
+    Set at creation (request body or server default); the budget is per
+    session and never carries over to another session. The default keeps
+    sessions persisted before issue #33 loadable.
+    """
 
 
 class SessionStore:
@@ -137,8 +136,8 @@ class SessionStore:
             file.write(line + "\n")
         self._journals.setdefault(session_id, []).append(entry)
 
-    def create(self, *, model_id: ModelId) -> StoredSession:
-        """Create a new session for a model and persist it."""
+    def create(self, *, model_id: ModelId, budget_seconds: float) -> StoredSession:
+        """Create a new session for a model with its own budget cap, and persist it."""
         now = time.time()
         session_id = new_session_id(random_hex=uuid4().hex)
         while session_id in self._sessions:
@@ -149,6 +148,7 @@ class SessionStore:
             created_at=now,
             updated_at=now,
             run_ids=[],
+            budget_seconds=budget_seconds,
         )
         with self._lock:
             self._sessions[session_id] = session

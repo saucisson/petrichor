@@ -6,11 +6,13 @@ UV := uv
 PYTHON := $(UV) run python
 CONSOLE_SCRIPT := $(UV) run notify
 DAY_TAG := daily-$(shell date +%F)
+UI_DIR := src/petrichor/api/ui
 
 .DEFAULT_GOAL := help
 .PHONY: help install lint format typecheck imports test check security build \
         day-start day-report smoke-test mutate notify review merge-pr pr claim \
-        claim-pr update-pr wait-ci night review-bundle sync-daily clean
+        claim-pr update-pr wait-ci night review-bundle sync-daily clean \
+        ui-gates ui-build
 
 help: ## List available targets with their description.
 	@grep --extended-regexp '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -35,7 +37,13 @@ imports: ## Verify the onion layer contract (import-linter, ADR-0002).
 test: ## Run the full test suite with the coverage floor (ADR-0007).
 	$(UV) run pytest
 
-check: lint typecheck imports test ## Full quality gate: run before reporting work.
+check: lint typecheck imports test ui-gates ## Full quality gate: run before reporting work.
+
+ui-gates: ## Frontend gates of the UI v2 (ADR-0101): ESLint, tsc --noEmit, vitest. Node pinned by .node-version.
+	cd $(UI_DIR) && { [ -d node_modules ] || npm ci --silent; } && npm run lint && npm run typecheck && npm run test
+
+ui-build: ## Build the UI v2 into src/petrichor/api/static (served under /ui/, ADR-0101).
+	cd $(UI_DIR) && npm run build
 
 security: ## Secret scan of the whole history (gitleaks, ADR-0008).
 	gitleaks git --no-banner --redact .
@@ -91,7 +99,18 @@ night: ## Run the unattended loop: ISSUES="12,13,14", MILESTONES="3,4", or auto-
 review-bundle: ## Print the reviewer bundle against origin/daily (ADR-0010).
 	$(PYTHON) -m scripts review-bundle --base-ref origin/daily
 
-clean: ## Remove caches, build outputs and mutation cache.
+OUTPUT_DIR ?= .petrichor/study-p
+CHECK_TIMEOUT ?= 300
+
+study-p: ## Run the pilote study session on the frozen v1 materials (spec §20, issue #41).
+	$(PYTHON) -m scripts study-p --output-dir "$(OUTPUT_DIR)" --check-timeout $(CHECK_TIMEOUT)
+
+RECORD_DIR ?= docs/studies/pilote/v1/execution
+
+study-p-audit: ## Audit the pilote execution record: no verdict without an archived run (spec §20.10, issue #42).
+	$(PYTHON) -m scripts study-p-audit --record-dir "$(RECORD_DIR)"
+
+clean: ## Remove caches, build outputs, mutation cache and runtime state.
 	rm -rf .pytest_cache .mypy_cache .ruff_cache .mutmut-cache htmlcov \
-		build dist .coverage coverage.xml .review
+		build dist .coverage coverage.xml .review .petrichor
 	find . -name __pycache__ -type d -prune -exec rm -rf {} +

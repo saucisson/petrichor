@@ -14,6 +14,12 @@ exported to PNML, the question to an ITS-Tools query file, and ITS-Tools
 answers with exit code 0 on success - the verdict is read from the
 ``FORMULA ... TRUE|FALSE`` line on stdout. LTL queries are stutter-sensitive
 (documented in the adapter sheet, spec §17.4).
+
+The ``/reduce`` endpoint (issue #25, spec §18.1) serves the reducer mode:
+static proof first (SMT over-approximation, random probes, reductions) with
+no exhaustive engine; when it cannot decide, the answer carries the reduced
+net ``model.sr.pnml`` and the projected formula ``query.sr.props`` so the
+caller runs the exhaustive engine on the reduced model (MCC « +red »).
 """
 
 import json
@@ -38,11 +44,14 @@ ITS_TOOLS_VERSION = "10052022"
 """The pinned ITS-Tools release this image is built from (Dockerfile.its-tools)."""
 
 ITS_TOOLS_TECHNIQUE = f"its-tools-{ITS_TOOLS_VERSION}"
+ITS_TOOLS_REDUCER_TECHNIQUE = f"its-tools-{ITS_TOOLS_VERSION}-reducer"
+"""The technique label of the reducer mode (spec §18.1, issue #25)."""
 ITS_TOOLS_BINARY = os.environ.get("ITS_TOOLS_BINARY", "/usr/local/bin/its")
 SERVER_HOST = "0.0.0.0"  # noqa: S104 - the container must accept the loopback-published port
 SERVER_PORT = 8080
 HEALTH_PATH = "/health"
 CHECK_PATH = "/check"
+REDUCE_PATH = "/reduce"
 ENGINE_TIMEOUT_VARIABLE = "ENGINE_TIMEOUT"
 DEFAULT_ENGINE_TIMEOUT_SECONDS = 30
 MAX_BODY_BYTES = 1_048_576
@@ -54,6 +63,12 @@ MAYBE_PATTERN = re.compile(r"Query is MAYBE satisfied")
 STATES_EXPLORED_PATTERN = re.compile(r"States: (\d+)")
 TRACE_BLOCK_PATTERN = re.compile(r"<trace>(.*?)</trace>", re.DOTALL)
 TRACE_TRANSITION_PATTERN = re.compile(r'<transition id="([^"]+)"')
+REDUCED_MODEL_ARTIFACT = "model.sr.pnml"
+"""The reduced net the reducer writes next to the model when it cannot decide."""
+PROJECTED_QUERY_ARTIFACT = "query.sr.props"
+"""The projected formula the reducer writes next to the query when it cannot decide."""
+REDUCED_MODEL_LINE_PATTERN = re.compile(r"Reduced model written to: (\S+)")
+PROJECTED_QUERY_LINE_PATTERN = re.compile(r"Projected query written to: (\S+)")
 
 
 class QuestionError(Exception):
@@ -332,6 +347,116 @@ def run_its_tools(
     return completed.returncode, completed.stdout, completed.stderr, measured
 
 
+def run_its_reducer(
+    *,
+    model_pnml: str,
+    query: str,
+    timeout_seconds: int,
+    binary: str | None = None,
+) -> tuple[int, str, str, float, dict[str, str]]:
+    """Run one ITS-Tools reducer execution; return (exit, stdout, stderr, seconds, artifacts).
+
+    The reducer mode (spec §18.1, issue #25) tries the static pipeline first
+    (SMT over-approximation to prove TRUE, random probes to refute FALSE,
+    structural reductions) without any exhaustive engine. When it cannot
+    decide, it writes the reduced net ``model.sr.pnml`` and the projected
+    query ``query.sr.props`` next to the inputs; both are read back here as
+    artifacts before the temp dir is cleaned.
+    """
+    executable = binary or os.environ.get("ITS_TOOLS_BINARY", ITS_TOOLS_BINARY)
+    with tempfile.TemporaryDirectory(prefix="its-reducer-") as workdir:
+        model_path = Path(workdir) / "model.pnml"
+        query_path = Path(workdir) / "query.props"
+        model_path.write_text(model_pnml, encoding="utf-8")
+        query_path.write_text(query + "\n", encoding="utf-8")
+        started = time.monotonic()
+        completed = subprocess.run(  # noqa: S603 - fixed argv, no shell
+            [executable, str(model_path), "--reducer", str(query_path)],
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+        measured = time.monotonic() - started
+        artifacts: dict[str, str] = {}
+        for name in (REDUCED_MODEL_ARTIFACT, PROJECTED_QUERY_ARTIFACT):
+            artifact_path = Path(workdir) / name
+            if artifact_path.is_file():
+                artifacts[name] = artifact_path.read_text(encoding="utf-8")
+    return completed.returncode, completed.stdout, completed.stderr, measured, artifacts
+
+
+def build_reducer_output(
+    *,
+    stdout: str,
+    artifacts: dict[str, str],
+    tool_seconds: float,
+) -> dict[str, Json]:
+    """Assemble the normalized reducer output from one ITS-Tools reducer execution.
+
+    A decided verdict (satisfied/violated) is a static proof: no reduced net
+    is attached. An unknown verdict carries the reduced net and the projected
+    formula so the caller can run the exhaustive engine on the reduced model
+    (the official « +red » pipeline of the MCC, spec §18.1).
+    """
+    verdict = parse_verdict(stdout=stdout)
+    reduced_model_pnml: str | None = None
+    projected_formula: str | None = None
+    if verdict == "unknown":
+        reduced_model_pnml = artifacts.get(REDUCED_MODEL_ARTIFACT)
+        projected_formula = artifacts.get(PROJECTED_QUERY_ARTIFACT)
+    return {
+        "verdict": verdict,
+        "reduced_model_pnml": reduced_model_pnml,
+        "projected_formula": projected_formula,
+        "cost": {
+            "tool_seconds": tool_seconds,
+            "states_explored": parse_states_explored(stdout=stdout),
+        },
+        "technique": ITS_TOOLS_REDUCER_TECHNIQUE,
+    }
+
+
+def handle_reduce(*, body: bytes, timeout_seconds: int) -> tuple[int, bytes]:
+    """Validate a question payload, run the ITS-Tools reducer, answer the normalized output."""
+    logger.debug("its_tools_reduce_received", extra={"body_bytes": len(body)})
+    try:
+        model, family, formula = _parse_question(body=body)
+        logger.debug("its_tools_reduce_question_parsed", extra={"family": family})
+        try:
+            query = build_its_query(family=family, formula=formula)
+            model_pnml = export_pnml(model=model)
+        except (QuestionError, PnmlExportError) as error:
+            raise HttpError(status=422, detail=str(error)) from error
+        try:
+            returncode, stdout, stderr, tool_seconds, artifacts = run_its_reducer(
+                model_pnml=model_pnml, query=query, timeout_seconds=timeout_seconds
+            )
+        except subprocess.TimeoutExpired as error:
+            detail = f"ITS-Tools reducer exceeded {timeout_seconds}s"
+            raise HttpError(status=504, detail=detail) from error
+        except OSError as error:
+            detail = f"ITS-Tools reducer could not be executed: {error}"
+            raise HttpError(status=500, detail=detail) from error
+        logger.debug(
+            "its_tools_reducer_completed",
+            extra={"returncode": returncode, "tool_seconds": tool_seconds},
+        )
+        if returncode != 0:
+            detail = f"ITS-Tools reducer failed: {stderr.strip()[:500]}"
+            raise HttpError(status=500, detail=detail)
+        try:
+            output = build_reducer_output(
+                stdout=stdout, artifacts=artifacts, tool_seconds=tool_seconds
+            )
+        except QuestionError as error:
+            detail = f"ITS-Tools reducer output invalid: {error}"
+            raise HttpError(status=500, detail=detail) from error
+    except HttpError as error:
+        return error.status, json.dumps({"detail": error.detail}).encode("utf-8")
+    return 200, json.dumps(output, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
 def handle_health() -> tuple[int, bytes]:
     """Answer the compose healthcheck."""
     return 200, json.dumps({"status": "ok"}).encode("utf-8")
@@ -408,7 +533,7 @@ def handle_check(*, body: bytes, timeout_seconds: int) -> tuple[int, bytes]:
 
 
 class ItsToolsHandler(BaseHTTPRequestHandler):
-    """Routes /health and /check to the pure handlers."""
+    """Routes /health, /check and /reduce to the pure handlers."""
 
     server_version = "petrichor-its-tools"
 
@@ -420,8 +545,8 @@ class ItsToolsHandler(BaseHTTPRequestHandler):
         self._answer(*handle_health())
 
     def do_POST(self) -> None:
-        """Serve the check endpoint with the engine timeout."""
-        if self.path != CHECK_PATH:
+        """Serve the check and reducer endpoints with the engine timeout."""
+        if self.path not in (CHECK_PATH, REDUCE_PATH):
             self._answer(404, json.dumps({"detail": "not found"}).encode("utf-8"))
             return
         raw_length = self.headers.get("Content-Length", "0")
@@ -440,6 +565,9 @@ class ItsToolsHandler(BaseHTTPRequestHandler):
             return
         body = self.rfile.read(length)
         timeout = getattr(self.server, "engine_timeout", DEFAULT_ENGINE_TIMEOUT_SECONDS)
+        if self.path == REDUCE_PATH:
+            self._answer(*handle_reduce(body=body, timeout_seconds=timeout))
+            return
         self._answer(*handle_check(body=body, timeout_seconds=timeout))
 
     def _answer(self, status: int, body: bytes) -> None:

@@ -1,0 +1,37 @@
+{
+  "record_dir": "docs/studies/pilote/v1/execution",
+  "audited_at": "2026-11-19T14:21:40.119961Z",
+  "ok": true,
+  "checks": [
+    {
+      "name": "no_verdict_without_run",
+      "ok": true,
+      "detail": "6 proofs, each backed by an archived run (verdict+version+cost)"
+    },
+    {
+      "name": "no_orphan_run",
+      "ok": true,
+      "detail": "6 archived runs, all backing a contract proof"
+    },
+    {
+      "name": "journal_runs_exist",
+      "ok": true,
+      "detail": "6 run_added journal events, all in the report"
+    },
+    {
+      "name": "budget_matches_archive",
+      "ok": true,
+      "detail": "consumed 87.240s recomputed from 6 runs"
+    },
+    {
+      "name": "frozen_materials_intact",
+      "ok": true,
+      "detail": "4 frozen materials hash-verified"
+    },
+    {
+      "name": "exports_hash_match",
+      "ok": true,
+      "detail": "contract, markdown and journal hashes match the report"
+    }
+  ]
+}

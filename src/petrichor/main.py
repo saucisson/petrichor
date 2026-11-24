@@ -18,14 +18,24 @@ import structlog
 
 from petrichor.api import create_app
 from petrichor.api.settings import ApiSettings
+from petrichor.arbitration import ArbitrationStore
+from petrichor.convergence import ConvergenceStore
+from petrichor.llm.mistral import MistralProvider
+from petrichor.llm.provider import DeterministicMockProvider, LLMProvider
 from petrichor.model_store import ModelStore
 from petrichor.profile import ProfileArbitrator
+from petrichor.question_edits import FormulaEditStore
 from petrichor.run_store import RunStore
 from petrichor.session_store import SessionStore
+from petrichor.witness import WitnessStore
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8080
 DEFAULT_SESSIONS_DIRECTORY = ".petrichor/sessions"
+DEFAULT_ARBITRATIONS_DIRECTORY = ".petrichor/arbitrations"
+DEFAULT_CONVERGENCES_DIRECTORY = ".petrichor/convergences"
+DEFAULT_WITNESSES_DIRECTORY = ".petrichor/witnesses"
+DEFAULT_FORMULA_EDITS_DIRECTORY = ".petrichor/formula_edits"
 
 
 def configure_logging() -> None:
@@ -36,13 +46,18 @@ def configure_logging() -> None:
     )
 
 
-def build_server(
+def build_server(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
     *,
     settings: ApiSettings,
     store: ModelStore,
     run_store: RunStore,
     session_store: SessionStore,
     arbitrator: ProfileArbitrator,
+    arbitration_store: ArbitrationStore,
+    convergence_store: ConvergenceStore,
+    witness_store: WitnessStore,
+    llm_provider: LLMProvider,
+    edit_store: FormulaEditStore,
 ) -> WSGIServer:
     """Assemble the WSGI server around the application."""
     app = create_app(
@@ -52,8 +67,26 @@ def build_server(
         runner=None,
         session_store=session_store,
         arbitrator=arbitrator,
+        arbitration_store=arbitration_store,
+        convergence_store=convergence_store,
+        witness_store=witness_store,
+        llm_provider=llm_provider,
+        edit_store=edit_store,
     )
     return make_server(DEFAULT_HOST, DEFAULT_PORT, app)
+
+
+def select_llm_provider(*, settings: ApiSettings) -> LLMProvider:
+    """Select the LLM provider by configuration (spec §8, issue #36).
+
+    ``mock`` (default) serves the golden corpus; ``mistral`` calls the real
+    API and fails at startup when the key is missing - never open by default.
+    """
+    if settings.llm_provider == "mistral":
+        if settings.mistral_api_key is None:
+            raise SystemExit("PETRICHOR_LLM_PROVIDER=mistral requires MISTRAL_API_KEY to be set.")
+        return MistralProvider(api_key=settings.mistral_api_key, model=settings.llm_model)
+    return DeterministicMockProvider()
 
 
 def main() -> None:
@@ -63,12 +96,21 @@ def main() -> None:
     settings = ApiSettings()
     session_store = SessionStore(directory=Path(DEFAULT_SESSIONS_DIRECTORY))
     arbitrator = ProfileArbitrator()
+    arbitration_store = ArbitrationStore(directory=Path(DEFAULT_ARBITRATIONS_DIRECTORY))
+    convergence_store = ConvergenceStore(directory=Path(DEFAULT_CONVERGENCES_DIRECTORY))
+    witness_store = WitnessStore(directory=Path(DEFAULT_WITNESSES_DIRECTORY))
+    edit_store = FormulaEditStore(directory=Path(DEFAULT_FORMULA_EDITS_DIRECTORY))
     server = build_server(
         settings=settings,
         store=ModelStore(),
         run_store=RunStore(),
         session_store=session_store,
         arbitrator=arbitrator,
+        arbitration_store=arbitration_store,
+        convergence_store=convergence_store,
+        witness_store=witness_store,
+        llm_provider=select_llm_provider(settings=settings),
+        edit_store=edit_store,
     )
     logger.info("api_server_started", host=DEFAULT_HOST, port=DEFAULT_PORT)
     server.serve_forever()  # pragma: no cover - the serving loop is the entry point

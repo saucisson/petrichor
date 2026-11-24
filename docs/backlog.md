@@ -1,10 +1,10 @@
-# Petrichor — Backlog complet (vagues 1–6)
+# Petrichor — Backlog complet (vagues 1–8)
 
-Corps de toutes les issues, prêts à peupler GitHub via le script idempotent (§19.2 : labels → milestones → issues, `--dry-run` d'abord). Conventions : **1 issue = 1 PR** d'une session ; chaque corps cite ses sections de spécification (le document « Petrichor — Conception complète », v1.2) ; critères d'acceptation vérifiables par commande ou test ; hors-périmètre explicite ; dépendances notées `blocked-by`.
+Corps de toutes les issues, prêts à peupler GitHub via le script idempotent (§19.2 : labels → milestones → issues, `--dry-run` d'abord). Conventions : **1 issue = 1 PR** d'une session ; chaque corps cite ses sections de spécification (le document « Petrichor — Conception complète », v1.3) ; critères d'acceptation vérifiables par commande ou test ; hors-périmètre explicite ; dépendances notées `blocked-by`.
 
-**Milestones** : `P0 — socle` · `P1 — MVP élicitation` · `Outillage — moteurs & transformations` · `P2 — chaîne MC` · `P3 — pilote` · `P4 — études & publication`.
+**Milestones** : `P0 — socle` · `P1 — MVP élicitation` · `Outillage — moteurs & transformations` · `P2 — chaîne MC` · `P3 — pilote` · `P4 — études & publication` · `UI v2 — refonte frontend` · `Outillage — fiabilité de la revue`.
 
-**Labels** : `area:api` `area:ui` `area:llm` `area:engine` `area:static` `area:docs` `area:study` · `kind:feat` `kind:test` `kind:chore` `kind:spike`.
+**Labels** : `area:api` `area:ui` `area:llm` `area:engine` `area:static` `area:docs` `area:study` `area:i18n` `area:outillage` · `kind:feat` `kind:test` `kind:chore` `kind:spike`.
 
 **Index**
 
@@ -57,9 +57,23 @@ Corps de toutes les issues, prêts à peupler GitHub via le script idempotent (�
 | P45 | study-c : pipeline d'injection de fautes et oracle par concordance | P23, P44 |
 | P46 | Replays LLM et bornage de la variance | P36, P45 |
 | P47 | study-b : qualité des propositions LLM (experts) | P36 |
-| P48 | study-a : élicitation guidée vs manuelle (sujets humains) | P45, P47 |
+| P48 | study-a : élicitation guidée vs manuelle (sujets humains) | P45, P47, P57 |
 | P49 | Analyse, figures et paquet artifact evaluation | P45–P48 |
 | P50 | Squelette de publication : papier outil + résultats empiriques | P49 |
+| P52 | Socle UI v2 : migration React/TypeScript/Vite et ADR | — |
+| P53 | i18n fr/en du chrome d'interface | P52 |
+| P54 | Formule éditable dans l'UI | P52 |
+| P55 | Dossiers de preuve cliquables dans le contrat | P52 |
+| P56 | Convergence asymétrique affichée | P52 |
+| P57 | F5 fermée : UI observée en CI et addendum d'audit | P53–P56 |
+| P58 | Diff de revue assaini : exclusions déterministes et digests | — |
+| P59 | Garde-fou de taille de bundle en précondition | P58 |
+| P60 | Budgets de session configurables et preflight du CLI | — |
+| P61 | Relances bornées, causes typées et escalade humaine | P60 |
+| P62 | Mesure : fiabilité de la revue dans le day-report | P61 |
+| P63 | Spike : réviser ADR-0010, la place des ADRs dans le bundle | P58 |
+
+*Note : P51 est déjà pris par l'issue #93 (WORKLOG v2, ADR-0022) — les vagues 7 et 8 commencent à P52.*
 
 ---
 
@@ -722,6 +736,191 @@ Corps de toutes les issues, prêts à peupler GitHub via le script idempotent (�
 - [ ] Squelette LaTeX : section outil (architecture, 8 services, principes) et section résultats (A–D, seuils vs mesures).
 - [ ] Figures importées depuis les notebooks ; aucune donnée dupliquée à la main.
 - [ ] Déclaration des licences et de la disponibilité de l'artifact.
+
+---
+
+## Vague 7 — Milestone `UI v2 — refonte frontend`
+
+### P52 · Socle UI v2 : migration React/TypeScript/Vite et ADR
+
+**Labels** `kind:feat` `area:ui` · **Dép.** —
+
+**Contexte.** Spec §9 v1.3 ; friction F5 (`docs/studies/pilote/v1/audit/frictions.md`) ; la P18 avait livré une UI « statique sans dépendance », décision aujourd'hui remplacée ; maquette `docs/ui-mockup/philosophes-3.tsx` (fonctions P1–P12) comme référence d'exigences.
+
+**Critères d'acceptation.**
+- [ ] ADR (numérotation suivante dans `docs/decisions/`) qui **supersede** la décision « UI statique sans dépendance » de P18 et acte React 18+ / TypeScript strict / Vite, justifié face à Svelte/Solid/vue (maquette React existante, écosystème i18n, outillage de tests) ;
+- [ ] Stratégie build/servage : build Node → `dist/` servi par l'API **sous `/ui/` sans écart d'URL** ; toolchain épinglé (version de Node fixée, lockfile commis) ;
+- [ ] Nouvelles gates frontend intégrées à `make check` (ESLint, `tsc --noEmit`, vitest + `@testing-library/react`), sans casser les gates Python existants ;
+- [ ] Migration **à parité stricte** des 4 étapes actuelles (amorçage/import PNML, cartes/arbitrages « Impossible / C'est normal / Vérifier d'abord », runs/budget/témoins, synthèse/export/journal, reprise de session, `X-API-Key`, localStorage) — parité prouvée par tests ;
+- [ ] Suppression des fichiers vanilla une fois la parité prouvée ;
+- [ ] Aucun verdict inventé côté client ; le serveur reste l'unique source de vérité (§9, §19.4) ; a11y P12 de la maquette préservée.
+
+**Hors périmètre.** i18n (P53) ; features manquantes (P54–P56) ; e2e navigateur (P57).
+
+### P53 · i18n fr/en du chrome d'interface
+
+**Labels** `kind:feat` `area:ui` `area:i18n` · **Dép.** P52
+
+**Contexte.** Spec §9 v1.3 ; study-a (P48) impliquera des sujets humains francophones et anglophones.
+
+**Critères d'acceptation.**
+- [ ] `react-i18next` ; **français par défaut** ; sélecteur de langue persisté (localStorage) avec `<html lang>` synchronisé ;
+- [ ] 100 % des chaînes du chrome extraites : navigation, boutons, titres d'étapes, messages d'erreur, messages d'état, `aria-labels` ;
+- [ ] Les contenus produits par le serveur (formules, verdicts, témoins, narrations LLM, contrat, journal) sont affichés **tels quels**, jamais traduits côté client — documenté dans le code ;
+- [ ] Tests sur les deux locales ; aucune régression de mise en page (textes longs, wrap, contraste).
+
+**Hors périmètre.** Traduction de données d'étude ; autres locales ; RTL.
+
+### P54 · Formule éditable dans l'UI
+
+**Labels** `kind:feat` `area:ui` `area:api` · **Dép.** P52
+
+**Contexte.** P37 livré côté API (PR #117, `src/petrichor/question_edits.py`, spec §4.8) mais pas branché dans l'UI.
+
+**Critères d'acceptation.**
+- [ ] Éditer une formule depuis la carte-question via les endpoints P37 existants ;
+- [ ] La re-lecture inverse est affichée et étiquetée `provenance: llm` ;
+- [ ] L'historique d'édition journalisé est visible (append-only, avant/après) ;
+- [ ] La re-vérification passe par la chaîne standard, jamais contournée ; aucune valeur de verdict calculée côté client ;
+- [ ] Les erreurs de l'API (validation, budget, 429) sont affichées explicitement ;
+- [ ] Tests composants + intégration sur endpoints réels (mock).
+
+**Hors périmètre.** Nouvel endpoint ; modification du format §4.8.
+
+### P55 · Dossiers de preuve cliquables dans le contrat
+
+**Labels** `kind:feat` `area:ui` · **Dép.** P52
+
+**Contexte.** P38 livré côté API (PR #118, `src/petrichor/contract.py`, spec §17.4) mais pas branché dans l'UI.
+
+**Critères d'acceptation.**
+- [ ] Chaque preuve du contrat est cliquable et mène à son dossier (pièces : formule, verdict, témoin, coûts, versions d'outils) ;
+- [ ] Les clauses controversées (camps) sont rendues **telles quelles**, sans lissage ;
+- [ ] Rejeu d'un témoin step-by-step depuis l'archive (réutilise le lecteur P32) ;
+- [ ] L'export Markdown reste inchangé et tous les liens du contrat restent fonctionnels ;
+- [ ] Tests.
+
+**Hors périmètre.** Nouveau format d'archive ; régénération côté client.
+
+### P56 · Convergence asymétrique affichée
+
+**Labels** `kind:feat` `area:ui` · **Dép.** P52
+
+**Contexte.** P34 livré côté API (PR #112, `src/petrichor/convergence.py`, spec §4.8/§12.7) mais pas branché dans l'UI.
+
+**Critères d'acceptation.**
+- [ ] Les convergences détectées à la génération sont signalées dans l'UI ;
+- [ ] L'arbitrage humain de fusion (accepter/refuser) est opérationnel ;
+- [ ] La propagation des révisions est visible sur les cartes filles et dans le journal d'arbitrage ;
+- [ ] L'historique reste affiché comme append-only (aucune révision silencieuse) ;
+- [ ] Tests.
+
+**Hors périmètre.** Fusion automatique ; nouvelle sémantique de convergence.
+
+### P57 · F5 fermée : UI observée en CI et addendum d'audit
+
+**Labels** `kind:test` `area:ui` `area:study` · **Dép.** P53, P54, P55, P56
+
+**Contexte.** Friction F5 de l'audit du pilote (`docs/studies/pilote/v1/audit/frictions.md`, spec §20.10) ; leçon CI de P39 : un run lent est un verdict lent, jamais une erreur de watchdog ; images pré-buildées hors watchdog.
+
+**Critères d'acceptation.**
+- [ ] E2E navigateur scriptée (Playwright) sur le compose réel : parcours complet des 4 étapes + arbitrage, bascule de langue, édition de formule, dossier de preuve, convergence ;
+- [ ] En CI derrière un marqueur distinct (pattern `@ui`), images pré-buildées et timeouts adaptés, comme P39 l'a établi pour `@engine` ;
+- [ ] Addendum d'audit (**nouveau document**, le `frictions.md`/`audit.json` committés ne sont jamais modifiés) réévaluant F5 : la voie UI est désormais observée ;
+- [ ] Rejouable par une cible `make` documentée ;
+- [ ] Preuves dans le PR (trace, capture, journal CI).
+
+**Hors périmètre.** Réécriture de l'audit committé ; refonte du protocole d'étude.
+
+---
+
+## Vague 8 — Milestone `Outillage — fiabilité de la revue`
+
+### P58 · Diff de revue assaini : exclusions déterministes et digests
+
+**Labels** `kind:feat` `area:outillage` · **Dép.** —
+
+**Contexte.** Constat `docs/spikes/2026-11-19-reviewer-reliability.md` ; `scripts/review.py` (ADR-0010) : le bundle embarque le diff intégral, y compris les artefacts machine (record d'exécution régénéré, `audit.json`, archives de runs, corpus golden, modèles vendus PNML — le model.pnml de P40 pesait seul 68,7 Ko).
+
+**Critères d'acceptation.**
+- [ ] Exclusions pathspec déterministes et documentées dans `review`/`review-bundle` (`docs/studies/**/execution/**`, `**/audit.json`, archives de runs, corpus golden, modèles vendus) ;
+- [ ] Chaque chemin exclu est remplacé dans le bundle par une ligne de digest : chemin, taille en octets, sha256, et le test qui contrôle le fichier quand applicable (« audité par … ») ;
+- [ ] La doctrine « rien d'autre n'entre dans le prompt » est inchangée et redocumentée : un appendice daté à l'ADR-0010 précise que les exclusions + digests font partie de la définition du `DIFF UNDER REVIEW` ;
+- [ ] Le bundle reste déterministe : test golden qui assemble le bundle sur un diff de fixture et établit l'égalité (avec et sans fichiers machine) ;
+- [ ] `review` continue de refuser les head obsolètes ou CI rouge (régression couverte par test).
+
+**Hors périmètre.** Le seuil de taille (P59) ; les budgets de session (P60) ; la sélection des ADRs (P63).
+
+### P59 · Garde-fou de taille de bundle en précondition
+
+**Labels** `kind:feat` `area:outillage` · **Dép.** P58
+
+**Contexte.** La revue P42 est morte trois fois (deadline, puis tours) sur un bundle de 164 Ko ; ces échecs auraient dû être un refus avant la session. Sémantique existante : code de sortie « préconditions non remplies » = pas un verdict, pas une tentative.
+
+**Critères d'acceptation.**
+- [ ] `review` et `review-bundle` mesurent la part diff (et le bundle total) et **refusent avant de lancer la session** au-delà d'un seuil nommé, configurable par env (défaut raisonnable, documenté) ;
+- [ ] Le refusal emprunte la sémantique des préconditions (pas un verdict, pas une tentative), avec un message actionnable (« bundle X Ko > seuil Y Ko : splitté la PR ou vérifié les exclusions ») ;
+- [ ] Les préconditions existantes (head poussé, CI conclue) restent opérationnelles, tests inclus ;
+- [ ] Test : un diff de fixture dépassant le seuil est refusé sans qu'aucune session ne démarre.
+
+**Hors périmètre.** Dimensionner les budgets de session (P60).
+
+### P60 · Budgets de session configurables et preflight du CLI
+
+**Labels** `kind:feat` `area:outillage` · **Dép.** —
+
+**Contexte.** `scripts/session.py` : `MAXIMUM_SESSION_TURNS = 8` codé en dur (non configurable, touché sur P40 et P42) ; premier échec de l'historique = invocation du CLI avec un binaire trop vieux (exit 2 opaque), contourné par un wrapper PATH temporaire.
+
+**Critères d'acceptation.**
+- [ ] `REVIEWER_MAX_TOURS` (env, symétrique de `REVIEWER_TIME_LIMIT_SECONDS`), défaut relevé de 8 à 12, documenté dans les docstrings et le help ;
+- [ ] Preflight du CLI avant lancement : version/capacité vérifiées (`--prompt-file` supporté), échec **rapide** avec message explicite (« le driver demande vibe ≥ 3.x, trouvé 2.26.1 ») et code « préconditions » — l'échec d'invocation nébuleux en exit 2 devient impossible ;
+- [ ] `REVIEWER_CLI_COMMAND` surchargeable par env pour épingler un binaire précis (le wrapper PATH temporaire disparaît au profit d'une variable documentée) ;
+- [ ] `REVIEWER_TIME_LIMIT_SECONDS` et les autres variables existantes inchangés ; tests avec un faux CLI pour chaque limite (tours, temps) et le preflight ;
+- [ ] `scripts/` reste stdlib only et `make check` vert.
+
+**Hors périmètre.** La politique de relances (P61) ; la taille du bundle (P58/P59).
+
+### P61 · Relances bornées, causes typées et escalade humaine
+
+**Labels** `kind:feat` `area:outillage` · **Dép.** P60
+
+**Contexte.** Le nightly relance la revue à l'identique, sans plafond ni distinction de cause ; les échecs de P40/P42 ont chacun coûté plusieurs sessions complètes avant une réussite stochastique.
+
+**Critères d'acceptation.**
+- [ ] Plafond de tentatives par PR (défaut 2, configurable), au-delà duquel on **abandonne proprement** : la PR reste ouverte, aucune fusion sur échec de revue (fail-closed inchangé) ;
+- [ ] Chaque échec est **typé** dans le message et le journal : deadline / limite de tours / préconditions / protocole — jamais un « exit 2 » nu ;
+- [ ] Après épuisement des tentatives : escalade humaine via le pipeline existant (`make notify`), le nightly ne boucle plus ;
+- [ ] Tests : deux échecs → escalade consignée, troisième refus, aucune relance automatique supplémentaire.
+
+**Hors périmètre.** La mesure agrégée (P62) ; modifier le mergeur (le verbe « pas de fusion sans revue propre » reste absolu).
+
+### P62 · Mesure : fiabilité de la revue dans le day-report
+
+**Labels** `kind:chore` `area:outillage` `area:docs` · **Dép.** P61
+
+**Contexte.** Les incidents de revue n'apparaissent nulle part de manière chiffrée : impossible de savoir si la vague a marché sans une courbe « taille de bundle vs échecs ».
+
+**Critères d'acceptation.**
+- [ ] Le day-report compte, par PR : nombre de tentatives de revue, échecs par cause (deadline / tours / préconditions / protocole), taille du bundle (part diff et total), résultats des échecs typés par P61 ;
+- [ ] Les événements sont consignés dans `.review/` (ou équivalent) puis récapitulés — aucune donnée à la main ;
+- [ ] Après une semaine de nightly, une note datée dans `docs/spikes/` confronte la courbe aux seuils choisis (sans ajustement a posteriori masqué) ;
+- [ ] Aucun critère d'acceptation existant du day-report cassé ; test.
+
+**Hors périmètre.** De nouvelles métriques hors revue.
+
+### P63 · Spike : réviser ADR-0010, la place des ADRs dans le bundle
+
+**Labels** `kind:spike` `area:outillage` `area:docs` · **Dép.** P58
+
+**Contexte.** `collect_decisions()` inligne **tous** les ADRs in extenso à chaque revue : la part statique du bundle grandit à chaque PR, indépendamment du diff. Toucher à la composition du bundle relève de la doctrine ADR-0010, pas d'un drive-by.
+
+**Critères d'acceptation.**
+- [ ] Note de spike pesant les options : (a) compendium ADR maintenu consciencieusement, (b) ADRs cités par la PR en texte intégral + index une ligne pour les autres — avec le tradeoff explicite (le reviewer peut rater une violation d'un ADR non cité) ;
+- [ ] Décision motivée actée dans une **révision de l'ADR-0010** (appendice daté), pas seulement un document de travail ;
+- [ ] Chiffres à l'appui : taille actuelle de la part ADR du bundle mesurée sur des revues réelles ;
+- [ ] L'implémentation éventuelle est un PR séparé, issu de la décision — explicitement hors périmètre ici.
+
+**Hors périmètre.** Toute modification de `collect_decisions()` dans cette issue.
 
 ---
 

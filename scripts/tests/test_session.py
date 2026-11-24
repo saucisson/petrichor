@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import shutil
 import subprocess
 from typing import TYPE_CHECKING
 
@@ -171,14 +172,210 @@ def test_render_markdown_comment_escapes_table_cells() -> None:
 def test_run_reviewer_session_launch_failure_is_protocol_failure(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """A missing reviewer CLI fails closed with exit 2, never a traceback."""
+    """An OSError at launch (preflight passed) fails closed with exit 2, never a traceback."""
     bundle = tmp_path / "bundle.md"
     bundle.write_text("# bundle", encoding="utf-8")
+    fake = make_fake_cli(tmp_path, version="vibe 3.1.3", help_text="--prompt-file FILE")
+    monkeypatch.setenv(session.CLI_COMMAND_VARIABLE, str(fake))
 
-    def broken_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
-        raise FileNotFoundError("vibe not found")
+    real_run = subprocess.run
 
-    monkeypatch.setattr(subprocess, "run", broken_run)
+    def dispatching_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if command[1] in ("--version", "--help"):
+            return real_run(command, capture_output=True, text=True, check=False)
+        raise FileNotFoundError("vibe vanished after preflight")
+
+    monkeypatch.setattr(subprocess, "run", dispatching_run)
     with pytest.raises(SystemExit) as excinfo:
         session.run_reviewer_session(model_name="", bundle_path=bundle)
     assert excinfo.value.code == session.EXIT_CODE_PROTOCOL_FAILURE
+
+
+FAKE_CLI_ANSWER = (
+    '[{"role":"assistant","content":"{\\"findings\\":[],\\"recommendation\\":\\"merge\\"}"}]'
+)
+
+
+def make_fake_cli(tmp_path: Path, *, version: str, help_text: str, name: str = "fake-vibe") -> Path:
+    """Write an executable fake CLI answering --version/--help and recording args."""
+    args_file = tmp_path / f"{name}.args"
+    script = tmp_path / name
+    script.write_text(
+        "#!/bin/sh\n"
+        f'echo "$@" >> "{args_file}"\n'
+        'case "$1" in\n'
+        f'  --version) echo "{version}" ;;\n'
+        f'  --help) printf "%s\\n" "{help_text}" ;;\n'
+        f"  *) echo '{FAKE_CLI_ANSWER}' ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    return script
+
+
+def test_load_max_turns_default_override_and_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """REVIEWER_MAX_TOURS defaults to 12 (was a hard-coded 8) and is configurable."""
+    monkeypatch.delenv(session.SESSION_MAX_TURNS_VARIABLE, raising=False)
+    assert session.load_max_turns() == 12
+    monkeypatch.setenv(session.SESSION_MAX_TURNS_VARIABLE, "20")
+    assert session.load_max_turns() == 20
+    monkeypatch.setenv(session.SESSION_MAX_TURNS_VARIABLE, "nope")
+    with pytest.raises(SystemExit) as exit_info:
+        session.load_max_turns()
+    assert exit_info.value.code == session.EXIT_CODE_PROTOCOL_FAILURE
+
+
+def test_load_cli_command_default_and_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """REVIEWER_CLI_COMMAND pins an exact binary; default stays vibe."""
+    monkeypatch.delenv(session.CLI_COMMAND_VARIABLE, raising=False)
+    assert session.load_cli_command() == "vibe"
+    monkeypatch.setenv(session.CLI_COMMAND_VARIABLE, "/opt/vibe-3.1.3/bin/vibe")
+    assert session.load_cli_command() == "/opt/vibe-3.1.3/bin/vibe"
+
+
+def test_cli_preflight_accepts_a_capable_cli(tmp_path: Path) -> None:
+    """A vibe 3.x binary advertising --prompt-file passes the preflight."""
+    fake = make_fake_cli(tmp_path, version="vibe 3.1.3", help_text="--prompt-file FILE")
+    assert session.cli_preflight(command=str(fake)) is None
+
+
+def test_cli_preflight_refuses_an_old_binary(tmp_path: Path) -> None:
+    """vibe 2.26.1 is refused with an explicit message naming the found version."""
+    fake = make_fake_cli(tmp_path, version="vibe 2.26.1", help_text="--prompt-file FILE")
+    refusal = session.cli_preflight(command=str(fake))
+    assert refusal is not None
+    assert "2.26.1" in refusal
+    assert ">= 3" in refusal
+
+
+def test_cli_preflight_refuses_a_missing_capability(tmp_path: Path) -> None:
+    """A 3.x binary without --prompt-file in its help is refused."""
+    fake = make_fake_cli(tmp_path, version="vibe 3.0.0", help_text="--output json")
+    refusal = session.cli_preflight(command=str(fake))
+    assert refusal is not None
+    assert "--prompt-file" in refusal
+
+
+def test_cli_preflight_refuses_a_missing_binary(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A binary absent from PATH is refused, pointing at REVIEWER_CLI_COMMAND."""
+    monkeypatch.setattr(shutil, "which", lambda command: None)
+    refusal = session.cli_preflight(command="vibe-missing")
+    assert refusal is not None
+    assert session.CLI_COMMAND_VARIABLE in refusal
+
+
+def test_run_reviewer_session_preflight_refusal_exits_3(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A preflight refusal exits 3 (preconditions), never the opaque exit 2."""
+    monkeypatch.setattr(shutil, "which", lambda command: None)
+    monkeypatch.setattr(session, "load_cli_command", lambda: "vibe-missing")
+    bundle = tmp_path / "bundle.md"
+    bundle.write_text("# bundle", encoding="utf-8")
+    with pytest.raises(SystemExit) as exit_info:
+        session.run_reviewer_session(model_name="", bundle_path=bundle)
+    assert exit_info.value.code == session.EXIT_CODE_PRECONDITIONS_UNMET
+
+
+def test_run_reviewer_session_uses_env_cli_and_max_turns(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The session launches the pinned CLI with --max-turns from REVIEWER_MAX_TOURS."""
+    fake = make_fake_cli(tmp_path, version="vibe 3.1.3", help_text="--prompt-file FILE")
+    monkeypatch.setenv(session.CLI_COMMAND_VARIABLE, str(fake))
+    monkeypatch.setenv(session.SESSION_MAX_TURNS_VARIABLE, "17")
+    bundle = tmp_path / "bundle.md"
+    bundle.write_text("# bundle", encoding="utf-8")
+    answer = session.run_reviewer_session(model_name="", bundle_path=bundle)
+    assert "findings" in answer
+    # Only the pinned fake CLI writes this args file: its existence proves the
+    # session launched the REVIEWER_CLI_COMMAND binary, not the default one.
+    recorded = (tmp_path / "fake-vibe.args").read_text(encoding="utf-8")
+    launch_line = next(line for line in recorded.splitlines() if "--prompt-file" in line)
+    assert "--max-turns 17" in launch_line
+
+
+def test_classify_session_failure_maps_each_cause() -> None:
+    """P61: every failure maps to a typed cause, never a bare exit code."""
+    assert (
+        session.classify_session_failure(returncode=3, stderr="")
+        == session.FailureCause.PRECONDITIONS
+    )
+    assert (
+        session.classify_session_failure(returncode=2, stderr="Error: time limit reached")
+        == session.FailureCause.DEADLINE
+    )
+    assert (
+        session.classify_session_failure(returncode=2, stderr="max turns (12) exceeded")
+        == session.FailureCause.TURN_LIMIT
+    )
+    assert (
+        session.classify_session_failure(returncode=2, stderr="segmentation fault")
+        == session.FailureCause.PROTOCOL
+    )
+    # "returns" must NOT substring-match the turn-limit keywords.
+    assert (
+        session.classify_session_failure(returncode=2, stderr="process returned 1")
+        == session.FailureCause.PROTOCOL
+    )
+
+
+def test_run_reviewer_session_failure_carries_a_typed_cause(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """P61: a runtime failure raises SessionFailure with the classified cause."""
+    bundle = tmp_path / "bundle.md"
+    bundle.write_text("# bundle", encoding="utf-8")
+    fake = make_fake_cli(tmp_path, version="vibe 3.1.3", help_text="--prompt-file FILE")
+    monkeypatch.setenv(session.CLI_COMMAND_VARIABLE, str(fake))
+
+    real_run = subprocess.run
+
+    def dispatching_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if command[1] in ("--version", "--help"):
+            return real_run(command, capture_output=True, text=True, check=False)
+        return subprocess.CompletedProcess(
+            command, 1, stdout="", stderr="Error: time limit reached after 600s"
+        )
+
+    monkeypatch.setattr(subprocess, "run", dispatching_run)
+    with pytest.raises(session.SessionFailure) as excinfo:
+        session.run_reviewer_session(model_name="", bundle_path=bundle)
+    assert excinfo.value.code == session.EXIT_CODE_PROTOCOL_FAILURE
+    assert excinfo.value.failure_cause == session.FailureCause.DEADLINE
+
+
+def test_run_writes_a_failure_report_with_the_typed_cause(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """P61: a failed session still writes review-report.json with failure_cause."""
+    bundle = tmp_path / "bundle.md"
+    bundle.write_text("# bundle", encoding="utf-8")
+    report = tmp_path / "review-report.json"
+
+    def failing_session(*, model_name: str, bundle_path: Path) -> str:
+        raise session.SessionFailure(
+            code=session.EXIT_CODE_PROTOCOL_FAILURE,
+            failure_cause=session.FailureCause.TURN_LIMIT,
+        )
+
+    monkeypatch.setattr(session, "run_reviewer_session", failing_session)
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    session.register(subparsers)
+    arguments = parser.parse_args(
+        [
+            "agent-review",
+            "--bundle-file",
+            str(bundle),
+            "--report-file",
+            str(report),
+        ]
+    )
+    assert session.run(arguments=arguments) == session.EXIT_CODE_PROTOCOL_FAILURE
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["failure_cause"] == "turn-limit"
+    assert payload["exit_code"] == session.EXIT_CODE_PROTOCOL_FAILURE

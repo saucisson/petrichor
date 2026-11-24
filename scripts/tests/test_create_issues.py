@@ -29,6 +29,8 @@ EXPECTED_MILESTONES = (
     "P2 — chaîne MC",
     "P3 — pilote",
     "P4 — études & publication",
+    "UI v2 — refonte frontend",
+    "Outillage — fiabilité de la revue",
 )
 
 
@@ -72,10 +74,11 @@ def test_expand_dependencies_output_is_always_well_formed(text: str) -> None:
 
 
 def test_parse_real_backlog() -> None:
-    """The shipped backlog parses to 50 issues across the 6 expected milestones."""
+    """The shipped backlog parses to 62 issues across the 8 expected milestones."""
     plan = parse_backlog(backlog_text())
     assert len(plan.issues) == create_issues.EXPECTED_ISSUE_COUNT
     expected = [f"P{number:02d}" for number in range(1, 51)]
+    expected += [f"P{number:02d}" for number in range(52, 64)]
     assert [issue.identifier for issue in plan.issues] == expected
     assert plan.milestones == EXPECTED_MILESTONES
     for issue in plan.issues:
@@ -109,7 +112,7 @@ def test_compute_pending_reports_only_what_is_missing() -> None:
         existing_milestones=set(),
         existing_titles=existing_titles,
     )
-    assert [issue.identifier for issue in pending.issues] == ["P50"]
+    assert [issue.identifier for issue in pending.issues] == ["P63"]
     assert len(pending.labels) == len(plan.labels)
 
 

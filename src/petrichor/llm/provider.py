@@ -22,6 +22,7 @@ from petrichor.llm.schemas import (
     ClusterList,
     FormulaReadings,
     LlmUsage,
+    NarrationCorpus,
     Reading,
     SemanticProfile,
 )
@@ -73,6 +74,22 @@ class LLMProvider(ABC):
     def cluster(self, *, model_hash: ContentHash) -> tuple[Cluster, ...]:
         """Cluster the violations of a model with their causes and remediations."""
 
+    @abstractmethod
+    def narrate_transition(self, *, model_hash: ContentHash, transition: str) -> str:
+        """Narrate one fired transition of a witness step (spec §16, issue #32).
+
+        The narration is a proposition, never a verdict; an unscripted
+        transition degrades explicitly (``LLMDegradationError``).
+        """
+
+    @abstractmethod
+    def usage_totals(self) -> dict[str, object]:
+        """The accumulated LLM cost of the provider.
+
+        Displayed apart from the tool-time budget, which counts only tool
+        seconds (spec §12.4, issue #36).
+        """
+
 
 class DeterministicMockProvider(LLMProvider):
     """Serves the golden files verbatim; never invents an answer (spec §15)."""
@@ -80,6 +97,17 @@ class DeterministicMockProvider(LLMProvider):
     def __init__(self, *, golden_root: Path = DEFAULT_GOLDEN_ROOT) -> None:
         """Bind the provider to a golden corpus root (defaults to the shipped corpus)."""
         self._golden_root = golden_root
+        self._calls = 0
+
+    def usage_totals(self) -> dict[str, object]:
+        """The mock costs no tokens; only the call count is tracked (spec §12.4)."""
+        return {
+            "provider": "mock",
+            "calls": self._calls,
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        }
 
     def semantic_profile(self, *, model_hash: ContentHash) -> SemanticProfile:
         """Serve the scripted profile of the corpus."""
@@ -104,10 +132,22 @@ class DeterministicMockProvider(LLMProvider):
         document = self._load(usage="cluster", model_hash=model_hash, output_type=ClusterList)
         return document.clusters
 
+    def narrate_transition(self, *, model_hash: ContentHash, transition: str) -> str:
+        """Serve the scripted narration of one transition; unscripted degrades (spec §16)."""
+        document = self._load(usage="narration", model_hash=model_hash, output_type=NarrationCorpus)
+        sentence = document.narrations.get(transition)
+        if sentence is None:
+            logger.warning(
+                "llm_narration_not_scripted", model_hash=model_hash, transition=transition
+            )
+            raise LLMDegradationError(f"No scripted narration for transition {transition!r}.")
+        return sentence
+
     def _load(
         self, *, usage: LlmUsage, model_hash: ContentHash, output_type: type[OutputType]
     ) -> OutputType:
         """Load and validate one golden file, with a bounded re-request on failure."""
+        self._calls += 1
         path = self._golden_root / model_hash / f"{usage}.json"
         for attempt in range(1, MAX_LLM_ATTEMPTS + 1):
             try:

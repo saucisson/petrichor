@@ -10,18 +10,22 @@ thread-safe: runs are executed on background threads and polled over HTTP.
 """
 
 import threading
+from typing import Literal
 from uuid import uuid4
 
 import structlog
 from pydantic import BaseModel, ConfigDict, Field
 
 from petrichor.checks import (
+    TOOL_SPECIFIC_SEMANTICS,
     CheckFamilyName,
+    Fairness,
     KindPattern,
     RunErrorKind,
     RunId,
     RunKey,
     RunStatus,
+    SessionId,
     ToolVersion,
     new_run_id,
 )
@@ -79,6 +83,15 @@ class StoredRun(BaseModel):
     issue #14); a degraded question displays it here, never silently."""
     non_vacuity: NonVacuityGuard | None = None
     """The non-vacuity guard chip of the question (spec §14.4, issue #14)."""
+    session_id: SessionId | None = None
+    """The session this run is charged to (spec §12.4, issue #33); None for a
+    session-less run, accounted against the global bucket."""
+    fairness: Fairness = "none"
+    """The fairness parameter of the run (spec §14.7, issue #35)."""
+    semantics: Literal["tool-specific"] | None = None
+    """``tool-specific`` when the run carries a fairness parameter no wired
+    tool supports natively (spec §17.5); such runs are never inter-tool
+    comparable."""
 
 
 class RunAdmission(BaseModel):
@@ -98,7 +111,12 @@ class RunAdmission(BaseModel):
     timeout_seconds: int = Field(gt=0)
     tool_version: ToolVersion
     session_budget_seconds: float = Field(gt=0)
-    """The session budget cap in tool seconds (spec §12.4); no carry-over."""
+    """The budget cap of the session this run is charged to, in tool seconds
+    (spec §12.4, issue #33); no carry-over between sessions."""
+    session_id: SessionId | None = None
+    """The session the run is charged to; None accounts against the global bucket."""
+    fairness: Fairness = "none"
+    """The fairness parameter of the run (spec §14.7, issue #35)."""
     triage: QuestionTriage
     """The triage computed at admission (spec §14.2, issue #14)."""
     non_vacuity: NonVacuityGuard | None = None
@@ -155,17 +173,22 @@ class RunStore:
 
         A known idempotence key replays the existing run without touching
         the budget. Otherwise the run is admitted only if its reservation
-        fits in the remaining budget (cap minus measured cost minus in-flight
-        reservations); when it does not fit, the refusal is explicit and
-        carries the remaining budget.
+        fits in the remaining budget of ITS session (cap minus measured cost
+        minus in-flight reservations of that same session, spec §12.4 issue
+        #33 - never another session's consumption); when it does not fit,
+        the refusal is explicit and carries the remaining budget.
         """
         with self._lock:
             existing_id = self._by_key.get(admission.key)
             if existing_id is not None:
                 logger.debug("run_store_key_hit", run_key=admission.key, run_id=existing_id)
                 return RunAdmitted(run=self._by_id[existing_id], created=False)
-            consumed_seconds = self._consumed_seconds_locked()
-            reserved_seconds = sum(self._reservations.values())
+            consumed_seconds = self._consumed_seconds_locked(session_id=admission.session_id)
+            reserved_seconds = sum(
+                reservation
+                for run_id, reservation in self._reservations.items()
+                if self._by_id[run_id].session_id == admission.session_id
+            )
             remaining_budget_seconds = (
                 admission.session_budget_seconds - consumed_seconds - reserved_seconds
             )
@@ -200,6 +223,9 @@ class RunStore:
                 tool_version=admission.tool_version,
                 triage=admission.triage,
                 non_vacuity=admission.non_vacuity,
+                session_id=admission.session_id,
+                fairness=admission.fairness,
+                semantics=(TOOL_SPECIFIC_SEMANTICS if admission.fairness != "none" else None),
             )
             self._by_id[run.run_id] = run
             self._by_key[admission.key] = run.run_id
@@ -212,20 +238,33 @@ class RunStore:
         with self._lock:
             return self._by_id.get(run_id)
 
-    def consumed_seconds(self) -> float:
+    def consumed_seconds(self, *, session_id: SessionId | None = None) -> float:
         """The cumulative measured tool time of terminal runs (spec §12.4).
 
         Only terminal runs contribute: a running run has no measured cost
         yet - the cost is measured, never estimated. In-flight runs are
-        accounted separately as reservations at admission time.
+        accounted separately as reservations at admission time. With a
+        ``session_id``, only that session's runs are summed (issue #33);
+        without, the global bucket (session-less runs) is summed.
         """
         with self._lock:
-            return self._consumed_seconds_locked()
+            return self._consumed_seconds_locked(session_id=session_id)
 
-    def _consumed_seconds_locked(self) -> float:
-        """The measured cost of terminal runs; the caller holds the lock."""
+    def reserved_seconds(self, *, session_id: SessionId | None = None) -> float:
+        """The in-flight reservations of one session (or of the global bucket)."""
+        with self._lock:
+            return sum(
+                reservation
+                for run_id, reservation in self._reservations.items()
+                if self._by_id[run_id].session_id == session_id
+            )
+
+    def _consumed_seconds_locked(self, *, session_id: SessionId | None) -> float:
+        """The measured cost of terminal runs of one session; the caller holds the lock."""
         return sum(
-            run.measured_seconds for run in self._by_id.values() if run.measured_seconds is not None
+            run.measured_seconds
+            for run in self._by_id.values()
+            if run.measured_seconds is not None and run.session_id == session_id
         )
 
     def _release_reservation_locked(self, *, run_id: RunId) -> None:

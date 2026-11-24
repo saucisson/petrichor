@@ -5,13 +5,18 @@ key is read from the ``PETRICHOR_API_KEY`` environment variable and has no
 default, so a misconfigured server fails at startup instead of running open.
 """
 
+from typing import Literal
+
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from petrichor.session_store import DEFAULT_SESSION_BUDGET_SECONDS
+
 ENV_PREFIX = "PETRICHOR_"
 DEFAULT_CHECK_TIMEOUT_SECONDS = 30
-DEFAULT_SESSION_BUDGET_SECONDS = 3600.0
-"""Default session budget cap in tool seconds (spec §20.2: 3600 s of cumulative tool time)."""
+
+type LlmProviderKind = Literal["mock", "mistral"]
+"""The selectable LLM providers (spec §8, issue #36): mock by default, mistral real."""
 
 
 class ApiSettings(BaseSettings):
@@ -24,3 +29,13 @@ class ApiSettings(BaseSettings):
     """Timeout of one check run; a timeout is an explicit error state, never a verdict."""
     session_budget_seconds: float = Field(default=DEFAULT_SESSION_BUDGET_SECONDS, gt=0)
     """Session budget cap in tool seconds (spec §12.4): cumulative measured cost, no carry-over."""
+    static_first: bool = Field(default=False)
+    """Opt-in static-first proof on degraded questions (spec §18.4, issue #25); off by default."""
+    llm_provider: LlmProviderKind = "mock"
+    """The LLM provider selected by configuration (spec §8, issue #36): the
+    deterministic mock by default, the real Mistral provider with ``mistral``."""
+    llm_model: str = Field(default="mistral-small-latest", min_length=1)
+    """The model of the real LLM provider when ``llm_provider="mistral"``."""
+    mistral_api_key: SecretStr | None = None
+    """The Mistral API key (env MISTRAL_API_KEY); required when llm_provider="mistral",
+    never logged (ADR-0005)."""

@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from petrichor.llm.schemas import SemanticProfile
 
 if TYPE_CHECKING:
-    from petrichor.session_store import SessionId
+    from petrichor.checks import SessionId
 
 logger = structlog.get_logger(__name__)
 

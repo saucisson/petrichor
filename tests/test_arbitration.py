@@ -5,18 +5,23 @@ and the previous one stays in the history and the journal (avant/après).
 No automatic fusion of questions ever happens here (convergence is P34).
 """
 
+import tempfile
 from pathlib import Path
 
 import httpx
+import pytest
 import structlog.testing
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from pydantic import SecretStr
 
 from petrichor.api.app import create_app
 from petrichor.api.settings import ApiSettings
-from petrichor.arbitration import ArbitrationStore
+from petrichor.arbitration import ArbitrationDecisionKind, ArbitrationStore
+from petrichor.elicitation import QuestionId
 from petrichor.model_store import ModelStore
 from petrichor.run_store import RunStore
-from petrichor.session_store import SessionStore
+from petrichor.session_store import SessionId, SessionStore
 
 FIXTURES = Path(__file__).parent / "fixtures"
 PHILOSOPHES3_PNML = (FIXTURES / "philosophes3.pnml").read_text(encoding="utf-8")
@@ -182,3 +187,43 @@ class TestArbitrationDecisions:
         assert decided["previous_decision"] is None
         store_event = next(e for e in logs if e["event"] == "arbitration_decided")
         assert store_event["decision"] == "accept"
+
+
+DECISIONS: list[ArbitrationDecisionKind] = ["accept", "refuse", "verify-first"]
+
+
+class TestArbitrationStorePropertyTier:
+    @pytest.mark.property
+    @settings(deadline=None, max_examples=25)
+    @given(
+        cards=st.lists(st.text(min_size=1, max_size=8), min_size=1, max_size=5),
+        decisions=st.lists(st.sampled_from(DECISIONS), min_size=1, max_size=10),
+    )
+    def test_append_only_order_and_revision_chaining(
+        self, cards: list[str], decisions: list[ArbitrationDecisionKind]
+    ) -> None:
+        # tmp_path is function-scoped: one directory shared by every Hypothesis
+        # example, so each example needs its own fresh directory.
+        with tempfile.TemporaryDirectory() as directory:
+            store = ArbitrationStore(directory=Path(directory) / "arbitrations")
+            self._check_append_only(store, cards=cards, decisions=decisions)
+
+    def _check_append_only(
+        self, store: ArbitrationStore, *, cards: list[str], decisions: list[ArbitrationDecisionKind]
+    ) -> None:
+        session_id = SessionId("ses_prop")
+        for index, decision in enumerate(decisions):
+            card = cards[index % len(cards)]
+            store.decide(
+                session_id=session_id,
+                question_id=QuestionId(card),
+                decision=decision,
+            )
+        history = store.history(session_id=session_id)
+        assert [r.decision for r in history] == decisions
+        touched_cards = {cards[index % len(cards)] for index in range(len(decisions))}
+        for card in touched_cards:
+            card_history = store.for_question(session_id=session_id, question_id=QuestionId(card))
+            chained = [r.previous_decision for r in card_history]
+            assert chained[0] is None
+            assert chained[1:] == [r.decision for r in card_history[:-1]]

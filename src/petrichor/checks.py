@@ -18,7 +18,7 @@ from typing import Literal, NewType, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from petrichor.petri_canonical import HASH_PREFIX, JsonValue, ModelId
+from petrichor.petri_canonical import HASH_PREFIX, CanonicalModel, JsonValue, ModelId
 
 type CheckFamilyName = Literal[
     "reachability", "safety", "liveness", "recovery", "deadlock", "structural"
@@ -34,8 +34,35 @@ type RunErrorKind = Literal["engine_error", "timeout"]
 type QualificationState = Literal["qualified", "unqualified"]
 """The qualification state of an adapter for one family (spec §17.5, issue #22)."""
 
+type Fairness = Literal["none", "weak", "strong"]
+"""The closed set of fairness parameters of a liveness run (spec §12.3, §14.7, issue #35)."""
+
+FAIRNESS_CAPABLE_TOOLS: frozenset[ToolVersion] = frozenset()
+"""Tools natively supporting a fairness parameter (spec §17.5).
+
+Empty until the LoLA 2 adapter lands (P29 follow-up): no MCC-dialect tool
+codes fairness, so a run with ``fairness != "none"`` is labeled
+``semantics: tool-specific`` and never inter-tool comparable.
+"""
+
+TOOL_SPECIFIC_SEMANTICS: Literal["tool-specific"] = "tool-specific"
+"""The semantics label of a run outside the MCC dialect (spec §17.5, issue #35)."""
+
 RunId = NewType("RunId", str)
 """A run identifier, e.g. ``run_7c2a9f``."""
+
+SessionId = NewType("SessionId", str)
+"""A session identifier, e.g. ``ses_7c2a9f`` (defined here, the lowest domain
+module, so the check request boundary can type it without an import cycle)."""
+
+SESSION_ID_PREFIX = "ses_"
+SESSION_ID_HEX_DIGITS = 6
+
+
+def new_session_id(*, random_hex: str) -> SessionId:
+    """Build a session id from random hex, truncated to the fixed width."""
+    return SessionId(f"{SESSION_ID_PREFIX}{random_hex[:SESSION_ID_HEX_DIGITS]}")
+
 
 RunKey = NewType("RunKey", str)
 """The idempotence key of a run: hash of (model, question), formatted ``sha256:<hex>``."""
@@ -73,6 +100,15 @@ class CheckRequest(BaseModel):
     kind: KindPattern = Field(min_length=1)
     formula: str = Field(min_length=1)
     parameters: dict[str, JsonValue] = Field(default_factory=dict)
+    session_id: SessionId | None = None
+    """The session this run is charged to (spec §12.4, issue #33); when given,
+    the run is admitted against that session's own budget cap and attached
+    to it. Absent: the run is accounted against the global bucket."""
+    fairness: Fairness = "none"
+    """The fairness parameter of the run (spec §12.3, §14.7, issue #35): each
+    parameter set is a distinct run, billed as such. Runs with a non-``none``
+    fairness are labeled ``semantics: tool-specific`` when no wired tool
+    supports it natively."""
 
 
 class CheckQuestion(BaseModel):
@@ -127,6 +163,42 @@ class CheckRunner(Protocol):
 
     def run(self, *, question: CheckQuestion, timeout_seconds: int) -> CheckOutcome:
         """Execute one check question within the timeout."""
+        ...
+
+
+class StaticFirstProbe(BaseModel):
+    """The outcome of one static-first probe on a degraded question (issue #25, spec §18.4).
+
+    A decided verdict carries the static proof in ``output``; an unknown
+    verdict carries the reduced model and the projected formula so the
+    exhaustive run can go on the reduced net (MCC « +red » pipeline).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    verdict: Literal["satisfied", "violated", "unknown"]
+    output: dict[str, JsonValue] | None = None
+    """The normalized static proof, present exactly when the verdict is decided."""
+    reduced_model: dict[str, JsonValue] | None = None
+    """The canonical model of the reduced net, present exactly when undecided."""
+    projected_formula: str | None = None
+    """The formula projected on the reduced net, present exactly when undecided."""
+    tool_version: ToolVersion
+    """The pinned version of the reducer behind this probe."""
+
+
+class StaticFirstProber(Protocol):
+    """The static-first port: probe a degraded question before any MC run (issue #25).
+
+    Implementations live in ``petrichor.engines`` and return plain data: the
+    API never interprets a verdict, it stores and serves the payload verbatim
+    (spec §19.4 verdict lock, same rule as `StaticResolver`).
+    """
+
+    def probe(
+        self, *, model: CanonicalModel, question: CheckQuestion, timeout_seconds: int
+    ) -> StaticFirstProbe:
+        """Try to decide one question statically (reducer mode, spec §18.1)."""
         ...
 
 

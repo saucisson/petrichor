@@ -44,6 +44,7 @@ COPY --from=builder --chmod=755 /src/verifypn/build/verifypn/bin/verifypn-linux6
 WORKDIR /app
 RUN install -d -m 755 /app/petrichor/engines
 COPY --chmod=644 src/petrichor/__init__.py /app/petrichor/__init__.py
+COPY --chmod=644 src/petrichor/pql.py /app/petrichor/pql.py
 COPY --chmod=644 src/petrichor/engines/__init__.py /app/petrichor/engines/__init__.py
 COPY --chmod=644 src/petrichor/engines/pnml_export.py /app/petrichor/engines/pnml_export.py
 COPY --chmod=644 src/petrichor/engines/verifypn_server.py /app/petrichor/engines/verifypn_server.py

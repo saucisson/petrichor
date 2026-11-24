@@ -17,6 +17,43 @@ servers:
 security:
   - apiKey: []
 paths:
+  /:
+    get:
+      summary: Redirect to the elicitation UI (spec §9, issue #18)
+      description: >-
+        302 to /ui/. The UI assets are public (they carry no data); every data
+        call they make goes through the authenticated /v1 API.
+      security: []
+      responses:
+        "302":
+          description: Redirect to /ui/.
+          headers:
+            Location:
+              schema:
+                type: string
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+  /ui/{asset}:
+    get:
+      summary: Static assets of the elicitation UI (spec §9, issue #18)
+      description: >-
+        Whitelist of index.html, app.js, styles.css - unauthenticated, since
+        the assets contain no data. Any other name (including traversal
+        attempts) is a 404; non-GET methods are a 405.
+      security: []
+      parameters:
+        - name: asset
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The asset, with its content type (text/html, text/javascript, text/css).
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
   /models:
     post:
       summary: Import a PNML document into the canonical form
@@ -196,6 +233,110 @@ paths:
           $ref: "#/components/responses/NotFound"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+  /runs/{run_id}/witness:
+    get:
+      summary: The §16 witness document of one run, with per-step LLM narrations (issue #32)
+      description: >-
+        Structure = tool (markings, fired transitions, cyclicity, back-edge),
+        normalized from any engine's output into the §16 format. Narrations
+        are LLM propositions labeled `provenance: llm`, never verdicts
+        (spec §16, §19.4). 404 `witness_not_found` when the run carries no
+        witness.
+      parameters:
+        - name: run_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The §16 witness document of the run.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WitnessDocument"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+  /witnesses/{witness_id}:
+    get:
+      summary: One stored witness with the runs referencing it (stored once, referenced n times)
+      description: >-
+        Witnesses are deduplicated by content hash: a witness shared by
+        several violations is stored once and referenced by each run
+        (spec §16, issue #32).
+      parameters:
+        - name: witness_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The stored witness record and its referencing runs.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [record, referenced_by]
+                properties:
+                  record:
+                    $ref: "#/components/schemas/WitnessRecord"
+                  referenced_by:
+                    type: array
+                    items:
+                      type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+  /llm/usage:
+    get:
+      summary: The accumulated LLM cost, displayed apart from the tool-time budget (issue #36)
+      description: >-
+        The MC budget counts only tool seconds (spec §12.4); the LLM cost
+        (calls, tokens) is exposed here, separately, never mixed into it.
+      responses:
+        "200":
+          description: The LLM usage totals of the configured provider.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [llm, budget_note]
+                properties:
+                  llm:
+                    type: object
+                    properties:
+                      provider:
+                        type: string
+                      model:
+                        type: string
+                      calls:
+                        type: integer
+                      prompt_tokens:
+                        type: integer
+                      completion_tokens:
+                        type: integer
+                      total_tokens:
+                        type: integer
+                  budget_note:
+                    type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "503":
+          description: No LLM provider is wired.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
   /qualification:
     get:
       summary: Qualification status per adapter and family
@@ -248,6 +389,9 @@ paths:
               properties:
                 model_id:
                   type: string
+                budget_seconds:
+                  type: number
+                  description: Optional per-session MC budget cap in tool seconds (spec §12.4, issue #33); defaults to the server setting.
       responses:
         "201":
           description: Session created; Location header points at the resource.
@@ -343,6 +487,48 @@ paths:
           $ref: "#/components/responses/NotFound"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+  /sessions/{session_id}/budget:
+    get:
+      summary: The live MC budget of one session (spec §12.4, issue #33)
+      description: >-
+        The budget lives continuously per session: `budget_seconds` is the
+        session's own cap (set at creation), `consumed_seconds` the measured
+        tool time of its terminal runs, `reserved_seconds` its in-flight
+        reservations, `remaining_seconds` what its next run may still claim.
+        No carry-over to another session, ever.
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The live budget of the session.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [session_id, budget_seconds, consumed_seconds, reserved_seconds, remaining_seconds, run_count]
+                properties:
+                  session_id:
+                    type: string
+                  budget_seconds:
+                    type: number
+                  consumed_seconds:
+                    type: number
+                  reserved_seconds:
+                    type: number
+                  remaining_seconds:
+                    type: number
+                  run_count:
+                    type: integer
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
   /sessions/{session_id}/journal:
     get:
       summary: Export the append-only timestamped journal of a session
@@ -374,9 +560,14 @@ paths:
         Records one human decision on a generated question card (spec §4.8,
         §12.7). A repeated question is a REVISION: a new decision is recorded
         and the previous one stays in the history and the journal
-        (avant/après). No automatic fusion of questions ever happens here -
-        convergence is a separate human-only decision (P34). Every decision is
-        appended to the session journal as an `arbitration_decided` entry.
+        (avant/après). Revising the arbitration of a question also reopens
+        the clauses of the questions covered by convergence with it
+        (spec §12.7): the reopening is appended to the journal as a
+        `convergence_reopened` entry, and the journal keeps the old and the
+        new decision alike. No automatic fusion of questions ever happens
+        here - convergence is a separate human-only decision
+        (`POST /convergences`). Every decision is appended to the session
+        journal as an `arbitration_decided` entry.
       parameters:
         - name: session_id
           in: path
@@ -441,9 +632,255 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
-  /sessions/{session_id}/profile:
+  /sessions/{session_id}/convergences:
+    post:
+      summary: Fuse one question into a converging surviving one (human-only, spec §12.2)
+      description: >-
+        Records one human fusion of two converging generated questions
+        (spec §4.8, §12.2, §14.5): the `question_id` is marked `covered` in
+        the contract and never solicited again. Only Arbitrer merges - the
+        two questions must be generated for the session and must converge
+        (same family.kind, same targets up to symmetry indices or identical
+        normalized formula), otherwise `422` convergence_rejected. Automatic
+        fusion is forbidden. The fusion is appended to the session journal as
+        a `convergence_fused` entry.
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [question_id, proposition_id]
+              additionalProperties: false
+              properties:
+                question_id:
+                  type: string
+                proposition_id:
+                  type: string
+      responses:
+        "200":
+          description: The identical fusion already existed - idempotent repeat, nothing appended.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  record:
+                    $ref: "#/components/schemas/ConvergenceRecord"
+        "201":
+          description: The recorded fusion.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  record:
+                    $ref: "#/components/schemas/ConvergenceRecord"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
     get:
-      summary: Read the proposed + arbitrated semantic profile of a session (spec §14)
+      summary: List the fusions of a session with limit/offset pagination, in append order (ADR-0016)
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+            maximum: 500
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+      responses:
+        "200":
+          description: A page of fusions in append order, with the total count.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [convergences, total, limit, offset]
+                properties:
+                  convergences:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ConvergenceRecord"
+                  total:
+                    type: integer
+                  limit:
+                    type: integer
+                  offset:
+                    type: integer
+        "400":
+          description: A pagination parameter (limit/offset) is not an integer.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /sessions/{session_id}/questions/{question_id}/formula:
+    post:
+      summary: Edit the formula of one question card (spec §9 maquette P7, issue #37)
+      description: >-
+        Records one append-only formula edit: the old and new formulas both
+        stay in the journal (the witness of the old formula is never lost),
+        and the response carries the inverse reading of the new formula
+        (formule → langage, an LLM proposition labeled `provenance: llm`,
+        degraded explicitly when unavailable). The edited formula is
+        re-verified through the standard check chain (POST /checks/{family}).
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: question_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [formula]
+              additionalProperties: false
+              properties:
+                formula:
+                  type: string
+                  minLength: 1
+      responses:
+        "201":
+          description: The recorded edit plus the inverse reading of the new formula.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  record:
+                    type: object
+                    required: [session_id, question_id, old_formula, new_formula, timestamp]
+                    properties:
+                      session_id:
+                        type: string
+                      question_id:
+                        type: string
+                      old_formula:
+                        type: string
+                      new_formula:
+                        type: string
+                      timestamp:
+                        type: number
+                  reading:
+                    type: object
+                    nullable: true
+                    description: The inverse reading (provenance llm), or a degradation note.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+  /sessions/{session_id}/reading:
+    get:
+      summary: The inverse reading of any formula (formule → langage, spec §9, issue #37)
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: formula
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The reading of the formula, an LLM proposition labeled provenance llm.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [formula, reading]
+                properties:
+                  formula:
+                    type: string
+                  reading:
+                    type: object
+                    nullable: true
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Unprocessable"
+  /sessions/{session_id}/contract:
+    get:
+      summary: The contract of a session, negotiated as contract+json or Markdown (spec §4.8)
+      description: >-
+        The exportable deliverable aggregated from the session state: arbitrated
+        profile, proposed hypotheses, questions by family with their status and
+        proof links, and the append-only journal. Replayable: building it twice
+        from the same state yields identical output.
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: Accept
+          in: header
+          required: false
+          schema:
+            type: string
+          description: >-
+            text/markdown for the Markdown export, application/contract+json
+            (default) for the structured document.
+      responses:
+        "200":
+          description: The contract document in the negotiated representation.
+          content:
+            application/contract+json; version=1.0:
+              schema:
+                $ref: "#/components/schemas/ContractDocument"
+            text/markdown:
+              schema:
+                type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "406":
+          description: The Accept header admits neither representation.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /sessions/{session_id}/profile:
       parameters:
         - name: session_id
           in: path
@@ -610,7 +1047,7 @@ components:
   schemas:
     Session:
       type: object
-      required: [session_id, model_id, created_at, updated_at, run_ids]
+      required: [session_id, model_id, created_at, updated_at, run_ids, budget_seconds]
       properties:
         session_id:
           type: string
@@ -624,6 +1061,9 @@ components:
           type: array
           items:
             type: string
+        budget_seconds:
+          type: number
+          description: The session's own MC budget cap in tool seconds (spec §12.4, issue #33); never carried over.
     JournalEntry:
       type: object
       required: [timestamp, event, detail]
@@ -649,6 +1089,278 @@ components:
         previous_decision:
           enum: [accept, refuse, verify-first]
           nullable: true
+    ConvergenceRecord:
+      type: object
+      required: [session_id, question_id, proposition_id, timestamp]
+      properties:
+        session_id:
+          type: string
+        question_id:
+          type: string
+          description: The covered question - never solicited again once fused.
+        proposition_id:
+          type: string
+          description: The surviving question the covered one converges with.
+        timestamp:
+          type: number
+    WitnessStep:
+      type: object
+      required: [index, marking, fired]
+      properties:
+        index:
+          type: integer
+          minimum: 0
+        marking:
+          type: array
+          items:
+            type: string
+        fired:
+          type: string
+          nullable: true
+    Narration:
+      type: object
+      required: [step_index, text, provenance]
+      properties:
+        step_index:
+          type: integer
+          minimum: 0
+        text:
+          type: string
+        provenance:
+          enum: [llm]
+          description: A narration is always an LLM proposition, never a verdict (spec §16, §19.4).
+    WitnessRecord:
+      type: object
+      required: [witness_id, kind, cyclic, back_edge, steps]
+      properties:
+        witness_id:
+          type: string
+        kind:
+          enum: [counterexample, trace]
+        cyclic:
+          type: boolean
+        back_edge:
+          type: integer
+          nullable: true
+        steps:
+          type: array
+          items:
+            $ref: "#/components/schemas/WitnessStep"
+    WitnessDocument:
+      type: object
+      required: [run_id, witness_id, kind, cyclic, back_edge, steps, narrations]
+      properties:
+        run_id:
+          type: string
+        witness_id:
+          type: string
+        kind:
+          enum: [counterexample, trace]
+        cyclic:
+          type: boolean
+        back_edge:
+          type: integer
+          nullable: true
+        steps:
+          type: array
+          items:
+            $ref: "#/components/schemas/WitnessStep"
+        narrations:
+          type: array
+          items:
+            $ref: "#/components/schemas/Narration"
+    ContractDocument:
+      type: object
+      required: [version, session_id, model_id, profile, questions, budget, proof_dossiers, journal]
+      properties:
+        version:
+          type: string
+          enum: ["1.0"]
+        session_id:
+          type: string
+        model_id:
+          type: string
+        profile:
+          type: array
+          items:
+            type: object
+            required: [entry_id, elements, proposed_role, confidence, evidence, accepted, chosen_role]
+            properties:
+              entry_id:
+                type: string
+              elements:
+                type: string
+              proposed_role:
+                type: string
+              confidence:
+                type: number
+              evidence:
+                type: string
+              accepted:
+                type: boolean
+              chosen_role:
+                type: string
+                nullable: true
+        questions:
+          type: array
+          items:
+            type: object
+            required: [question_id, template_id, family, kind, formula, triage, risk, cost, scenario, role, status, proofs, examination, cross_status, verified_by]
+            properties:
+              question_id:
+                type: string
+              template_id:
+                type: string
+              family:
+                type: string
+              kind:
+                type: string
+              formula:
+                type: string
+              triage:
+                enum: [statique, MC, dégradé]
+              risk:
+                type: integer
+              cost:
+                type: integer
+              scenario:
+                type: string
+              role:
+                type: string
+              status:
+                enum: [pending, accept, refuse, verify-first, covered]
+              covered_by:
+                type: string
+                nullable: true
+                description: The surviving question of the human fusion covering this one (spec §12.2); null when not covered.
+              convergence_hint:
+                type: string
+                nullable: true
+                description: The earlier generated question this one converges with (spec §14.5); null when original.
+              fairness:
+                enum: [none, weak, strong]
+                description: The fairness hypothesis attached to this clause (spec §14.7, issue #35).
+              repairs_run_id:
+                type: string
+                nullable: true
+                description: The run that repairs this liveness clause (spec §14.7, issue #35).
+              fairness_status:
+                enum: [none, tool-specific, unverifiable-under-fairness]
+                description: The explicit degradation when no wired tool supports fairness natively (spec §17.5).
+              proofs:
+                type: array
+                items:
+                  type: object
+                  required: [run_id, link, status, triage, verdict, tool_version]
+                  properties:
+                    run_id:
+                      type: string
+                    link:
+                      type: string
+                    status:
+                      enum: [running, done, error]
+                    triage:
+                      enum: [statique, MC, dégradé]
+                    verdict:
+                      type: string
+                      nullable: true
+                    tool_version:
+                      type: string
+                    technique:
+                      type: string
+                      nullable: true
+                    cost_tool_seconds:
+                      type: number
+                      nullable: true
+                    witness_id:
+                      type: string
+                      nullable: true
+                      description: The content-hash id of the run's §16 witness, when it carries one (issues #32/#38).
+              examination:
+                type: string
+              cross_status:
+                enum: [unverified, verified_by_n, controversial]
+              verified_by:
+                type: integer
+              counter_variant:
+                type: object
+                nullable: true
+                required: [examination, family, formula]
+                properties:
+                    examination:
+                      type: string
+                    family:
+                      type: string
+                    formula:
+                      type: string
+        budget:
+          type: object
+          required: [budget_seconds, consumed_seconds, remaining_seconds]
+          properties:
+            budget_seconds:
+              type: number
+            consumed_seconds:
+              type: number
+            remaining_seconds:
+              type: number
+        proof_dossiers:
+          type: array
+          description: The clickable proof dossiers of the session's clauses (spec §9 P3, issue #38).
+          items:
+            $ref: "#/components/schemas/ContractProofDossier"
+        journal:
+          type: array
+          items:
+            type: object
+    ContractProof:
+      type: object
+      required: [run_id, link, status, triage, verdict, tool_version, technique, cost_tool_seconds, witness_id]
+      properties:
+        run_id:
+          type: string
+        link:
+          type: string
+        status:
+          enum: [running, done, error]
+        triage:
+          enum: [statique, MC, dégradé]
+        verdict:
+          type: string
+          nullable: true
+        tool_version:
+          type: string
+        technique:
+          type: string
+          nullable: true
+        cost_tool_seconds:
+          type: number
+          nullable: true
+        witness_id:
+          type: string
+          nullable: true
+    ContractProofDossier:
+      type: object
+      required: [question_id, formula, status, cross_status, verified_by, proofs, camps]
+      properties:
+        question_id:
+          type: string
+        formula:
+          type: string
+        status:
+          enum: [pending, accept, refuse, verify-first, covered]
+        cross_status:
+          enum: [unverified, verified_by_n, controversial]
+        verified_by:
+          type: integer
+        proofs:
+          type: array
+          items:
+            $ref: "#/components/schemas/ContractProof"
+        camps:
+          type: array
+          items:
+            type: string
+          description: On controversy, the camps tool_version → verdict, exported as-is (spec §17.4).
     ArbitrationDecision:
       type: object
       required: [entry_id, accepted, chosen_role]
@@ -900,6 +1612,14 @@ components:
         parameters:
           type: object
           default: {}
+        session_id:
+          type: string
+          nullable: true
+          description: The session this run is charged to (spec §12.4, issue #33); admitted against that session's own budget cap and attached to it. Absent: global bucket.
+        fairness:
+          enum: [none, weak, strong]
+          default: none
+          description: The fairness parameter of the run (spec §12.3, §14.7, issue #35); each parameter set is a distinct run, billed as such. Runs with a non-none fairness are labeled semantics tool-specific when no wired tool supports it natively.
     Run:
       type: object
       description: >-
@@ -907,7 +1627,7 @@ components:
         command, tool version, timeout, input hash and measured cost.
         Runs are never deleted - no API or code path removes one.
         output is the normalized engine output served verbatim.
-      required: [run_id, status, family, kind, formula, model_id, input_hash, timeout_seconds, tool_version, command, measured_seconds, output, error, engine_qualified, triage, non_vacuity]
+      required: [run_id, status, family, kind, formula, model_id, input_hash, timeout_seconds, tool_version, command, measured_seconds, output, error, engine_qualified, triage, non_vacuity, session_id, fairness, semantics]
       properties:
         run_id:
           type: string
@@ -965,6 +1685,17 @@ components:
         non_vacuity:
           nullable: true
           $ref: "#/components/schemas/NonVacuityGuard"
+        session_id:
+          type: string
+          nullable: true
+          description: The session this run is charged to (spec §12.4, issue #33).
+        fairness:
+          enum: [none, weak, strong]
+          description: The fairness parameter of the run (spec §14.7, issue #35).
+        semantics:
+          type: string
+          nullable: true
+          description: tool-specific when the run carries a fairness parameter no wired tool supports natively (spec §17.5); such runs are never inter-tool comparable.
     QuestionTriage:
       type: object
       description: >-

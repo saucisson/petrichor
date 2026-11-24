@@ -89,6 +89,33 @@ class TestPtImport:
         assert model.content_hash == compute_content_hash(model=model)
         assert model.color_domain is None
 
+    def test_standard_ptnet_type_uri_imports_as_pt(self) -> None:
+        """The standard PNML 2009 P/T type URI (used by MCC benchmark files) is P/T."""
+        pnml = SAMPLE_PNML.replace(
+            'type="http://www.pnml.org/version-2009/grammar/pnml"',
+            'type="http://www.pnml.org/version-2009/grammar/ptnet"',
+        )
+        model = import_pnml(text=pnml, clock=fixed_clock)
+        assert model.formalism == "pt"
+
+    def test_page_wrapped_net_imports_identically(self) -> None:
+        """MCC benchmark files wrap the net content in a <page>: same model, same hash."""
+        net_open_end = SAMPLE_PNML.index(">", SAMPLE_PNML.index("<net")) + 1
+        net_close = SAMPLE_PNML.rindex("</net>")
+        wrapped = (
+            SAMPLE_PNML[:net_open_end]
+            + '<page id="page0">\n'
+            + SAMPLE_PNML[net_open_end:net_close]
+            + "</page>\n"
+            + SAMPLE_PNML[net_close:]
+        )
+        flat = import_pnml(text=SAMPLE_PNML, clock=fixed_clock)
+        paged = import_pnml(text=wrapped, clock=fixed_clock)
+        assert paged.content_hash == flat.content_hash
+        assert len(paged.places) == len(flat.places)
+        assert len(paged.transitions) == len(flat.transitions)
+        assert len(paged.arcs) == len(flat.arcs)
+
     def test_elements_keep_names_marking_layout_and_weights(self) -> None:
         model = import_pnml(text=SAMPLE_PNML, clock=fixed_clock)
         places = {place.name: place for place in model.places}

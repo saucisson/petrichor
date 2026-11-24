@@ -33,7 +33,9 @@ import threading
 import time
 from collections.abc import Callable, Iterable
 from http import HTTPStatus
-from typing import TYPE_CHECKING, TypeGuard
+from pathlib import Path
+from typing import TYPE_CHECKING, Literal, TypeGuard
+from urllib.parse import unquote
 from wsgiref.types import StartResponse, WSGIEnvironment
 
 import structlog
@@ -41,7 +43,9 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from petrichor.arbitration import ArbitrationDecisionKind, ArbitrationStore
 from petrichor.checks import (
+    FAIRNESS_CAPABLE_TOOLS,
     FAMILY_PATTERNS,
+    TOOL_SPECIFIC_SEMANTICS,
     CheckCompleted,
     CheckFamilyName,
     CheckOutcome,
@@ -50,10 +54,20 @@ from petrichor.checks import (
     CheckRunner,
     QualificationLookup,
     RunId,
+    SessionId,
+    StaticFirstProber,
+    ToolVersion,
     run_key,
 )
-from petrichor.elicitation import QuestionId
+from petrichor.contract import arbitrated_profile, build_contract, render_markdown
+from petrichor.elicitation import (
+    QuestionId,
+    instantiate_questions,
+    load_catalog,
+    questions_converge,
+)
 from petrichor.insitu import build_net_overlay
+from petrichor.llm.provider import FormulaText, LLMDegradationError
 from petrichor.petri_canonical import (
     Arc,
     CanonicalModel,
@@ -70,8 +84,8 @@ from petrichor.petri_canonical import (
 )
 from petrichor.pnml_import import PnmlImportError, import_pnml
 from petrichor.profile import ArbitrationDecision, ProfileArbitrator
-from petrichor.run_store import BudgetRefused, RunAdmission, RunStore
-from petrichor.session_store import SessionId, SessionStore, StoredSession
+from petrichor.run_store import AdmissionResult, BudgetRefused, RunAdmission, RunStore
+from petrichor.session_store import SessionStore, StoredSession
 from petrichor.state_graph import StateGraphExplorer, StateGraphUnsupportedError
 from petrichor.triage import (
     STATIC_COST_SECONDS,
@@ -82,10 +96,23 @@ from petrichor.triage import (
     StaticUndecidableError,
     triage_question,
 )
+from petrichor.witness import (
+    WitnessError,
+    WitnessId,
+    WitnessStore,
+    narrate_steps,
+    normalize_witness_output,
+    witness_record_of,
+)
 
 if TYPE_CHECKING:
     from petrichor.api.settings import ApiSettings
+    from petrichor.convergence import ConvergenceStore
+    from petrichor.elicitation import GeneratedQuestion
+    from petrichor.llm.provider import LLMProvider
     from petrichor.model_store import ModelStore
+    from petrichor.profile import ProfileState
+    from petrichor.question_edits import FormulaEditStore
 
 logger = structlog.get_logger(__name__)
 
@@ -95,24 +122,77 @@ MODELS_PATH = "/v1/models"
 MODEL_PATH_PREFIX = "/v1/models/"
 CHECKS_PATH_PREFIX = "/v1/checks/"
 RUNS_PATH_PREFIX = "/v1/runs/"
+WITNESS_SUFFIX = "/witness"
+WITNESSES_PATH = "/v1/witnesses"
+WITNESSES_PATH_PREFIX = "/v1/witnesses/"
+LLM_USAGE_PATH = "/v1/llm/usage"
 QUALIFICATION_PATH = "/v1/qualification"
 SESSIONS_PATH = "/v1/sessions"
 SESSION_PATH_PREFIX = "/v1/sessions/"
 SESSION_JOURNAL_SUFFIX = "/journal"
 ARBITRATION_REQUESTS_SUFFIX = "/arbitration-requests"
 ARBITRATIONS_SUFFIX = "/arbitrations"
+CONVERGENCES_SUFFIX = "/convergences"
 SESSION_PROFILE_SUFFIX = "/profile"
 SESSION_ARBITRATE_SUFFIX = "/profile/arbitrate"
 SESSION_COVERAGE_SUFFIX = "/coverage"
 SESSION_STATE_GRAPH_SUFFIX = "/state-graph"
 SESSION_ANNOTATIONS_SUFFIX = "/annotations"
 SESSION_NET_OVERLAY_SUFFIX = "/net-overlay"
+SESSION_CONTRACT_SUFFIX = "/contract"
+SESSION_BUDGET_SUFFIX = "/budget"
+QUESTIONS_SEGMENT = "/questions/"
+FORMULA_SUFFIX = "/formula"
+READING_SUFFIX = "/reading"
 DEFAULT_SESSIONS_PAGE_LIMIT = 100
 MAX_SESSIONS_PAGE_LIMIT = 500
+DEFAULT_CONVERGENCES_PAGE_LIMIT = 100
+MAX_CONVERGENCES_PAGE_LIMIT = 500
+
+
+def _parse_pagination(
+    *, environ: WSGIEnvironment, default_limit: int, max_limit: int
+) -> tuple[int, int] | ProblemPayload:
+    """Parse the limit/offset query parameters, or a problem payload (ADR-0016)."""
+    query = environ.get("QUERY_STRING", "")
+    params: dict[str, str] = {}
+    for pair in query.split("&"):
+        if "=" in pair:
+            key, value = pair.split("=", maxsplit=1)
+            params[key] = value
+    try:
+        limit = min(int(params.get("limit", str(default_limit))), max_limit)
+        offset = max(0, int(params.get("offset", "0")))
+    except ValueError:
+        return _problem(
+            status=HTTPStatus.BAD_REQUEST,
+            reason="invalid_pagination",
+            detail="The limit and offset query parameters must be integers.",
+        )
+    return limit, offset
+
+
 CONTENT_TYPE_PNML = "application/pnml+xml"
 CONTENT_TYPE_JSON = "application/json"
 CONTENT_TYPE_PETRI_JSON = "application/petri+json; version=1.0"
 CONTENT_TYPE_PROBLEM_JSON = "application/problem+json"
+CONTENT_TYPE_CONTRACT_JSON = "application/contract+json; version=1.0"
+CONTENT_TYPE_MARKDOWN = "text/markdown; charset=utf-8"
+UI_PATH = "/ui/"
+UI_INDEX = "index.html"
+CONTENT_TYPE_HTML = "text/html; charset=utf-8"
+CONTENT_TYPE_JAVASCRIPT = "text/javascript; charset=utf-8"
+CONTENT_TYPE_CSS = "text/css; charset=utf-8"
+UI_STATIC_DIRECTORY = Path(__file__).parent / "static"
+# ADR-0101: the UI v2 is a built SPA (Vite) - assets are hashed files served
+# by suffix, not a filename whitelist; extension-less paths are client-side
+# routes and get the index.html shell.
+UI_CONTENT_TYPES_BY_SUFFIX = {
+    ".html": CONTENT_TYPE_HTML,
+    ".js": CONTENT_TYPE_JAVASCRIPT,
+    ".css": CONTENT_TYPE_CSS,
+    ".svg": "image/svg+xml",
+}
 HEADER_API_KEY = "X-API-Key"
 PROBLEM_TYPE_BASE_URL = "https://petrichor.dev/problems/"
 WATCHDOG_GRACE_SECONDS = 5
@@ -145,6 +225,44 @@ def _accepts_petri_json(*, accept_header: str | None) -> bool:
         if media in ACCEPTABLE_MEDIA_TYPES:
             return True
     return False
+
+
+CONTRACT_JSON_MEDIA = "application/contract+json"
+CONTRACT_MARKDOWN_MEDIA = "text/markdown"
+CONTRACT_NEGOTIABLE_MEDIA = frozenset({CONTRACT_MARKDOWN_MEDIA, CONTRACT_JSON_MEDIA, "*/*"})
+
+
+def _negotiate_contract_media(*, accept_header: str | None) -> Literal["markdown", "json"] | None:
+    """Negotiate the contract representation by q-value, or None when refused (406).
+
+    Standard content negotiation (spec §5): the acceptable entry with the
+    highest q-value wins, ties keep the client's order, and an entry with
+    q=0 is refused - so ``text/markdown;q=0, application/contract+json``
+    negotiates to the JSON document.
+    """
+    if accept_header is None or not accept_header.strip():
+        return "json"
+    best_media: str | None = None
+    best_quality = 0.0
+    for entry in accept_header.split(","):
+        parts = entry.split(";")
+        media = parts[0].strip().lower()
+        if media not in CONTRACT_NEGOTIABLE_MEDIA:
+            continue
+        quality = 1.0
+        for parameter in parts[1:]:
+            key, _, value = parameter.strip().partition("=")
+            if key == "q":
+                try:
+                    quality = float(value)
+                except ValueError:
+                    quality = 0.0
+        if quality > best_quality:
+            best_quality = quality
+            best_media = media
+    if best_media is None or best_quality <= 0:
+        return None
+    return "markdown" if best_media == CONTRACT_MARKDOWN_MEDIA else "json"
 
 
 class ProblemPayload(BaseModel):
@@ -401,12 +519,15 @@ def _execute_run(
     timeout_seconds: int,
     started_monotonic: float,
     qualification: QualificationLookup | None,
+    witness_store: WitnessStore | None = None,
 ) -> None:
     """Run one check on a background thread and record its explicit outcome.
 
     The cost of the run is the wall-clock tool time measured around the
     runner call (spec §12.4) - never an estimate - and is archived with the
-    run together with the command the runner reports (spec §12.5).
+    run together with the command the runner reports (spec §12.5). A witness
+    in the output is normalized to §16, stored once and referenced by the
+    run (spec §16, issue #32).
     """
     logger.debug("check_run_started", run_id=run_id, family=question.family, kind=question.kind)
     try:
@@ -424,6 +545,24 @@ def _execute_run(
         return
     measured_seconds = time.monotonic() - started_monotonic
     if isinstance(outcome, CheckCompleted):
+        output = outcome.output
+        fairness = question.parameters.get("fairness", "none")
+        if fairness != "none":
+            # No wired tool supports fairness natively (spec §17.5, P29
+            # follow-up): the run is labeled tool-specific and the verdict
+            # is explicitly NOT verifiable under fairness - never masked.
+            output = {
+                **output,
+                "semantics": TOOL_SPECIFIC_SEMANTICS,
+                "fairness": fairness,
+                "fairness_supported": runner.tool_version in FAIRNESS_CAPABLE_TOOLS,
+            }
+            logger.warning(
+                "check_run_fairness_tool_specific",
+                run_id=run_id,
+                fairness=fairness,
+                tool_version=runner.tool_version,
+            )
         engine_qualified = (
             qualification.is_qualified(family=question.family)
             if qualification is not None
@@ -435,9 +574,20 @@ def _execute_run(
             family=question.family,
             engine_qualified=engine_qualified,
         )
+        if witness_store is not None:
+            # Stored and referenced BEFORE the terminal state: a poller that
+            # sees "done" must already see the witness (spec §16, issue #32).
+            try:
+                document = normalize_witness_output(run_id=run_id, output=output)
+            except WitnessError as error:
+                logger.error("check_run_witness_invalid", run_id=run_id, error=str(error))
+                document = None
+            if document is not None:
+                witness_store.store(record=witness_record_of(document=document))
+                witness_store.add_reference(witness_id=document.witness_id, run_id=run_id)
         run_store.mark_done(
             run_id=run_id,
-            output=outcome.output,
+            output=output,
             command=outcome.command,
             measured_seconds=measured_seconds,
             engine_qualified=engine_qualified,
@@ -528,6 +678,172 @@ def _triage_and_resolve_static(
     return triage, guard, static_output
 
 
+def _static_first_probe(
+    *,
+    static_first_prober: StaticFirstProber,
+    model: CanonicalModel,
+    family: CheckFamilyName,
+    request: CheckRequest,
+    question: CheckQuestion,
+    triage: QuestionTriage,
+    timeout_seconds: int,
+) -> tuple[QuestionTriage, dict[str, JsonValue] | None, CheckQuestion, ToolVersion]:
+    """Probe a degraded question with the reducer before any MC run (spec §18.4, issue #25).
+
+    A decided probe is a static proof - no MC run is emitted, the triage
+    becomes an explicit ``statique`` proof and the output is labeled
+    ``technique: static``. An undecided probe yields the reduced net and the
+    projected formula: the returned execution question targets the reduced
+    model while the caller keeps the original question for the idempotence
+    key. Both paths use the same clause states as the §14 triage - a proof or
+    an explicit degradation, never a home-made verdict.
+    """
+    probe = static_first_prober.probe(
+        model=model, question=question, timeout_seconds=timeout_seconds
+    )
+    logger.debug(
+        "api_check_static_first_probed",
+        family=family,
+        kind=request.kind,
+        verdict=probe.verdict,
+        tool_version=probe.tool_version,
+    )
+    if probe.verdict != "unknown" and probe.output is not None:
+        static_output = {**probe.output, "technique": "static"}
+        proved_triage = QuestionTriage(
+            kind="statique",
+            justification=(
+                f"Preuve statique d'abord ({probe.tool_version}) — aucun run MC"
+                " (spec §18.4, issue #25)."
+            ),
+        )
+        return proved_triage, static_output, question, probe.tool_version
+    if probe.reduced_model is not None:
+        reduced_question = CheckQuestion(
+            family=family,
+            kind=request.kind,
+            formula=probe.projected_formula or question.formula,
+            parameters={**question.parameters, "model": probe.reduced_model},
+        )
+        logger.debug(
+            "api_check_static_first_reduced",
+            family=family,
+            kind=request.kind,
+            formula=reduced_question.formula,
+        )
+        return triage, None, reduced_question, STATIC_TOOL_VERSION
+    return triage, None, question, STATIC_TOOL_VERSION
+
+
+def _resolve_tool_version(
+    *,
+    runner: CheckRunner | None,
+    static_output: dict[str, JsonValue] | None,
+    static_tool_version: ToolVersion,
+) -> ToolVersion | ProblemPayload:
+    """The tool version of the run: the static engine when it proved, else the runner's."""
+    if static_output is not None:
+        return static_tool_version
+    if runner is None:
+        return _problem(
+            status=HTTPStatus.SERVICE_UNAVAILABLE,
+            reason="runner_not_configured",
+            detail="No check runner is wired into this server yet (real engines: P09+).",
+        )
+    return runner.tool_version
+
+
+def _admit_check_run(  # noqa: PLR0913 - one keyword per routed dependency (ADR-0003)
+    *,
+    request: CheckRequest,
+    run_store: RunStore,
+    session_store: SessionStore | None,
+    settings: ApiSettings,
+    family: CheckFamilyName,
+    question: CheckQuestion,
+    timeout_seconds: int,
+    tool_version: ToolVersion,
+    triage: QuestionTriage,
+    guard: NonVacuityGuard | None,
+    static_output: dict[str, JsonValue] | None,
+) -> tuple[SessionId | None, AdmissionResult] | ProblemPayload:
+    """Resolve the session budget and admit the run atomically (spec §12.4, issue #33).
+
+    Returns the session id with the admission result, or a problem payload
+    (unknown session, or the explicit 429 budget refusal).
+    """
+    session_budget = _resolve_session_budget(
+        request=request, session_store=session_store, settings=settings
+    )
+    if isinstance(session_budget, ProblemPayload):
+        return session_budget
+    session_id, session_budget_seconds = session_budget
+    admission = RunAdmission(
+        key=run_key(model_id=request.model_id, question=question),
+        family=family,
+        kind=request.kind,
+        formula=request.formula,
+        model_id=request.model_id,
+        timeout_seconds=timeout_seconds,
+        tool_version=tool_version,
+        session_budget_seconds=session_budget_seconds,
+        session_id=session_id,
+        fairness=request.fairness,
+        triage=triage,
+        non_vacuity=guard,
+    )
+    result = run_store.admit(
+        admission=admission,
+        reservation_seconds=(
+            STATIC_COST_SECONDS
+            if static_output is not None
+            else timeout_seconds + WATCHDOG_GRACE_SECONDS
+        ),
+    )
+    return session_id, result
+
+
+def _attach_run_to_session(
+    *,
+    session_store: SessionStore | None,
+    session_id: SessionId | None,
+    run_id: RunId,
+    created: bool,
+) -> None:
+    """Attach a newly created run to its session (spec §12.4, issue #33)."""
+    if created and session_id is not None and session_store is not None:
+        session_store.append_run(session_id=session_id, run_id=run_id)
+
+
+def _resolve_session_budget(
+    *,
+    request: CheckRequest,
+    session_store: SessionStore | None,
+    settings: ApiSettings,
+) -> tuple[SessionId | None, float] | ProblemPayload:
+    """The (session id, budget cap) a check is charged to (spec §12.4, issue #33).
+
+    Without ``session_id`` the run goes to the global bucket with the server
+    cap; with one, the session must exist and its own cap applies.
+    """
+    if request.session_id is None:
+        return None, settings.session_budget_seconds
+    if session_store is None:
+        return _problem(
+            status=HTTPStatus.SERVICE_UNAVAILABLE,
+            reason="sessions_not_configured",
+            detail="No session store is wired into this server.",
+        )
+    session = session_store.get(session_id=request.session_id)
+    if session is None:
+        return _problem(
+            status=HTTPStatus.NOT_FOUND,
+            reason="session_not_found",
+            detail=f"No session with id {request.session_id!r}.",
+        )
+    return session.session_id, session.budget_seconds
+
+
 def _post_check(  # noqa: PLR0913 - one keyword per routed dependency (ADR-0003)
     *,
     environ: WSGIEnvironment,
@@ -539,6 +855,9 @@ def _post_check(  # noqa: PLR0913 - one keyword per routed dependency (ADR-0003)
     settings: ApiSettings,
     qualification: QualificationLookup | None,
     static_resolver: StaticResolver | None,
+    static_first_prober: StaticFirstProber | None,
+    witness_store: WitnessStore | None = None,
+    session_store: SessionStore | None = None,
 ) -> Iterable[bytes]:
     """Accept a check question: 202 + Location, idempotent by (model, question) hash.
 
@@ -591,6 +910,9 @@ def _post_check(  # noqa: PLR0913 - one keyword per routed dependency (ADR-0003)
         parameters={
             **request.parameters,
             "model": json.loads(canonical_json(payload=semantic_projection(model=model))),
+            # The fairness parameter is part of the question: each parameter
+            # set is a distinct run, billed as such (spec §14.7, issue #35).
+            "fairness": request.fairness,
         },
     )
     triage, guard, static_output = _triage_and_resolve_static(
@@ -600,39 +922,52 @@ def _post_check(  # noqa: PLR0913 - one keyword per routed dependency (ADR-0003)
         request=request,
         question=question,
     )
-    tool_version = STATIC_TOOL_VERSION
-    if static_output is None:
-        if runner is None:
-            return _problem_response(
-                start_response=start_response,
-                environ=environ,
-                payload=_problem(
-                    status=HTTPStatus.SERVICE_UNAVAILABLE,
-                    reason="runner_not_configured",
-                    detail="No check runner is wired into this server yet (real engines: P09+).",
-                ),
-            )
-        tool_version = runner.tool_version
-    admission = RunAdmission(
-        key=run_key(model_id=request.model_id, question=question),
+    # Static-first (opt-in, spec §18.4, issue #25): a question the embedded
+    # engine could not decide (dégradé, typically a net beyond its capacity)
+    # is probed by the reducer before any exhaustive MC run. The idempotence
+    # key always covers the original question.
+    execution_question = question
+    static_tool_version = STATIC_TOOL_VERSION
+    if (
+        static_output is None
+        and triage.kind == "dégradé"
+        and settings.static_first
+        and static_first_prober is not None
+    ):
+        triage, static_output, execution_question, static_tool_version = _static_first_probe(
+            static_first_prober=static_first_prober,
+            model=model,
+            family=family,
+            request=request,
+            question=question,
+            triage=triage,
+            timeout_seconds=timeout_seconds,
+        )
+    tool_version = _resolve_tool_version(
+        runner=runner, static_output=static_output, static_tool_version=static_tool_version
+    )
+    if isinstance(tool_version, ProblemPayload):
+        return _problem_response(
+            start_response=start_response, environ=environ, payload=tool_version
+        )
+    admission_result = _admit_check_run(
+        request=request,
+        run_store=run_store,
+        session_store=session_store,
+        settings=settings,
         family=family,
-        kind=request.kind,
-        formula=request.formula,
-        model_id=request.model_id,
+        question=question,
         timeout_seconds=timeout_seconds,
         tool_version=tool_version,
-        session_budget_seconds=settings.session_budget_seconds,
         triage=triage,
-        non_vacuity=guard,
+        guard=guard,
+        static_output=static_output,
     )
-    result = run_store.admit(
-        admission=admission,
-        reservation_seconds=(
-            STATIC_COST_SECONDS
-            if static_output is not None
-            else timeout_seconds + WATCHDOG_GRACE_SECONDS
-        ),
-    )
+    if isinstance(admission_result, ProblemPayload):
+        return _problem_response(
+            start_response=start_response, environ=environ, payload=admission_result
+        )
+    session_id, result = admission_result
     if isinstance(result, BudgetRefused):
         logger.warning(
             "api_check_budget_refused",
@@ -665,6 +1000,9 @@ def _post_check(  # noqa: PLR0913 - one keyword per routed dependency (ADR-0003)
             ),
         )
     run, created = result.run, result.created
+    _attach_run_to_session(
+        session_store=session_store, session_id=session_id, run_id=run.run_id, created=created
+    )
     if created:
         if static_output is not None:
             run_store.mark_done(
@@ -688,10 +1026,11 @@ def _post_check(  # noqa: PLR0913 - one keyword per routed dependency (ADR-0003)
                     "runner": runner,
                     "run_store": run_store,
                     "run_id": run.run_id,
-                    "question": question,
+                    "question": execution_question,
                     "timeout_seconds": timeout_seconds,
                     "started_monotonic": started_monotonic,
                     "qualification": qualification,
+                    "witness_store": witness_store,
                 },
                 daemon=True,
             )
@@ -748,6 +1087,130 @@ def _get_run(
         )
     logger.debug("api_run_read", run_id=run.run_id, status=run.status)
     body = json.dumps(run.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.OK,
+        content_type=CONTENT_TYPE_JSON,
+        body=body.encode("utf-8"),
+    )
+
+
+def _get_run_witness(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    run_store: RunStore,
+    store: ModelStore,
+    witness_store: WitnessStore,
+    llm_provider: LLMProvider | None,
+    run_id: str,
+) -> Iterable[bytes]:
+    """The §16 witness document of one run, with its per-step LLM narrations (issue #32).
+
+    The structure comes from the tool (markings, firings, cyclicity,
+    back-edge); the narrations are LLM propositions labeled
+    ``provenance: llm``, never verdicts (spec §16, §19.4).
+    """
+    run = run_store.get(run_id=RunId(run_id))
+    if run is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="run_not_found",
+                detail=f"No run with id {run_id!r}.",
+            ),
+        )
+    if run.output is None or run.output.get("witness") is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="witness_not_found",
+                detail=f"Run {run_id!r} carries no witness (status {run.status!r}).",
+            ),
+        )
+    try:
+        document = normalize_witness_output(run_id=run.run_id, output=run.output)
+    except WitnessError as error:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                reason="witness_invalid",
+                detail=str(error),
+            ),
+        )
+    if document is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="witness_not_found",
+                detail=f"Run {run_id!r} carries no normalizable witness.",
+            ),
+        )
+    if llm_provider is not None:
+        model = store.get(model_id=run.model_id)
+        if model is not None:
+            document = document.model_copy(
+                update={
+                    "narrations": narrate_steps(
+                        provider=llm_provider,
+                        model_hash=model.content_hash,
+                        steps=document.steps,
+                    )
+                }
+            )
+    logger.debug(
+        "api_run_witness_read",
+        run_id=run.run_id,
+        witness_id=document.witness_id,
+        steps=len(document.steps),
+        narrations=len(document.narrations),
+    )
+    body = json.dumps(document.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.OK,
+        content_type=CONTENT_TYPE_JSON,
+        body=body.encode("utf-8"),
+    )
+
+
+def _get_witness(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    witness_store: WitnessStore,
+    witness_id: str,
+) -> Iterable[bytes]:
+    """One stored witness with its referencing runs (stored once, referenced n times, §16)."""
+    record = witness_store.get(witness_id=WitnessId(witness_id))
+    if record is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="witness_not_found",
+                detail=f"No witness with id {witness_id!r}.",
+            ),
+        )
+    references = witness_store.references(witness_id=record.witness_id)
+    logger.debug("api_witness_read", witness_id=record.witness_id, references=len(references))
+    body = json.dumps(
+        {
+            "record": record.model_dump(mode="json"),
+            "referenced_by": [str(run_id) for run_id in references],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     return _respond(
         start_response=start_response,
         status=HTTPStatus.OK,
@@ -826,6 +1289,45 @@ def _dispatch_models(
     return None
 
 
+def _get_llm_usage(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    llm_provider: LLMProvider | None,
+) -> Iterable[bytes]:
+    """The accumulated LLM cost, displayed apart from the tool-time budget (spec §12.4, issue #36).
+
+    The MC budget counts only tool seconds; the LLM cost (tokens) is exposed
+    here, separately, never mixed into it.
+    """
+    if llm_provider is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+                reason="llm_not_configured",
+                detail="No LLM provider is wired into this server.",
+            ),
+        )
+    totals = llm_provider.usage_totals()
+    logger.debug("api_llm_usage_read", provider=totals.get("provider"), calls=totals.get("calls"))
+    body = json.dumps(
+        {
+            "llm": totals,
+            "budget_note": "LLM cost is NOT part of the MC tool-time budget (spec §12.4).",
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.OK,
+        content_type=CONTENT_TYPE_JSON,
+        body=body.encode("utf-8"),
+    )
+
+
 def _dispatch_qualification(
     *,
     environ: WSGIEnvironment,
@@ -852,7 +1354,7 @@ def _dispatch_qualification(
     )
 
 
-def _dispatch_checks_and_runs(  # noqa: PLR0913 - one keyword per routed dependency (ADR-0003)
+def _dispatch_checks_and_runs(  # noqa: PLR0913, PLR0911 - one keyword per routed dependency (ADR-0003)
     *,
     environ: WSGIEnvironment,
     start_response: StartResponse,
@@ -864,8 +1366,12 @@ def _dispatch_checks_and_runs(  # noqa: PLR0913 - one keyword per routed depende
     runner: CheckRunner | None,
     qualification: QualificationLookup | None,
     static_resolver: StaticResolver | None,
+    static_first_prober: StaticFirstProber | None,
+    witness_store: WitnessStore | None = None,
+    llm_provider: LLMProvider | None = None,
+    session_store: SessionStore | None = None,
 ) -> Iterable[bytes] | None:
-    """Route /v1/checks/{family} and /v1/runs/{run_id}, or return None."""
+    """Route /v1/checks/{family}, /v1/runs/{run_id} and the witnesses, or return None."""
     if path.startswith(CHECKS_PATH_PREFIX):
         family = path.removeprefix(CHECKS_PATH_PREFIX)
         if method == "POST" and "/" not in family and _is_check_family(family):
@@ -877,8 +1383,11 @@ def _dispatch_checks_and_runs(  # noqa: PLR0913 - one keyword per routed depende
                 runner=runner,
                 family=family,
                 settings=settings,
+                session_store=session_store,
+                witness_store=witness_store,
                 qualification=qualification,
                 static_resolver=static_resolver,
+                static_first_prober=static_first_prober,
             )
         return _problem_response(
             start_response=start_response,
@@ -891,6 +1400,16 @@ def _dispatch_checks_and_runs(  # noqa: PLR0913 - one keyword per routed depende
         )
     if path.startswith(RUNS_PATH_PREFIX):
         run_id = path.removeprefix(RUNS_PATH_PREFIX)
+        if method == "GET" and run_id.endswith(WITNESS_SUFFIX) and witness_store is not None:
+            return _get_run_witness(
+                environ=environ,
+                start_response=start_response,
+                run_store=run_store,
+                store=store,
+                witness_store=witness_store,
+                llm_provider=llm_provider,
+                run_id=run_id[: -len(WITNESS_SUFFIX)],
+            )
         if method == "GET" and run_id and "/" not in run_id:
             return _get_run(
                 environ=environ,
@@ -907,7 +1426,73 @@ def _dispatch_checks_and_runs(  # noqa: PLR0913 - one keyword per routed depende
                 detail=f"No resource at {path}.",
             ),
         )
+    if path.startswith(WITNESSES_PATH_PREFIX) and witness_store is not None:
+        witness_id = path.removeprefix(WITNESSES_PATH_PREFIX)
+        if method == "GET" and witness_id and "/" not in witness_id:
+            return _get_witness(
+                environ=environ,
+                start_response=start_response,
+                witness_store=witness_store,
+                witness_id=witness_id,
+            )
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.METHOD_NOT_ALLOWED if method != "GET" else HTTPStatus.NOT_FOUND,
+                reason="method_not_allowed" if method != "GET" else "witness_not_found",
+                detail=f"No resource at {path}.",
+            ),
+        )
     return None
+
+
+def _parse_session_request(
+    *, environ: WSGIEnvironment, settings: ApiSettings
+) -> tuple[ModelId, float] | ProblemPayload:
+    """Parse the POST /v1/sessions body: model id plus optional budget cap (issue #33)."""
+    content_type = _media_type(header_value=environ.get("CONTENT_TYPE"))
+    if content_type != CONTENT_TYPE_JSON:
+        return _problem(
+            status=HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+            reason="unsupported_media_type",
+            detail=f"POST {SESSIONS_PATH} expects Content-Type {CONTENT_TYPE_JSON}.",
+        )
+    try:
+        length = int(environ.get("CONTENT_LENGTH", "") or 0)
+    except ValueError:
+        return _problem(
+            status=HTTPStatus.BAD_REQUEST,
+            reason="invalid_content_length",
+            detail="The Content-Length header is not an integer.",
+        )
+    body = environ["wsgi.input"].read(length)
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        return _problem(
+            status=HTTPStatus.UNPROCESSABLE_ENTITY,
+            reason="invalid_json",
+            detail=f"The body is not valid JSON: {error}",
+        )
+    if not isinstance(payload, dict) or not isinstance(payload.get("model_id"), str):
+        return _problem(
+            status=HTTPStatus.UNPROCESSABLE_ENTITY,
+            reason="invalid_session_request",
+            detail='The body must be a JSON object with a "model_id" string field.',
+        )
+    budget_seconds = payload.get("budget_seconds", settings.session_budget_seconds)
+    if (
+        not isinstance(budget_seconds, (int, float))
+        or isinstance(budget_seconds, bool)
+        or budget_seconds <= 0
+    ):
+        return _problem(
+            status=HTTPStatus.UNPROCESSABLE_ENTITY,
+            reason="invalid_session_request",
+            detail='The optional "budget_seconds" field must be a positive number.',
+        )
+    return ModelId(payload["model_id"]), float(budget_seconds)
 
 
 def _post_session(
@@ -916,55 +1501,17 @@ def _post_session(
     start_response: StartResponse,
     store: ModelStore,
     session_store: SessionStore,
+    settings: ApiSettings,
 ) -> Iterable[bytes]:
-    """Create a new session for a model: 201 + Location (spec §4)."""
-    content_type = _media_type(header_value=environ.get("CONTENT_TYPE"))
-    if content_type != CONTENT_TYPE_JSON:
-        return _problem_response(
-            start_response=start_response,
-            environ=environ,
-            payload=_problem(
-                status=HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
-                reason="unsupported_media_type",
-                detail=f"POST {SESSIONS_PATH} expects Content-Type {CONTENT_TYPE_JSON}.",
-            ),
-        )
-    try:
-        length = int(environ.get("CONTENT_LENGTH", "") or 0)
-    except ValueError:
-        return _problem_response(
-            start_response=start_response,
-            environ=environ,
-            payload=_problem(
-                status=HTTPStatus.BAD_REQUEST,
-                reason="invalid_content_length",
-                detail="The Content-Length header is not an integer.",
-            ),
-        )
-    body = environ["wsgi.input"].read(length)
-    try:
-        payload = json.loads(body.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        return _problem_response(
-            start_response=start_response,
-            environ=environ,
-            payload=_problem(
-                status=HTTPStatus.UNPROCESSABLE_ENTITY,
-                reason="invalid_json",
-                detail=f"The body is not valid JSON: {error}",
-            ),
-        )
-    if not isinstance(payload, dict) or not isinstance(payload.get("model_id"), str):
-        return _problem_response(
-            start_response=start_response,
-            environ=environ,
-            payload=_problem(
-                status=HTTPStatus.UNPROCESSABLE_ENTITY,
-                reason="invalid_session_request",
-                detail='The body must be a JSON object with a "model_id" string field.',
-            ),
-        )
-    model_id = ModelId(payload["model_id"])
+    """Create a new session for a model: 201 + Location (spec §4, §12.4 issue #33).
+
+    The optional ``budget_seconds`` body field sets the session's own MC
+    budget cap; it defaults to the server setting.
+    """
+    parsed = _parse_session_request(environ=environ, settings=settings)
+    if isinstance(parsed, ProblemPayload):
+        return _problem_response(start_response=start_response, environ=environ, payload=parsed)
+    model_id, budget_seconds = parsed
     if store.get(model_id=model_id) is None:
         return _problem_response(
             start_response=start_response,
@@ -975,7 +1522,7 @@ def _post_session(
                 detail=f"No model with id {model_id!r}.",
             ),
         )
-    session = session_store.create(model_id=model_id)
+    session = session_store.create(model_id=model_id, budget_seconds=float(budget_seconds))
     logger.debug("api_session_created", session_id=session.session_id, model_id=str(model_id))
     body_out = json.dumps(session.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
     return _respond(
@@ -994,28 +1541,14 @@ def _get_sessions(
     session_store: SessionStore,
 ) -> Iterable[bytes]:
     """List sessions with limit/offset pagination, in creation order (spec §4, ADR-0016)."""
-    query = environ.get("QUERY_STRING", "")
-    params: dict[str, str] = {}
-    for pair in query.split("&"):
-        if "=" in pair:
-            key, value = pair.split("=", maxsplit=1)
-            params[key] = value
-    try:
-        limit = min(
-            int(params.get("limit", str(DEFAULT_SESSIONS_PAGE_LIMIT))),
-            MAX_SESSIONS_PAGE_LIMIT,
-        )
-        offset = max(0, int(params.get("offset", "0")))
-    except ValueError:
-        return _problem_response(
-            start_response=start_response,
-            environ=environ,
-            payload=_problem(
-                status=HTTPStatus.BAD_REQUEST,
-                reason="invalid_pagination",
-                detail="The limit and offset query parameters must be integers.",
-            ),
-        )
+    pagination = _parse_pagination(
+        environ=environ,
+        default_limit=DEFAULT_SESSIONS_PAGE_LIMIT,
+        max_limit=MAX_SESSIONS_PAGE_LIMIT,
+    )
+    if isinstance(pagination, ProblemPayload):
+        return _problem_response(start_response=start_response, environ=environ, payload=pagination)
+    limit, offset = pagination
     all_sessions = session_store.list_all()
     sessions = all_sessions[offset : offset + limit]
     logger.debug(
@@ -1095,6 +1628,300 @@ def _get_session_journal(
     logger.debug("api_session_journal_exported", session_id=session_id, entries=len(entries))
     body = json.dumps(
         [e.model_dump(mode="json") for e in entries], sort_keys=True, separators=(",", ":")
+    )
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.OK,
+        content_type=CONTENT_TYPE_JSON,
+        body=body.encode("utf-8"),
+    )
+
+
+class FormulaEditBody(BaseModel):
+    """The body of ``POST /v1/sessions/{sid}/questions/{qid}/formula`` (spec §9, issue #37)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    formula: str = Field(min_length=1)
+
+
+def _post_question_formula(  # noqa: PLR0913 - one keyword per routed dependency (ADR-0003)
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    session_store: SessionStore,
+    store: ModelStore,
+    arbitrator: ProfileArbitrator | None,
+    edit_store: FormulaEditStore,
+    llm_provider: LLMProvider | None,
+    session_id: str,
+    question_id: str,
+) -> Iterable[bytes]:
+    """Edit the formula of one question card: journaled, re-read, re-verifiable (§9, #37).
+
+    The edit is append-only (old and new formula both kept in the journal -
+    the witness of the old formula is never lost), the new formula gets its
+    inverse reading (formule → langage, LLM proposition ``provenance: llm``)
+    and is re-verified through the standard check chain.
+    """
+    context = _convergence_context(
+        session_store=session_store, store=store, arbitrator=arbitrator, session_id=session_id
+    )
+    if isinstance(context, ProblemPayload):
+        return _problem_response(start_response=start_response, environ=environ, payload=context)
+    session, profile_state, model = context
+    try:
+        length = int(environ.get("CONTENT_LENGTH", "") or 0)
+    except ValueError:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.BAD_REQUEST,
+                reason="invalid_content_length",
+                detail="The Content-Length header is not an integer.",
+            ),
+        )
+    body = environ["wsgi.input"].read(length)
+    try:
+        payload = FormulaEditBody.model_validate(json.loads(body.decode("utf-8")))
+    except (UnicodeDecodeError, json.JSONDecodeError, ValidationError) as error:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.UNPROCESSABLE_ENTITY,
+                reason="invalid_formula_edit",
+                detail=f"The formula edit body is invalid: {error}",
+            ),
+        )
+    generated = instantiate_questions(
+        catalog=load_catalog(), profile=arbitrated_profile(profile_state=profile_state), model=model
+    )
+    question = next((q for q in generated if q.question_id == QuestionId(question_id)), None)
+    if question is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="question_not_found",
+                detail=f"No generated question with id {question_id!r} in session {session_id!r}.",
+            ),
+        )
+    old_formula = edit_store.latest_formula(
+        session_id=session.session_id, question_id=question.question_id, original=question.formula
+    )
+    record = edit_store.edit(
+        session_id=session.session_id,
+        question_id=question.question_id,
+        old_formula=old_formula,
+        new_formula=payload.formula,
+    )
+    session_store.append_journal_entry(
+        session_id=session.session_id,
+        event="formula_edited",
+        detail={
+            "question_id": str(question.question_id),
+            "old_formula": old_formula,
+            "new_formula": payload.formula,
+        },
+    )
+    reading = _read_formula(llm_provider=llm_provider, model=model, formula=payload.formula)
+    logger.debug(
+        "api_question_formula_edited",
+        session_id=session_id,
+        question_id=question_id,
+        old_formula=old_formula,
+        new_formula=payload.formula,
+    )
+    body_out = json.dumps(
+        {"record": record.model_dump(mode="json"), "reading": reading},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.CREATED,
+        content_type=CONTENT_TYPE_JSON,
+        body=body_out.encode("utf-8"),
+    )
+
+
+def _read_formula(
+    *, llm_provider: LLMProvider | None, model: CanonicalModel, formula: str
+) -> dict[str, JsonValue] | None:
+    """The inverse reading of a formula (formule → langage), an LLM proposition (spec §9).
+
+    Degrades explicitly (None with a note) when no reading is available -
+    never a fabricated reading.
+    """
+    if llm_provider is None:
+        return None
+    try:
+        reading = llm_provider.reading(model_hash=model.content_hash, formula=FormulaText(formula))
+    except LLMDegradationError:
+        logger.warning("api_formula_reading_degraded", formula=formula)
+        return {"degraded": True, "note": "Aucune lecture scriptée pour cette formule."}
+    return {**reading.model_dump(mode="json"), "provenance": "llm", "degraded": False}
+
+
+def _get_reading(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    session_store: SessionStore,
+    store: ModelStore,
+    llm_provider: LLMProvider | None,
+    session_id: str,
+) -> Iterable[bytes]:
+    """The inverse reading of any formula of a session (formule → langage, spec §9, issue #37)."""
+    session = session_store.get(session_id=SessionId(session_id))
+    if session is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="session_not_found",
+                detail=f"No session with id {session_id!r}.",
+            ),
+        )
+    query = environ.get("QUERY_STRING", "")
+    params: dict[str, str] = {}
+    for pair in query.split("&"):
+        if "=" in pair:
+            key, value = pair.split("=", maxsplit=1)
+            params[key] = unquote(value)
+    formula = params.get("formula", "")
+    if not formula:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.UNPROCESSABLE_ENTITY,
+                reason="missing_formula",
+                detail='The "formula" query parameter is required.',
+            ),
+        )
+    model = store.get(model_id=session.model_id)
+    if model is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="model_not_found",
+                detail=f"No model with id {session.model_id!r}.",
+            ),
+        )
+    reading = _read_formula(llm_provider=llm_provider, model=model, formula=formula)
+    logger.debug("api_reading_read", session_id=session_id, formula=formula)
+    body_out = json.dumps(
+        {"formula": formula, "reading": reading},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.OK,
+        content_type=CONTENT_TYPE_JSON,
+        body=body_out.encode("utf-8"),
+    )
+
+
+def _dispatch_session_questions(  # noqa: PLR0913 - one keyword per routed dependency (ADR-0003)
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    method: str,
+    remainder: str,
+    session_store: SessionStore,
+    store: ModelStore,
+    arbitrator: ProfileArbitrator | None,
+    edit_store: FormulaEditStore,
+    llm_provider: LLMProvider | None,
+) -> Iterable[bytes] | None:
+    """Route the question-editing sub-resources of a session, or None (spec §9, issue #37)."""
+    if remainder.endswith(READING_SUFFIX):
+        session_id = remainder[: -len(READING_SUFFIX)]
+        if method == "GET" and session_id and "/" not in session_id:
+            return _get_reading(
+                environ=environ,
+                start_response=start_response,
+                session_store=session_store,
+                store=store,
+                llm_provider=llm_provider,
+                session_id=session_id,
+            )
+        return None
+    if QUESTIONS_SEGMENT in remainder:
+        session_id, _, tail = remainder.partition(QUESTIONS_SEGMENT)
+        question_id, _, _ = tail.partition("/")
+        if session_id and question_id and tail == question_id + FORMULA_SUFFIX and method == "POST":
+            return _post_question_formula(
+                environ=environ,
+                start_response=start_response,
+                session_store=session_store,
+                store=store,
+                arbitrator=arbitrator,
+                edit_store=edit_store,
+                llm_provider=llm_provider,
+                session_id=session_id,
+                question_id=question_id,
+            )
+    return None
+
+
+def _get_session_budget(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    session_store: SessionStore,
+    run_store: RunStore,
+    session_id: str,
+) -> Iterable[bytes]:
+    """The live MC budget of one session: cap, consumed, reserved, remaining (§12.4, #33).
+
+    The budget lives continuously per session: consumed is the measured tool
+    time of the session's terminal runs, reserved the in-flight reservations,
+    and the remaining is what the next run of THIS session may still claim -
+    never another session's leftover.
+    """
+    session = session_store.get(session_id=SessionId(session_id))
+    if session is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="session_not_found",
+                detail=f"No session with id {session_id!r}.",
+            ),
+        )
+    consumed = run_store.consumed_seconds(session_id=session.session_id)
+    reserved = run_store.reserved_seconds(session_id=session.session_id)
+    remaining = session.budget_seconds - consumed - reserved
+    logger.debug(
+        "api_session_budget_read",
+        session_id=session.session_id,
+        budget_seconds=session.budget_seconds,
+        consumed_seconds=consumed,
+        reserved_seconds=reserved,
+        remaining_seconds=remaining,
+        runs=len(session.run_ids),
+    )
+    body = json.dumps(
+        {
+            "session_id": str(session.session_id),
+            "budget_seconds": session.budget_seconds,
+            "consumed_seconds": consumed,
+            "reserved_seconds": reserved,
+            "remaining_seconds": remaining,
+            "run_count": len(session.run_ids),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
     )
     return _respond(
         start_response=start_response,
@@ -1546,6 +2373,7 @@ def _dispatch_session_arbitration(
     remainder: str,
     session_store: SessionStore,
     arbitration_store: ArbitrationStore,
+    convergence_store: ConvergenceStore | None = None,
 ) -> Iterable[bytes] | None:
     """Route the arbitration sub-resources of a session, or None (spec §4.8, issue #16)."""
     if remainder.endswith(ARBITRATION_REQUESTS_SUFFIX):
@@ -1556,6 +2384,7 @@ def _dispatch_session_arbitration(
                 start_response=start_response,
                 session_store=session_store,
                 arbitration_store=arbitration_store,
+                convergence_store=convergence_store,
                 session_id=session_id,
             )
     elif remainder.endswith(ARBITRATIONS_SUFFIX):
@@ -1568,6 +2397,42 @@ def _dispatch_session_arbitration(
                 arbitration_store=arbitration_store,
                 session_id=session_id,
             )
+    return None
+
+
+def _dispatch_session_convergence(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    method: str,
+    remainder: str,
+    session_store: SessionStore,
+    convergence_store: ConvergenceStore,
+    store: ModelStore,
+    arbitrator: ProfileArbitrator | None,
+) -> Iterable[bytes] | None:
+    """Route the convergence sub-resources of a session, or None (spec §4.8, §12.2, issue #34)."""
+    if remainder.endswith(CONVERGENCES_SUFFIX):
+        session_id = remainder[: -len(CONVERGENCES_SUFFIX)]
+        if session_id and "/" not in session_id:
+            if method == "POST":
+                return _post_convergence(
+                    environ=environ,
+                    start_response=start_response,
+                    session_store=session_store,
+                    convergence_store=convergence_store,
+                    store=store,
+                    arbitrator=arbitrator,
+                    session_id=session_id,
+                )
+            if method == "GET":
+                return _get_convergences(
+                    environ=environ,
+                    start_response=start_response,
+                    session_store=session_store,
+                    convergence_store=convergence_store,
+                    session_id=session_id,
+                )
     return None
 
 
@@ -1626,9 +2491,15 @@ def _post_arbitration_request(
     start_response: StartResponse,
     session_store: SessionStore,
     arbitration_store: ArbitrationStore,
+    convergence_store: ConvergenceStore | None,
     session_id: str,
 ) -> Iterable[bytes]:
-    """Accept, refuse or revise one question card; the previous decision stays (spec §12.7)."""
+    """Accept, refuse or revise one question card; the previous decision stays (spec §12.7).
+
+    A revision also reopens the clauses of the questions covered by
+    convergence with this one (spec §12.7, issue #34): the reopening is
+    journaled, and the journal keeps the old and the new decision alike.
+    """
     if session_store.get(session_id=SessionId(session_id)) is None:
         return _problem_response(
             start_response=start_response,
@@ -1678,6 +2549,29 @@ def _post_arbitration_request(
             "previous_decision": record.previous_decision,
         },
     )
+    if record.previous_decision is not None and convergence_store is not None:
+        reopened = [
+            fusion.question_id
+            for fusion in convergence_store.covered_by_proposition(
+                session_id=SessionId(session_id), proposition_id=payload.question_id
+            )
+            if fusion.timestamp < record.timestamp
+        ]
+        if reopened:
+            session_store.append_journal_entry(
+                session_id=SessionId(session_id),
+                event="convergence_reopened",
+                detail={
+                    "proposition_id": str(payload.question_id),
+                    "reopened": [str(question_id) for question_id in reopened],
+                },
+            )
+            logger.debug(
+                "api_convergence_reopened",
+                session_id=session_id,
+                proposition_id=str(payload.question_id),
+                reopened=len(reopened),
+            )
     logger.debug(
         "api_arbitration_decided",
         session_id=session_id,
@@ -1738,6 +2632,439 @@ def _get_arbitrations(
     )
 
 
+class ConvergenceRequestBody(BaseModel):
+    """The body of ``POST /v1/sessions/{sid}/convergences`` (spec §4.8, §12.2)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    question_id: QuestionId = Field(min_length=1)
+    """The question to cover (never solicited again once fused)."""
+
+    proposition_id: QuestionId = Field(min_length=1)
+    """The surviving question the covered one converges with."""
+
+
+def _post_convergence(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    session_store: SessionStore,
+    convergence_store: ConvergenceStore,
+    store: ModelStore,
+    arbitrator: ProfileArbitrator | None,
+    session_id: str,
+) -> Iterable[bytes]:
+    """Fuse one question into a converging surviving one - a human-only decision (spec §12.2).
+
+    Only Arbitrer merges: the two questions must be generated for the
+    session and must actually converge (spec §14.5); anything else is a
+    ``422`` - automatic or arbitrary fusion is forbidden.
+    """
+    context = _convergence_context(
+        session_store=session_store, store=store, arbitrator=arbitrator, session_id=session_id
+    )
+    if isinstance(context, ProblemPayload):
+        return _problem_response(start_response=start_response, environ=environ, payload=context)
+    parsed = _parse_convergence_body(environ=environ)
+    if isinstance(parsed, ProblemPayload):
+        return _problem_response(start_response=start_response, environ=environ, payload=parsed)
+    _, profile_state, model = context
+    generated = instantiate_questions(
+        catalog=load_catalog(), profile=arbitrated_profile(profile_state=profile_state), model=model
+    )
+    by_id = {question.question_id: question for question in generated}
+    rejection = _fusion_rejection(payload=parsed, by_id=by_id)
+    if rejection is not None:
+        return _problem_response(start_response=start_response, environ=environ, payload=rejection)
+    existing = convergence_store.find_fusion(
+        session_id=SessionId(session_id),
+        question_id=parsed.question_id,
+        proposition_id=parsed.proposition_id,
+    )
+    if existing is not None:
+        logger.debug(
+            "api_convergence_already_fused",
+            session_id=session_id,
+            question_id=str(parsed.question_id),
+            proposition_id=str(parsed.proposition_id),
+        )
+        body_out = json.dumps(
+            {"record": existing.model_dump(mode="json")},
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return _respond(
+            start_response=start_response,
+            status=HTTPStatus.OK,
+            content_type=CONTENT_TYPE_JSON,
+            body=body_out.encode("utf-8"),
+        )
+    record = convergence_store.fuse(
+        session_id=SessionId(session_id),
+        question_id=parsed.question_id,
+        proposition_id=parsed.proposition_id,
+    )
+    session_store.append_journal_entry(
+        session_id=SessionId(session_id),
+        event="convergence_fused",
+        detail={
+            "question_id": str(parsed.question_id),
+            "proposition_id": str(parsed.proposition_id),
+        },
+    )
+    logger.debug(
+        "api_convergence_fused",
+        session_id=session_id,
+        question_id=str(parsed.question_id),
+        proposition_id=str(parsed.proposition_id),
+    )
+    body_out = json.dumps(
+        {"record": record.model_dump(mode="json")},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.CREATED,
+        content_type=CONTENT_TYPE_JSON,
+        body=body_out.encode("utf-8"),
+    )
+
+
+def _convergence_context(
+    *,
+    session_store: SessionStore,
+    store: ModelStore,
+    arbitrator: ProfileArbitrator | None,
+    session_id: str,
+) -> tuple[StoredSession, ProfileState, CanonicalModel] | ProblemPayload:
+    """Resolve the session, its arbitrated profile state and its model, or a problem payload."""
+    session = session_store.get(session_id=SessionId(session_id))
+    if session is None:
+        return _problem(
+            status=HTTPStatus.NOT_FOUND,
+            reason="session_not_found",
+            detail=f"No session with id {session_id!r}.",
+        )
+    profile_state = arbitrator.get(session_id=SessionId(session_id)) if arbitrator else None
+    if profile_state is None:
+        return _problem(
+            status=HTTPStatus.NOT_FOUND,
+            reason="profile_not_found",
+            detail=f"No proposed profile for session {session_id!r}.",
+        )
+    model = store.get(model_id=session.model_id)
+    if model is None:
+        return _problem(
+            status=HTTPStatus.NOT_FOUND,
+            reason="model_not_found",
+            detail=f"No model with id {session.model_id!r}.",
+        )
+    return session, profile_state, model
+
+
+def _parse_convergence_body(*, environ: WSGIEnvironment) -> ConvergenceRequestBody | ProblemPayload:
+    """Parse the convergence request body, or a problem payload when invalid."""
+    try:
+        length = int(environ.get("CONTENT_LENGTH", "") or 0)
+    except ValueError:
+        return _problem(
+            status=HTTPStatus.BAD_REQUEST,
+            reason="invalid_content_length",
+            detail="The Content-Length header is not an integer.",
+        )
+    body = environ["wsgi.input"].read(length)
+    try:
+        return ConvergenceRequestBody.model_validate(json.loads(body.decode("utf-8")))
+    except (UnicodeDecodeError, json.JSONDecodeError, ValidationError) as error:
+        return _problem(
+            status=HTTPStatus.UNPROCESSABLE_ENTITY,
+            reason="invalid_convergence_request",
+            detail=f"The convergence request body is invalid: {error}",
+        )
+
+
+def _fusion_rejection(
+    *, payload: ConvergenceRequestBody, by_id: dict[QuestionId, GeneratedQuestion]
+) -> ProblemPayload | None:
+    """Why the fusion is rejected, or None when it is a valid human fusion (spec §14.5)."""
+    if payload.question_id == payload.proposition_id:
+        return _problem(
+            status=HTTPStatus.UNPROCESSABLE_ENTITY,
+            reason="convergence_rejected",
+            detail="A question cannot cover itself.",
+        )
+    covered = by_id.get(payload.question_id)
+    proposition = by_id.get(payload.proposition_id)
+    if covered is None or proposition is None:
+        unknown = sorted(
+            str(question_id)
+            for question_id in (payload.question_id, payload.proposition_id)
+            if question_id not in by_id
+        )
+        return _problem(
+            status=HTTPStatus.UNPROCESSABLE_ENTITY,
+            reason="convergence_rejected",
+            detail=f"Both question ids must be generated for this session; unknown: {unknown}.",
+        )
+    if not questions_converge(first=covered, second=proposition):
+        return _problem(
+            status=HTTPStatus.UNPROCESSABLE_ENTITY,
+            reason="convergence_rejected",
+            detail="The two questions do not converge (spec §14.5); fusion is human-only.",
+        )
+    return None
+
+
+def _get_convergences(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    session_store: SessionStore,
+    convergence_store: ConvergenceStore,
+    session_id: str,
+) -> Iterable[bytes]:
+    """List the fusions of a session with limit/offset pagination, in append order (ADR-0016)."""
+    if session_store.get(session_id=SessionId(session_id)) is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="session_not_found",
+                detail=f"No session with id {session_id!r}.",
+            ),
+        )
+    pagination = _parse_pagination(
+        environ=environ,
+        default_limit=DEFAULT_CONVERGENCES_PAGE_LIMIT,
+        max_limit=MAX_CONVERGENCES_PAGE_LIMIT,
+    )
+    if isinstance(pagination, ProblemPayload):
+        return _problem_response(start_response=start_response, environ=environ, payload=pagination)
+    limit, offset = pagination
+    history = convergence_store.history(session_id=SessionId(session_id))
+    page = history[offset : offset + limit]
+    logger.debug(
+        "api_convergences_read",
+        session_id=session_id,
+        count=len(page),
+        total=len(history),
+        limit=limit,
+        offset=offset,
+    )
+    body_out = json.dumps(
+        {
+            "convergences": [r.model_dump(mode="json") for r in page],
+            "total": len(history),
+            "limit": limit,
+            "offset": offset,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.OK,
+        content_type=CONTENT_TYPE_JSON,
+        body=body_out.encode("utf-8"),
+    )
+
+
+def _get_session_contract(  # noqa: PLR0913 - one keyword per routed dependency (ADR-0003)
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    store: ModelStore,
+    session_store: SessionStore,
+    run_store: RunStore,
+    arbitrator: ProfileArbitrator | None,
+    arbitration_store: ArbitrationStore | None,
+    convergence_store: ConvergenceStore | None,
+    session_id: str,
+) -> Iterable[bytes]:
+    """The contract of a session, negotiated as contract+json or Markdown (spec §4.8)."""
+    media = _negotiate_contract_media(accept_header=environ.get("HTTP_ACCEPT"))
+    if media is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_ACCEPTABLE,
+                reason="not_acceptable",
+                detail=(
+                    "The contract is served as application/contract+json; version=1.0"
+                    " or text/markdown."
+                ),
+            ),
+        )
+    session = session_store.get(session_id=SessionId(session_id))
+    if session is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="session_not_found",
+                detail=f"No session with id {session_id!r}.",
+            ),
+        )
+    profile_state = arbitrator.get(session_id=SessionId(session_id)) if arbitrator else None
+    if profile_state is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="profile_not_found",
+                detail=f"No proposed profile for session {session_id!r}.",
+            ),
+        )
+    model = store.get(model_id=session.model_id)
+    if model is None:
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.NOT_FOUND,
+                reason="model_not_found",
+                detail=f"No model with id {session.model_id!r}.",
+            ),
+        )
+    history = (
+        arbitration_store.history(session_id=SessionId(session_id))
+        if arbitration_store is not None
+        else []
+    )
+    fusions = (
+        convergence_store.history(session_id=SessionId(session_id))
+        if convergence_store is not None
+        else []
+    )
+    runs = [run for run_id in session.run_ids if (run := run_store.get(run_id=run_id)) is not None]
+    document = build_contract(
+        session=session,
+        profile_state=profile_state,
+        model=model,
+        catalog=load_catalog(),
+        arbitration_history=history,
+        runs=runs,
+        journal=session_store.journal(session_id=SessionId(session_id)),
+        convergence_history=fusions,
+    )
+    logger.debug(
+        "api_contract_exported",
+        session_id=session_id,
+        media=media,
+        questions=len(document.questions),
+    )
+    if media == "markdown":
+        return _respond(
+            start_response=start_response,
+            status=HTTPStatus.OK,
+            content_type=CONTENT_TYPE_MARKDOWN,
+            body=render_markdown(document=document).encode("utf-8"),
+        )
+    body_out = json.dumps(document.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.OK,
+        content_type=CONTENT_TYPE_CONTRACT_JSON,
+        body=body_out.encode("utf-8"),
+    )
+
+
+def _dispatch_session_read(  # noqa: PLR0913 - one keyword per routed dependency (ADR-0003)
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    method: str,
+    remainder: str,
+    store: ModelStore,
+    run_store: RunStore,
+    session_store: SessionStore,
+    arbitrator: ProfileArbitrator | None,
+    state_graph_explorer: StateGraphExplorer | None,
+) -> Iterable[bytes] | None:
+    """Route the journal, budget, plain-read, in-situ and profile sub-resources, or None."""
+    if remainder.endswith(SESSION_JOURNAL_SUFFIX):
+        session_id = remainder[: -len(SESSION_JOURNAL_SUFFIX)]
+        if method == "GET" and session_id and "/" not in session_id:
+            return _get_session_journal(
+                environ=environ,
+                start_response=start_response,
+                session_store=session_store,
+                session_id=session_id,
+            )
+    elif remainder.endswith(SESSION_BUDGET_SUFFIX):
+        session_id = remainder[: -len(SESSION_BUDGET_SUFFIX)]
+        if method == "GET" and session_id and "/" not in session_id:
+            return _get_session_budget(
+                environ=environ,
+                start_response=start_response,
+                session_store=session_store,
+                run_store=run_store,
+                session_id=session_id,
+            )
+    elif method == "GET" and remainder and "/" not in remainder:
+        return _get_session(
+            environ=environ,
+            start_response=start_response,
+            session_store=session_store,
+            session_id=remainder,
+        )
+    result = _dispatch_session_insitu(
+        environ=environ,
+        start_response=start_response,
+        method=method,
+        remainder=remainder,
+        store=store,
+        session_store=session_store,
+        arbitrator=arbitrator,
+        state_graph_explorer=state_graph_explorer,
+    )
+    if result is None and arbitrator is not None:
+        result = _dispatch_session_profile(
+            environ=environ,
+            start_response=start_response,
+            method=method,
+            remainder=remainder,
+            arbitrator=arbitrator,
+        )
+    return result
+
+
+def _dispatch_session_contract(  # noqa: PLR0913 - one keyword per routed dependency (ADR-0003)
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    method: str,
+    remainder: str,
+    store: ModelStore,
+    run_store: RunStore,
+    session_store: SessionStore,
+    arbitrator: ProfileArbitrator | None,
+    arbitration_store: ArbitrationStore | None,
+    convergence_store: ConvergenceStore | None = None,
+) -> Iterable[bytes] | None:
+    """Route the contract sub-resource of a session, or None (spec §4.8, issue #17)."""
+    if remainder.endswith(SESSION_CONTRACT_SUFFIX):
+        session_id = remainder[: -len(SESSION_CONTRACT_SUFFIX)]
+        if method == "GET" and session_id and "/" not in session_id:
+            return _get_session_contract(
+                environ=environ,
+                start_response=start_response,
+                store=store,
+                session_store=session_store,
+                run_store=run_store,
+                arbitrator=arbitrator,
+                arbitration_store=arbitration_store,
+                convergence_store=convergence_store,
+                session_id=session_id,
+            )
+    return None
+
+
 def _dispatch_sessions_root(
     *,
     environ: WSGIEnvironment,
@@ -1745,6 +3072,7 @@ def _dispatch_sessions_root(
     method: str,
     store: ModelStore,
     session_store: SessionStore,
+    settings: ApiSettings,
 ) -> Iterable[bytes] | None:
     """Route the /v1/sessions collection, or None when the path is not it."""
     if method == "POST":
@@ -1753,6 +3081,7 @@ def _dispatch_sessions_root(
             start_response=start_response,
             store=store,
             session_store=session_store,
+            settings=settings,
         )
     if method == "GET":
         return _get_sessions(
@@ -1776,10 +3105,15 @@ def _dispatch_sessions(  # noqa: PLR0913 - one keyword per routed dependency (AD
     method: str,
     path: str,
     store: ModelStore,
+    run_store: RunStore,
     session_store: SessionStore,
+    settings: ApiSettings,
     arbitrator: ProfileArbitrator | None = None,
     state_graph_explorer: StateGraphExplorer | None = None,
     arbitration_store: ArbitrationStore | None = None,
+    convergence_store: ConvergenceStore | None = None,
+    edit_store: FormulaEditStore | None = None,
+    llm_provider: LLMProvider | None = None,
 ) -> Iterable[bytes] | None:
     """Route the /v1/sessions resources, or return None when the path is not one."""
     result: Iterable[bytes] | None = None
@@ -1790,6 +3124,7 @@ def _dispatch_sessions(  # noqa: PLR0913 - one keyword per routed dependency (AD
             method=method,
             store=store,
             session_store=session_store,
+            settings=settings,
         )
     elif path.startswith(SESSION_PATH_PREFIX):
         remainder = path.removeprefix(SESSION_PATH_PREFIX)
@@ -1801,43 +3136,56 @@ def _dispatch_sessions(  # noqa: PLR0913 - one keyword per routed dependency (AD
                 remainder=remainder,
                 session_store=session_store,
                 arbitration_store=arbitration_store,
+                convergence_store=convergence_store,
+            )
+        if result is None and convergence_store is not None:
+            result = _dispatch_session_convergence(
+                environ=environ,
+                start_response=start_response,
+                method=method,
+                remainder=remainder,
+                session_store=session_store,
+                convergence_store=convergence_store,
+                store=store,
+                arbitrator=arbitrator,
+            )
+        if result is None and edit_store is not None:
+            result = _dispatch_session_questions(
+                environ=environ,
+                start_response=start_response,
+                method=method,
+                remainder=remainder,
+                session_store=session_store,
+                store=store,
+                arbitrator=arbitrator,
+                edit_store=edit_store,
+                llm_provider=llm_provider,
             )
         if result is None:
-            if remainder.endswith(SESSION_JOURNAL_SUFFIX):
-                session_id = remainder[: -len(SESSION_JOURNAL_SUFFIX)]
-                if method == "GET" and session_id and "/" not in session_id:
-                    result = _get_session_journal(
-                        environ=environ,
-                        start_response=start_response,
-                        session_store=session_store,
-                        session_id=session_id,
-                    )
-            elif method == "GET" and remainder and "/" not in remainder:
-                result = _get_session(
-                    environ=environ,
-                    start_response=start_response,
-                    session_store=session_store,
-                    session_id=remainder,
-                )
-            else:
-                result = _dispatch_session_insitu(
-                    environ=environ,
-                    start_response=start_response,
-                    method=method,
-                    remainder=remainder,
-                    store=store,
-                    session_store=session_store,
-                    arbitrator=arbitrator,
-                    state_graph_explorer=state_graph_explorer,
-                )
-                if result is None and arbitrator is not None:
-                    result = _dispatch_session_profile(
-                        environ=environ,
-                        start_response=start_response,
-                        method=method,
-                        remainder=remainder,
-                        arbitrator=arbitrator,
-                    )
+            result = _dispatch_session_contract(
+                environ=environ,
+                start_response=start_response,
+                method=method,
+                remainder=remainder,
+                store=store,
+                run_store=run_store,
+                session_store=session_store,
+                arbitrator=arbitrator,
+                arbitration_store=arbitration_store,
+                convergence_store=convergence_store,
+            )
+        if result is None:
+            result = _dispatch_session_read(
+                environ=environ,
+                start_response=start_response,
+                method=method,
+                remainder=remainder,
+                store=store,
+                run_store=run_store,
+                session_store=session_store,
+                arbitrator=arbitrator,
+                state_graph_explorer=state_graph_explorer,
+            )
         if result is None:
             result = _problem_response(
                 start_response=start_response,
@@ -1853,6 +3201,86 @@ def _dispatch_sessions(  # noqa: PLR0913 - one keyword per routed dependency (AD
     return result
 
 
+def _dispatch_ui(
+    *,
+    environ: WSGIEnvironment,
+    start_response: StartResponse,
+    method: str,
+    path: str,
+) -> Iterable[bytes] | None:
+    """Serve the static elicitation UI (spec §9, issue #18), or None.
+
+    The UI assets carry no data and are public; every data call they make
+    goes through the authenticated /v1 API.
+    """
+    if (path == "/" or path.startswith(UI_PATH)) and method != "GET":
+        return _problem_response(
+            start_response=start_response,
+            environ=environ,
+            payload=_problem(
+                status=HTTPStatus.METHOD_NOT_ALLOWED,
+                reason="method_not_allowed",
+                detail=f"{method} is not supported on {path}.",
+            ),
+        )
+    if path == "/":
+        return _respond(
+            start_response=start_response,
+            status=HTTPStatus.FOUND,
+            content_type=CONTENT_TYPE_HTML,
+            body=b"",
+            extra_headers=[("Location", UI_PATH)],
+        )
+    if path == UI_PATH:
+        path = UI_PATH + UI_INDEX
+    if path.startswith(UI_PATH):
+        name = path.removeprefix(UI_PATH)
+        return _serve_ui_asset(start_response=start_response, path=path, name=name)
+    return None
+
+
+def _serve_ui_asset(
+    *,
+    start_response: StartResponse,
+    path: str,
+    name: str,
+) -> Iterable[bytes] | None:
+    """Serve one built UI asset (ADR-0101), or None when it does not exist.
+
+    Known suffixes are served from the static directory; an extension-less
+    name is a client-side route of the SPA and gets the index.html shell;
+    anything else (unknown suffix, missing file, escape from the static
+    directory) is a 404.
+    """
+    # An absolute name (`/ui//etc/foo.js` -> `/etc/foo.js`) would make
+    # Path(static) / name discard the base: reject it, and `..` segments,
+    # then verify containment on the resolved path.
+    if name.startswith("/") or ".." in name.split("/"):
+        return None
+    suffix = Path(name).suffix
+    content_type = UI_CONTENT_TYPES_BY_SUFFIX.get(suffix)
+    if content_type is not None:
+        asset = UI_STATIC_DIRECTORY / name
+    elif suffix == "":
+        asset = UI_STATIC_DIRECTORY / UI_INDEX
+        content_type = CONTENT_TYPE_HTML
+    else:
+        return None
+    try:
+        asset.resolve().relative_to(UI_STATIC_DIRECTORY.resolve())
+    except ValueError:
+        return None
+    if not asset.is_file():
+        return None
+    logger.debug("api_ui_asset_served", path=path, bytes=asset.stat().st_size)
+    return _respond(
+        start_response=start_response,
+        status=HTTPStatus.OK,
+        content_type=content_type,
+        body=asset.read_bytes(),
+    )
+
+
 def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
     *,
     settings: ApiSettings,
@@ -1864,7 +3292,12 @@ def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
     qualification: QualificationLookup | None = None,
     state_graph_explorer: StateGraphExplorer | None = None,
     static_resolver: StaticResolver | None = None,
+    static_first_prober: StaticFirstProber | None = None,
     arbitration_store: ArbitrationStore | None = None,
+    convergence_store: ConvergenceStore | None = None,
+    witness_store: WitnessStore | None = None,
+    llm_provider: LLMProvider | None = None,
+    edit_store: FormulaEditStore | None = None,
 ) -> WSGIApp:
     """Build the WSGI application: auth first, then routing and negotiation."""
 
@@ -1872,6 +3305,12 @@ def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
         method = environ.get("REQUEST_METHOD", "GET").upper()
         path = environ.get("PATH_INFO", "/")
         logger.debug("api_request_received", method=method, path=path)
+        # The static UI assets carry no data and are public (spec §9, issue #18).
+        routed = _dispatch_ui(
+            environ=environ, start_response=start_response, method=method, path=path
+        )
+        if routed is not None:
+            return routed
         if not _is_authorized(environ=environ, settings=settings):
             logger.warning("api_request_unauthorized", method=method, path=path)
             return _problem_response(
@@ -1894,6 +3333,10 @@ def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
                 path=path,
                 qualification=qualification,
             )
+        if routed is None and path == LLM_USAGE_PATH and method == "GET":
+            routed = _get_llm_usage(
+                environ=environ, start_response=start_response, llm_provider=llm_provider
+            )
         if routed is None:
             routed = _dispatch_checks_and_runs(
                 environ=environ,
@@ -1906,6 +3349,10 @@ def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
                 runner=runner,
                 qualification=qualification,
                 static_resolver=static_resolver,
+                static_first_prober=static_first_prober,
+                witness_store=witness_store,
+                llm_provider=llm_provider,
+                session_store=session_store,
             )
         if routed is None and session_store is not None:
             routed = _dispatch_sessions(
@@ -1914,10 +3361,15 @@ def create_app(  # noqa: PLR0913 - one keyword per wired dependency (ADR-0003)
                 method=method,
                 path=path,
                 store=store,
+                run_store=run_store,
                 session_store=session_store,
+                settings=settings,
                 arbitrator=arbitrator,
                 state_graph_explorer=state_graph_explorer,
                 arbitration_store=arbitration_store,
+                convergence_store=convergence_store,
+                edit_store=edit_store,
+                llm_provider=llm_provider,
             )
         if routed is not None:
             return routed
