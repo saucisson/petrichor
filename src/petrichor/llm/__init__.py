@@ -22,6 +22,8 @@ from petrichor.llm.provider import (
     LLMDegradationError,
     LLMError,
     LLMProvider,
+    LLMTokenRequiredError,
+    MistralTokenInvalidError,
 )
 from petrichor.llm.schemas import (
     Clarification,
@@ -56,7 +58,9 @@ __all__ = [
     "LLMDegradationError",
     "LLMError",
     "LLMProvider",
+    "LLMTokenRequiredError",
     "LlmUsage",
+    "MistralTokenInvalidError",
     "ProfileEntry",
     "ProfileEntryPublic",
     "Reading",

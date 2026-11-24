@@ -532,3 +532,20 @@
   .decouvrir-entry {
     @apply my-1 rounded-card border border-line bg-surface px-3 py-2;
   }
+
+  /* Web v1 preferences panel (issue #208): modal over the header account menu. */
+  .preferences-backdrop {
+    @apply fixed inset-0 z-50 flex items-center justify-center bg-black/40;
+  }
+
+  .preferences-panel {
+    @apply flex w-96 max-w-full flex-col gap-3 rounded-card border border-line bg-surface p-4 shadow-lg;
+  }
+
+  .preferences-hint {
+    @apply m-0 text-sm text-muted;
+  }
+
+  .edit-hint {
+    @apply m-0 text-sm text-muted;
+  }

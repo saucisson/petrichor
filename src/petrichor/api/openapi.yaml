@@ -607,6 +607,7 @@ paths:
           required: true
           schema:
             type: string
+        - $ref: "#/components/parameters/MistralApiTokenHeader"
       responses:
         "200":
           description: The §16 witness document of the run.
@@ -620,6 +621,10 @@ paths:
           $ref: "#/components/responses/NotFound"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
+        "502":
+          $ref: "#/components/responses/BadGateway"
   /witnesses/{witness_id}:
     get:
       summary: One stored witness with the runs referencing it (stored once, referenced n times)
@@ -1186,6 +1191,7 @@ paths:
           required: true
           schema:
             type: string
+        - $ref: "#/components/parameters/MistralApiTokenHeader"
       requestBody:
         required: true
         content:
@@ -1230,6 +1236,10 @@ paths:
           $ref: "#/components/responses/NotFound"
         "422":
           $ref: "#/components/responses/Unprocessable"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
+        "502":
+          $ref: "#/components/responses/BadGateway"
   /sessions/{session_id}/reading:
     get:
       summary: The inverse reading of any formula (formule → langage, spec §9, issue #37)
@@ -1244,6 +1254,7 @@ paths:
           required: true
           schema:
             type: string
+        - $ref: "#/components/parameters/MistralApiTokenHeader"
       responses:
         "200":
           description: The reading of the formula, an LLM proposition labeled provenance llm.
@@ -1264,6 +1275,10 @@ paths:
           $ref: "#/components/responses/NotFound"
         "422":
           $ref: "#/components/responses/Unprocessable"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
+        "502":
+          $ref: "#/components/responses/BadGateway"
   /sessions/{session_id}/contract:
     get:
       summary: The contract of a session, negotiated as contract+json or Markdown (spec §4.8)
@@ -1480,6 +1495,19 @@ components:
       description: >-
         The HttpOnly applicative session cookie set by /auth/callback
         (web v1, issue #207); a JWT is never put in a cookie.
+  parameters:
+    MistralApiTokenHeader:
+      name: x-mistral-api-token
+      in: header
+      required: false
+      description: >-
+        The per-user Mistral API token, set in the web v1 preferences
+        (issue #208). Sent ONLY on calls that trigger an LLM generation;
+        consumed by the llm/provider in place of any server key, never
+        persisted, never logged, never echoed in a response.
+      schema:
+        type: string
+        minLength: 1
   schemas:
     PnmlCandidate:
       type: object
@@ -2349,6 +2377,24 @@ components:
             $ref: "#/components/schemas/Problem"
     ServiceUnavailable:
       description: The server has no engine/explorer wired for this resource (e.g. runner not configured).
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    PreconditionRequired:
+      description: >-
+        Web v1 (issue #208): a generation was requested without a Mistral
+        API token. Reason `llm_token_required`; set the token in the web
+        preferences (x-mistral-api-token header).
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    BadGateway:
+      description: >-
+        Web v1 (issue #208): Mistral rejected the presented API token
+        (upstream 401). Reason `mistral_token_invalid`; the token itself is
+        never included in the payload.
       content:
         application/problem+json:
           schema:

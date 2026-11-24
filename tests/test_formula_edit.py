@@ -7,11 +7,16 @@
 - The witness of the old formula is never lost (journal + archive).
 """
 
+import json
 import tempfile
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import httpx
+
+if TYPE_CHECKING:
+    from petrichor.petri_canonical import CanonicalModel
 import pytest
 import structlog.testing
 from api_test_support import accepting_verifier
@@ -24,8 +29,13 @@ from petrichor.arbitration import ArbitrationStore
 from petrichor.checks import CheckCompleted, CheckQuestion, ToolVersion
 from petrichor.convergence import ConvergenceStore
 from petrichor.elicitation import QuestionId
-from petrichor.llm.provider import DeterministicMockProvider
-from petrichor.llm.schemas import ProfileEntry, SemanticProfile
+from petrichor.llm.provider import (
+    DeterministicMockProvider,
+    FormulaText,
+    LLMTokenRequiredError,
+    MistralTokenInvalidError,
+)
+from petrichor.llm.schemas import FormulaReadings, ProfileEntry, SemanticProfile
 from petrichor.model_store import ModelStore
 from petrichor.profile import ProfileArbitrator
 from petrichor.question_edits import FormulaEditStore
@@ -71,7 +81,7 @@ class FakeRunner:
 
 
 def build_client(
-    tmp_path: Path,
+    tmp_path: Path, *, llm_provider: DeterministicMockProvider | None = None
 ) -> tuple[httpx.Client, FormulaEditStore, WitnessStore, ProfileArbitrator]:
     """Wire the app with every session-scoped store, the mock LLM and a fake runner."""
     settings = ApiSettings()
@@ -92,7 +102,7 @@ def build_client(
         arbitration_store=ArbitrationStore(directory=tmp_path / "arbitrations"),
         convergence_store=ConvergenceStore(directory=tmp_path / "convergences"),
         witness_store=witness_store,
-        llm_provider=DeterministicMockProvider(),
+        llm_provider=llm_provider if llm_provider is not None else DeterministicMockProvider(),
         edit_store=edit_store,
     )
     client = httpx.Client(transport=httpx.WSGITransport(app=app), base_url="http://testserver")
@@ -398,3 +408,129 @@ class TestFormulaEditStoreProperty:
         )
         # Append-only: the full history is preserved in order.
         assert [r.new_formula for r in store.history(session_id=session_id)] == edits
+
+
+class RecordingTokenProvider(DeterministicMockProvider):
+    """A mock provider that records the ``api_token`` of every reading call (issue #208)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen_tokens: list[str | None] = []
+
+    def reading(
+        self,
+        *,
+        model: CanonicalModel,
+        formulas: tuple[FormulaText, ...],
+        api_token: str | None = None,
+    ) -> FormulaReadings:
+        self.seen_tokens.append(api_token)
+        return super().reading(model=model, formulas=formulas, api_token=api_token)
+
+
+class TokenErrorProvider(DeterministicMockProvider):
+    """A mock provider whose reading raises a fixed typed token error (issue #208)."""
+
+    def __init__(self, *, error: Exception) -> None:
+        super().__init__()
+        self._error = error
+
+    def reading(
+        self,
+        *,
+        model: CanonicalModel,
+        formulas: tuple[FormulaText, ...],
+        api_token: str | None = None,
+    ) -> FormulaReadings:
+        raise self._error
+
+
+class TestMistralTokenHeader:
+    """The x-mistral-api-token header is forwarded to the provider on generation
+    routes, and typed token errors map to explicit problem responses
+    (web v1 §3, issue #208). The token itself never appears in any log."""
+
+    def _prepared(
+        self, client: httpx.Client, arbitrator: ProfileArbitrator
+    ) -> tuple[str, str, str]:
+        """Import, create a session, arbitrate; return (session_id, question_id, formula)."""
+        model_id = import_model(client)
+        session_id = create_session(client, model_id)
+        propose_and_arbitrate(client=client, arbitrator=arbitrator, session_id=session_id)
+        question_id, formula = first_question_id(client, session_id)
+        return session_id, question_id, formula
+
+    def test_formula_edit_forwards_the_mistral_token_header(self, tmp_path: Path) -> None:
+        provider = RecordingTokenProvider()
+        client, _, _, arbitrator = build_client(tmp_path, llm_provider=provider)
+        session_id, question_id, _ = self._prepared(client, arbitrator)
+        response = client.post(
+            f"/v1/sessions/{session_id}/questions/{question_id}/formula",
+            json={"formula": "EF (eat_1)"},
+            headers={**JSON_HEADERS, "x-mistral-api-token": "sk-ui"},
+        )
+        assert response.status_code == 201
+        assert provider.seen_tokens == ["sk-ui"]
+
+    def test_formula_edit_without_header_sends_no_token(self, tmp_path: Path) -> None:
+        provider = RecordingTokenProvider()
+        client, _, _, arbitrator = build_client(tmp_path, llm_provider=provider)
+        session_id, question_id, _ = self._prepared(client, arbitrator)
+        response = client.post(
+            f"/v1/sessions/{session_id}/questions/{question_id}/formula",
+            json={"formula": "EF (eat_1)"},
+            headers=JSON_HEADERS,
+        )
+        assert response.status_code == 201
+        assert provider.seen_tokens == [None]
+
+    def test_reading_endpoint_forwards_the_mistral_token_header(self, tmp_path: Path) -> None:
+        provider = RecordingTokenProvider()
+        client, _, _, arbitrator = build_client(tmp_path, llm_provider=provider)
+        session_id, _, _ = self._prepared(client, arbitrator)
+        response = client.get(
+            f"/v1/sessions/{session_id}/reading?formula=EF%20(eat_1)",
+            headers={**AUTH_HEADERS, "x-mistral-api-token": "sk-ui-reading"},
+        )
+        assert response.status_code == 200
+        assert provider.seen_tokens == ["sk-ui-reading"]
+
+    def test_missing_token_maps_to_428_llm_token_required(self, tmp_path: Path) -> None:
+        provider = TokenErrorProvider(error=LLMTokenRequiredError("no token"))
+        client, _, _, arbitrator = build_client(tmp_path, llm_provider=provider)
+        session_id, question_id, _ = self._prepared(client, arbitrator)
+        with structlog.testing.capture_logs() as logs:
+            response = client.post(
+                f"/v1/sessions/{session_id}/questions/{question_id}/formula",
+                json={"formula": "EF (eat_1)"},
+                headers={**JSON_HEADERS, "x-mistral-api-token": "sk-ui"},
+            )
+        assert response.status_code == 428
+        assert response.json()["extensions"]["reason"] == "llm_token_required"
+        assert "sk-ui" not in json.dumps(logs)
+
+    def test_rejected_token_maps_to_502_mistral_token_invalid(self, tmp_path: Path) -> None:
+        provider = TokenErrorProvider(error=MistralTokenInvalidError("mistral 401"))
+        client, _, _, arbitrator = build_client(tmp_path, llm_provider=provider)
+        session_id, question_id, _ = self._prepared(client, arbitrator)
+        with structlog.testing.capture_logs() as logs:
+            response = client.post(
+                f"/v1/sessions/{session_id}/questions/{question_id}/formula",
+                json={"formula": "EF (eat_1)"},
+                headers={**JSON_HEADERS, "x-mistral-api-token": "sk-bad"},
+            )
+        assert response.status_code == 502
+        assert response.json()["extensions"]["reason"] == "mistral_token_invalid"
+        assert "Mistral" in response.json()["detail"]
+        assert "sk-bad" not in json.dumps(logs)
+        assert "sk-bad" not in response.text
+
+    def test_reading_endpoint_maps_token_errors_too(self, tmp_path: Path) -> None:
+        provider = TokenErrorProvider(error=LLMTokenRequiredError("no token"))
+        client, _, _, arbitrator = build_client(tmp_path, llm_provider=provider)
+        session_id, _, _ = self._prepared(client, arbitrator)
+        response = client.get(
+            f"/v1/sessions/{session_id}/reading?formula=EF%20(eat_1)", headers=AUTH_HEADERS
+        )
+        assert response.status_code == 428
+        assert response.json()["extensions"]["reason"] == "llm_token_required"

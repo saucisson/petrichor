@@ -20,9 +20,14 @@ from petrichor.api.app import create_app
 from petrichor.api.settings import ApiSettings
 from petrichor.llm import FormulaText, HumanMessage, schemas
 from petrichor.llm.mistral import PROMPT_TEMPLATES, MistralProvider
-from petrichor.llm.provider import DeterministicMockProvider, LLMDegradationError
+from petrichor.llm.provider import (
+    DeterministicMockProvider,
+    LLMDegradationError,
+    LLMTokenRequiredError,
+    MistralTokenInvalidError,
+)
 from petrichor.llm.routing import USAGE_MODEL_ROUTING, ModelRoute
-from petrichor.main import select_llm_provider
+from petrichor.main import ConfigurationError, select_llm_provider
 from petrichor.model_store import ModelStore
 from petrichor.pnml_import import import_pnml
 from petrichor.run_store import RunStore
@@ -490,18 +495,125 @@ class TestProviderSelection:
         settings = ApiSettings()
         assert isinstance(select_llm_provider(settings=settings), DeterministicMockProvider)
 
-    def test_mistral_without_key_fails_at_startup(self) -> None:
+    def test_mistral_without_key_is_allowed_tokenless_at_startup(self) -> None:
+        # Web v1 §3 (issue #208): no global key is required anymore; each
+        # generation then demands the per-request x-mistral-api-token header.
         settings = ApiSettings(llm_provider="mistral", mistral_api_key=None)
-        with pytest.raises(SystemExit):
-            select_llm_provider(settings=settings)
+        provider = select_llm_provider(settings=settings, environment={})
+        assert isinstance(provider, MistralProvider)
+        provider.close()
 
-    def test_mistral_with_key_is_selected(self) -> None:
+    def test_mistral_with_key_is_selected_in_dev(self) -> None:
         settings = ApiSettings(
             llm_provider="mistral",
             mistral_api_key=SecretStr("sk-test"),
         )
-        provider = select_llm_provider(settings=settings)
+        provider = select_llm_provider(settings=settings, environment={"PETRICHOR_ENV": "dev"})
         assert isinstance(provider, MistralProvider)
+        provider.close()
+
+    def test_mistral_key_in_production_is_a_fatal_guard(self) -> None:
+        # Same L3 guard as AUTH_DISABLED: the global key must never combine
+        # with PETRICHOR_ENV=production (web v1 §3, issue #208).
+        settings = ApiSettings(
+            llm_provider="mistral",
+            mistral_api_key=SecretStr("sk-test"),
+        )
+        with pytest.raises(ConfigurationError, match="MISTRAL_API_KEY"):
+            select_llm_provider(settings=settings, environment={"PETRICHOR_ENV": "production"})
+
+
+class TestMistralToken:
+    """The per-request Mistral token (web v1 §3, issue #208)."""
+
+    def test_missing_token_and_key_raises_before_any_http_call(self) -> None:
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(200, json=mistral_response("{}"))
+
+        provider = MistralProvider(http_client=fake_client(handler))
+        with pytest.raises(LLMTokenRequiredError) as excinfo:
+            provider.narrate(model=PHILOSOPHES3_MODEL, transitions=("takeL_1",))
+        assert excinfo.value.reason == "llm_token_required"
+        assert requests == []
+        provider.close()
+
+    def test_request_token_is_sent_instead_of_the_server_key(self) -> None:
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(
+                200,
+                json=mistral_response(
+                    json.dumps({"narrations": {"takeL_1": "Le philosophe 1 prend la fourchette."}})
+                ),
+            )
+
+        provider = MistralProvider(api_key=SecretStr("sk-server"), http_client=fake_client(handler))
+        provider.narrate(
+            model=PHILOSOPHES3_MODEL,
+            transitions=("takeL_1",),
+            api_token="sk-request",  # noqa: S106 - test literal, not a secret
+        )
+        assert requests[0].headers["Authorization"] == "Bearer sk-request"
+        provider.close()
+
+    def test_server_key_is_the_fallback_when_no_request_token(self) -> None:
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(
+                200,
+                json=mistral_response(
+                    json.dumps({"narrations": {"takeL_1": "Le philosophe 1 prend la fourchette."}})
+                ),
+            )
+
+        provider = MistralProvider(api_key=SecretStr("sk-server"), http_client=fake_client(handler))
+        provider.narrate(model=PHILOSOPHES3_MODEL, transitions=("takeL_1",))
+        assert requests[0].headers["Authorization"] == "Bearer sk-server"
+        provider.close()
+
+    def test_mistral_401_raises_typed_error_without_retry(self) -> None:
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return httpx.Response(401, json={"message": "Invalid API key"})
+
+        provider = MistralProvider(http_client=fake_client(handler))
+        with pytest.raises(MistralTokenInvalidError) as excinfo:
+            provider.narrate(
+                model=PHILOSOPHES3_MODEL,
+                transitions=("takeL_1",),
+                api_token="sk-bad",  # noqa: S106 - test literal, not a secret
+            )
+        assert excinfo.value.reason == "mistral_token_invalid"
+        assert len(requests) == 1  # never retried, never swallowed into degradation
+        assert provider.call_states()[-1].error == "token_invalid"
+        provider.close()
+
+    def test_token_never_appears_in_logs(self) -> None:
+        # The presented token must not leak into any log record (web v1 §3).
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(401, json={"message": "Invalid API key"})
+
+        provider = MistralProvider(http_client=fake_client(handler))
+        with (
+            structlog.testing.capture_logs() as logs,
+            pytest.raises(MistralTokenInvalidError),
+        ):
+            provider.narrate(
+                model=PHILOSOPHES3_MODEL,
+                transitions=("takeL_1",),
+                api_token="sk-secret-pat",  # noqa: S106 - test literal, not a secret
+            )
+        rendered = json.dumps(logs)
+        assert "sk-secret-pat" not in rendered
         provider.close()
 
 

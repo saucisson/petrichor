@@ -50,7 +50,7 @@ const EDIT_RESPONSE = {
   },
 };
 
-type FetchCall = { url: string; method: string; body?: string };
+type FetchCall = { url: string; method: string; body?: string; headers: Record<string, string> };
 
 let calls: FetchCall[] = [];
 
@@ -63,6 +63,7 @@ function mockFetch(routes: { match: (call: FetchCall) => boolean; respond: () =>
         url: String(input),
         method: init?.method ?? "GET",
         body: init?.body as string | undefined,
+        headers: (init?.headers ?? {}) as Record<string, string>,
       };
       calls.push(call);
       const route = routes.find((candidate) => candidate.match(call));
@@ -81,6 +82,8 @@ const CONTRACT_ROUTE = {
 beforeEach(() => {
   localStorage.clear();
   localStorage.setItem("petrichor.sessionId", "s1");
+  // Web v1 §3 (issue #208): the IA generation needs a Mistral token.
+  localStorage.setItem("petrichor.mistralToken", "sk-ui-test");
   applyLanguage("fr");
 });
 
@@ -113,6 +116,14 @@ describe("formule éditable (issue #125)", () => {
         calls.find((call) => call.url === "/v1/sessions/s1/questions/q1/formula")?.body,
       ).toBe(JSON.stringify({ formula: "AG(philo0 eating)" })),
     );
+    // Issue #208: the generation call carries the token header, the reads don't.
+    const editCall = calls.find((call) => call.url === "/v1/sessions/s1/questions/q1/formula");
+    expect(editCall?.headers["x-mistral-api-token"]).toBe("sk-ui-test");
+    const readCalls = calls.filter((call) => call.url !== "/v1/sessions/s1/questions/q1/formula");
+    expect(readCalls.length).toBeGreaterThan(0);
+    for (const call of readCalls) {
+      expect(call.headers["x-mistral-api-token"]).toBeUndefined();
+    }
     // The inverse reading is displayed, labeled provenance: llm (server text verbatim).
     await waitFor(() => expect(screen.getByText(/Toujours, philo0 mange\./)).toBeInTheDocument());
     expect(screen.getByText("(provenance : llm)")).toBeInTheDocument();
