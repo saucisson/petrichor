@@ -24,6 +24,11 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
+  # The published package is petrichor itself, the instance's product
+  # code: publishing it keeps the demonstrated release path exercised
+  # end to end, and trusted publishing carries no stored secret. An
+  # instance that ships nothing can delete this whole `publish` job -
+  # the `release-please` step above alone carries ADR-0001.
   publish:
     needs: release-please
     if: needs.release-please.outputs.released == 'true'

@@ -3,7 +3,9 @@
 The constitution of the agent team. Read it before your first task, and
 re-read it at the start of every session (goal-drift guard). The full
 working protocol is `docs/protocol.md`; every code rule and the review
-checklist are `docs/rules.md`. The reasoning behind each rule is in
+checklist are `docs/rules.md`. The agent-era engineering rules, which
+govern wherever documents overlap, are `docs/engineering-rules.md`
+(ADR-0008). The reasoning behind each rule is in
 `docs/decisions/`.
 
 ## Language
@@ -105,11 +107,13 @@ Never decide alone, at any severity - comment the structured request
 and label `needs-human` first:
 
 - anything security-relevant; any secret;
-- new dependencies, major version bumps;
+- new dependencies and major version bumps, except a dependency on
+  the versioned allowlist of `docs/engineering-rules.md` (N2);
 - architecture changes, schema or data migrations;
 - constitutional files: this file, `docs/protocol.md`, `docs/rules.md`,
-  `docs/decisions/`, lint, type and coverage configuration, the
-  `.vibe/` runtime profile, branch protections;
+  `docs/engineering-rules.md`, `docs/decisions/`, lint, type and
+  coverage configuration, the `.vibe/` runtime profile, branch
+  protections;
 - any decision worth an ADR (you may draft one in a PR, numbered from
   0100 - the 0001-0099 range belongs to the template; the human
   accepts it).

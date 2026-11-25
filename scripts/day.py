@@ -2,7 +2,7 @@
 
 ``day-report`` prints the end-of-day Markdown report for the daily
 branch, measured from the morning tag. Stdlib only, on purpose: the
-report must run in the bareest possible environment, because it is
+report must run in the barest possible environment, because it is
 executed exactly when the working day is being closed.
 
 ``sync-daily`` reconciles ``daily`` with ``origin/main`` (ADR-0005).

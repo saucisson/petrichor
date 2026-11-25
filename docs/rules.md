@@ -6,6 +6,11 @@ and the binary checklist the reviewer applies to every diff. It is
 `docs/decisions/README.md`). The reasoning behind every rule is in the
 ADRs referenced throughout.
 
+The agent-era engineering rules - the token economics, the typing and
+abstraction doctrine, the test doctrine, durable data, review
+allocation and the night loop - are `docs/engineering-rules.md`
+(ADR-0008). Where the two documents overlap, that document governs.
+
 The rules are **language- and tool-agnostic**: they bind any instance
 of the template, in whatever language it builds its product. The
 concrete tools enforcing them in this repository (Ruff, mypy, structlog,
@@ -229,7 +234,10 @@ binary**: yes or no, with `file:line` evidence for every "no".
 
 ### 7. Security and autonomy
 
-- [ ] No new dependency without an approved escalation.
+- [ ] No new dependency without an approved escalation, where the
+      versioned allowlist of `docs/engineering-rules.md` (N2) counts
+      as approval; until the allowlist file exists, everything
+      escalates.
 - [ ] The worklog entry (`docs/worklog/<date>-pr-<N>.md`) is present in
       the diff and its title is coherent with the change; for a direct
       commit on `daily`, the entry follows `docs/worklog/_template.md`.

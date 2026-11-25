@@ -18,6 +18,12 @@
       "automerge": true
     },
     {
+      "description": "Dev-group minor updates automerge when CI is green (N2: the runtime graph stays human-reviewed).",
+      "matchDepTypes": ["dependency-groups"],
+      "matchUpdateTypes": ["minor"],
+      "automerge": true
+    },
+    {
       "description": "Major bumps always require the human owner (escalation list, ADR-0006).",
       "matchUpdateTypes": ["major"],
       "automerge": false,

@@ -26,6 +26,12 @@ jobs:
       - name: Sync the locked environment
         run: uv sync --locked
 
+      - name: english-only front
+        run: uv run python -m scripts english-only
+
+      - name: Ruff lint annotations diagnostic
+        run: uv run ruff check . --output-format=github || true
+
       - name: Ruff lint
         run: uv run ruff check .
 
@@ -63,3 +69,9 @@ jobs:
           uv export --locked --no-emit-project --format requirements-txt \
             --output-file requirements.txt
           uvx pip-audit --requirement requirements.txt --strict
+
+      - name: Sync the locked environment
+        run: uv sync --locked
+
+      - name: License gate of the locked graph
+        run: uv run python -m scripts license-gate

@@ -24,7 +24,7 @@ Each ADR is one file, `adr-NNNN-short-name.md`, containing:
 - Superseded ADRs are removed from the repository; ADR numbers are
   never reused.
 - **Numbering**: ADR numbers `0001`-`0099` are reserved for the
-  template's own decisions (currently 0001-0007). A project
+  template's own decisions (currently 0001-0008). A project
   instantiated from this template numbers its own, project-specific
   ADRs from `0100` upward, so a template update can add new template
   ADRs without ever colliding with the project's.
@@ -53,3 +53,4 @@ lists the former numbers it merges, and no decision was dropped.
 | [0005](adr-0005-branch-model-and-worklog.md) | Branch model main/daily/work; criteria-checked merge, body-update and sync drivers; per-record worklog |
 | [0006](adr-0006-agent-protocol.md) | Two-agent protocol with isolated local review, budgets, contact channel, runtime permissions, active CI wait |
 | [0007](adr-0007-unattended-loop.md) | Unattended loop: one fresh headless session per item, claims first, recovery, anti-spin |
+| [0008](adr-0008-agent-era-engineering-rules.md) | Agent-era engineering rules: token economics, typing/abstraction and test doctrine, durable-data doctrine, review allocation, night-acceptance loop |
