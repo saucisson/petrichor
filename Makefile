@@ -9,8 +9,8 @@ DAY_TAG := daily-$(shell date +%F)
 
 .DEFAULT_GOAL := help
 .PHONY: help install lint format typecheck imports test check security build \
-        day-start day-report smoke-test mutate notify review merge-pr pr claim \
-        claim-pr update-pr wait-ci night review-bundle sync-daily clean
+        english-only day-start day-report smoke-test mutate notify review merge-pr \
+        pr claim claim-pr update-pr wait-ci night review-bundle sync-daily clean
 
 help: ## List available targets with their description.
 	@grep --extended-regexp '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -18,13 +18,16 @@ help: ## List available targets with their description.
 
 install: ## Install the environment and the pre-commit hooks.
 	$(UV) sync --locked
-	$(UV) run pre-commit install
+	$(UV) run pre-commit install --hook-type pre-commit --hook-type commit-msg
 
 lint: ## Lint every file (Ruff, ADR-0002/0004).
 	$(UV) run ruff check .
 
 format: ## Format every file in place (Ruff).
 	$(UV) run ruff format .
+
+english-only: ## Fail on French artifacts over the repository (ADR-0008 G4/N4).
+	$(PYTHON) -m scripts english-only
 
 typecheck: ## Run the reference type checker (mypy strict, ADR-0003).
 	$(UV) run mypy tools/notify/src tools/notify/tests scripts
@@ -35,7 +38,7 @@ imports: ## Verify the onion layer contract (import-linter, ADR-0002).
 test: ## Run the full test suite with the coverage floor (ADR-0004).
 	$(UV) run pytest
 
-check: lint typecheck imports test ## Full quality gate: run before reporting work.
+check: english-only lint typecheck imports test ## Full quality gate: run before reporting work.
 
 security: ## Secret scan of the whole history (gitleaks, ADR-0004).
 	gitleaks git --no-banner --redact .

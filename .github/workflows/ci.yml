@@ -26,6 +26,9 @@ jobs:
       - name: Sync the locked environment
         run: uv sync --locked
 
+      - name: english-only front
+        run: uv run python -m scripts english-only
+
       - name: Ruff lint
         run: uv run ruff check .
 

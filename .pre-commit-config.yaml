@@ -32,3 +32,10 @@ repos:
         entry: uv run lint-imports
         language: system
         pass_filenames: false
+
+      - id: english-subject
+        name: commit subjects are English (ADR-0008 N4)
+        entry: uv run python -m scripts english-only --subject-file
+        language: system
+        stages: [commit-msg]
+        always_run: true
