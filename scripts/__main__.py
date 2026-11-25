@@ -17,6 +17,7 @@ from scripts import (
     license_gate,
     merge,
     night,
+    probe,
     pulls,
     review,
     session,

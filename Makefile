@@ -10,7 +10,7 @@ DAY_TAG := daily-$(shell date +%F)
 .DEFAULT_GOAL := help
 .PHONY: help install lint format typecheck imports test check security build \
         english-only day-start day-report smoke-test mutate notify review merge-pr \
-        pr claim claim-pr update-pr wait-ci night review-bundle sync-daily clean
+        probe-merge pr claim claim-pr update-pr wait-ci night review-bundle sync-daily clean
 
 help: ## List available targets with their description.
 	@grep --extended-regexp '^[a-z-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -69,6 +69,9 @@ review: ## Run the local reviewer session on pull request PR=N (ADR-0006).
 
 merge-pr: ## Merge pull request PR=N into daily after review and CI (ADR-0005).
 	$(PYTHON) -m scripts merge-pr --pr-number $(PR)
+
+probe-merge: ## Replay this branch onto BASE=origin/daily, probe each commit (ADR-0008 N5/H5).
+	$(PYTHON) -m scripts probe-merge --base-ref "$(BASE)"
 
 pr: ## Open the pull request from the current branch: TITLE=... [BODY_FILE=...] (ADR-0007).
 	$(PYTHON) -m scripts pr --title "$(TITLE)" --body-file "$(BODY_FILE)"
