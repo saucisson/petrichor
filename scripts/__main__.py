@@ -14,6 +14,7 @@ from scripts import (
     claims,
     day,
     english,
+    license_gate,
     merge,
     night,
     pulls,
@@ -45,6 +46,7 @@ COMMAND_MODULES = (
     day,
     night,
     english,
+    license_gate,
 )
 
 
