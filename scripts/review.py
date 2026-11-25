@@ -11,11 +11,12 @@ pushed or CI not concluded on it - not a verdict, not an attempt).
 
 ``review-bundle`` assembles the deterministic review bundle: the
 reviewer's ENTIRE context - the rules document (role contract,
-architecture rules, review checklist), the ADRs, the pull request
-specification and the diff under review. Nothing else enters the
-prompt - context isolation is enforced by construction, not by
-prompt discipline. Stdlib only,
-so it runs in the bareest CI image: this module defers its
+architecture rules, review checklist), the engineering rules
+document (ADR-0008), the ADRs, the pull request specification
+and the diff under review. Nothing else enters the prompt -
+context isolation is enforced by construction, not by prompt
+discipline. Stdlib only,
+so it runs in the barest CI image: this module defers its
 ``httpx``-dependent imports into the ``review`` runner, on purpose.
 
 The developer agent runs ``review`` after opening a pull request and
@@ -49,6 +50,7 @@ if TYPE_CHECKING:
 
 REVIEW_DIRECTORY = REPOSITORY_ROOT / ".review"
 RULES_DOCUMENT_PATH = REPOSITORY_ROOT / "docs/rules.md"
+ENGINEERING_RULES_DOCUMENT_PATH = REPOSITORY_ROOT / "docs/engineering-rules.md"
 DECISIONS_DIRECTORY_PATH = REPOSITORY_ROOT / "docs/decisions"
 SECTION_SEPARATOR = "\n\n---\n\n"
 NO_DESCRIPTION_TEXT = "No pull request description was provided."
@@ -83,6 +85,10 @@ def render_bundle(
     """Assemble the bundle sections in a fixed, deterministic order."""
     sections: list[str] = []
     sections.append("## RULES AND CHECKLIST\n\n" + read_text_file(path=RULES_DOCUMENT_PATH))
+    sections.append(
+        "## ENGINEERING RULES AND CHECKLIST\n\n"
+        + read_text_file(path=ENGINEERING_RULES_DOCUMENT_PATH)
+    )
     for decision_title, decision_content in decisions:
         sections.append(f"## DECISION - {decision_title}\n\n{decision_content}")
     sections.append(f"## PULL REQUEST SPECIFICATION\n\n{description_text}")
@@ -275,7 +281,7 @@ def register(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) ->
 def run_review(*, arguments: argparse.Namespace) -> int:
     """Entry point: pull request number in, reviewer verdict out."""
     # Deferred import, on purpose: review-bundle (this module's other
-    # subcommand) stays stdlib-only and runs in the bareest CI image.
+    # subcommand) stays stdlib-only and runs in the barest CI image.
     from scripts import _github  # noqa: PLC0415
 
     github_token = load_github_token()
