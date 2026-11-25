@@ -8,7 +8,6 @@ network, a scripted outcome (same pattern as ``test_api_auth.StubVerifier``).
 from __future__ import annotations
 
 import httpx
-
 from petrichor.auth import AuthSettings, TokenClaims, TokenRejectedError, TokenVerifier
 
 TEST_PAT = "test-pat"
@@ -47,6 +46,7 @@ class StubVerifier(TokenVerifier):
     def __init__(
         self, *, settings: AuthSettings, outcome: TokenClaims | TokenRejectedError
     ) -> None:
+        """Store the scripted outcome on top of the no-network HTTP client."""
         super().__init__(
             settings=settings,
             http_client=httpx.Client(
@@ -56,6 +56,7 @@ class StubVerifier(TokenVerifier):
         self._outcome = outcome
 
     def verify_access_token(self, *, token: str) -> TokenClaims:
+        """Return the scripted outcome without any HTTP call."""
         if isinstance(self._outcome, TokenRejectedError):
             raise self._outcome
         return self._outcome
