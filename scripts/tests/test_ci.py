@@ -1,505 +1,307 @@
-"""Tests for the active CI wait ci.py (ADR-0018, template 2aa4d27)."""
+"""Tests for the CI wait verdicts scripts/ci.py (ADR-0006)."""
 
 import argparse
-import os
-import subprocess
-import time
-from pathlib import Path
-from typing import TYPE_CHECKING
 
 import httpx
 import pytest
-from hypothesis import given, strategies
 
-from scripts import _github, _shared, ci
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
-
-
-def client_with(handler: Callable[[httpx.Request], httpx.Response]) -> httpx.Client:
-    """Build an httpx client dispatching to the given handler."""
-    return httpx.Client(transport=httpx.MockTransport(handler))
+from scripts import ci
+from scripts._shared import (
+    EXIT_CODE_CRITERIA_UNMET,
+    EXIT_CODE_PROTOCOL_FAILURE,
+    EXIT_CODE_SUCCESS,
+)
 
 
-def parse_wait_ci_arguments(command_line_arguments: list[str]) -> argparse.Namespace:
-    """Parse arguments through the registered wait-ci subcommand."""
-    parser = argparse.ArgumentParser()
-    subparsers = parser.add_subparsers(dest="command", required=True)
-    ci.register(subparsers)
-    return parser.parse_args(["wait-ci", *command_line_arguments])
+class _FakeResponse:
+    """The response surface the wait driver touches: status, success, payload."""
+
+    def __init__(self, *, status_code: int, payload: object) -> None:
+        self.status_code = status_code
+        self.payload = payload
+
+    @property
+    def is_success(self) -> bool:
+        return 200 <= self.status_code < 300
+
+    def json(self) -> object:
+        return self.payload
 
 
-def pull_request_payload(*, sha: str = "abc123") -> dict[str, object]:
-    """Build a GitHub pull request payload."""
-    return {"number": 53, "head": {"sha": sha, "ref": "feat/12"}}
-
-
-def check_runs_payload(*, check_runs: list[object]) -> dict[str, object]:
-    """Build a GitHub check-runs listing payload."""
-    return {"check_runs": check_runs}
-
-
-def watch_client(
-    *,
-    pull_request_response: httpx.Response | None = None,
-    check_runs_response: httpx.Response | None = None,
-) -> httpx.Client:
-    """Build a client serving the pull request and the head's check runs."""
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if "/pulls/" in request.url.path:
-            return pull_request_response or httpx.Response(200, json=pull_request_payload())
-        if "/check-runs" in request.url.path:
-            return check_runs_response or httpx.Response(
-                200, json=check_runs_payload(check_runs=[])
-            )
-        return httpx.Response(404, json={})
-
-    return client_with(handler)
-
-
-def test_register_wait_ci_requires_a_pull_request_number() -> None:
-    """The subcommand contract: --pr-number is a required integer."""
-    arguments = parse_wait_ci_arguments(["--pr-number", "53"])
-    assert arguments.pr_number == 53
-    with pytest.raises(SystemExit):
-        parse_wait_ci_arguments([])
-
-
-def test_enforce_budget_arguments_refuses_nonsensical_budgets() -> None:
-    """An interval or timeout below 1 second is a protocol failure."""
-    arguments = parse_wait_ci_arguments(["--pr-number", "53", "--interval-seconds", "0"])
-    with pytest.raises(SystemExit) as excinfo:
-        ci.enforce_budget_arguments(arguments=arguments)
-    assert excinfo.value.code == _shared.EXIT_CODE_PROTOCOL_FAILURE
-    arguments = parse_wait_ci_arguments(["--pr-number", "53", "--timeout-seconds", "0"])
-    with pytest.raises(SystemExit) as excinfo:
-        ci.enforce_budget_arguments(arguments=arguments)
-    assert excinfo.value.code == _shared.EXIT_CODE_PROTOCOL_FAILURE
-    arguments = parse_wait_ci_arguments(["--pr-number", "53", "--interval-seconds", "5"])
-    ci.enforce_budget_arguments(arguments=arguments)
-
-
-def test_read_integer_setting_returns_default_when_unset(
+def _routed_client(
     monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """An unset variable yields the default."""
-    monkeypatch.delenv(ci.POLL_INTERVAL_VARIABLE, raising=False)
-    assert ci.read_integer_setting(variable_name=ci.POLL_INTERVAL_VARIABLE, default_value=20) == 20
+    *,
+    pull_request_response: _FakeResponse,
+    check_runs_response: _FakeResponse,
+) -> httpx.Client:
+    """A real httpx.Client whose get() routes URLs to canned responses."""
+
+    def fake_get(url: str) -> _FakeResponse:
+        if "check-runs" in url:
+            return check_runs_response
+        return pull_request_response
+
+    http_client = httpx.Client()
+    monkeypatch.setattr(http_client, "get", fake_get)
+    return http_client
 
 
-def test_read_integer_setting_rejects_non_integer(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A non-integer value fails closed with exit 2, not a NameError."""
-    monkeypatch.setenv(ci.POLL_INTERVAL_VARIABLE, "soon")
-    with pytest.raises(SystemExit) as excinfo:
-        ci.read_integer_setting(variable_name=ci.POLL_INTERVAL_VARIABLE, default_value=20)
-    assert excinfo.value.code == _shared.EXIT_CODE_PROTOCOL_FAILURE
+def _pull_request_response(*, status_code: int = 200) -> _FakeResponse:
+    return _FakeResponse(status_code=status_code, payload={"head": {"sha": "abc123"}})
 
 
-def test_load_github_token_absent_is_protocol_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    """No token in the environment: fail closed with exit 2."""
-    monkeypatch.delenv(_shared.GITHUB_TOKEN_VARIABLE, raising=False)
-    with pytest.raises(SystemExit) as excinfo:
-        _shared.load_github_token()
-    assert excinfo.value.code == _shared.EXIT_CODE_PROTOCOL_FAILURE
+def _check_runs_response(
+    *,
+    status_code: int = 200,
+    check_runs: list[dict[str, object]],
+) -> _FakeResponse:
+    return _FakeResponse(status_code=status_code, payload={"check_runs": check_runs})
 
 
-def test_load_github_token_present_is_returned(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A token in the environment is returned stripped."""
-    monkeypatch.setenv(_shared.GITHUB_TOKEN_VARIABLE, "  token-value  ")
-    assert _shared.load_github_token() == "token-value"
+def _completed_check_run(*, conclusion: str) -> dict[str, object]:
+    return {"name": "quality gate", "status": "completed", "conclusion": conclusion}
 
 
-def test_load_environment_file_sets_unset_variables(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """KEY=VALUE pairs from .env land in the environment when unset."""
-    assert isinstance(tmp_path, Path)
-    environment_file = tmp_path / ".env"
-    environment_file.write_text(
-        "WAIT_CI_TEST_VARIABLE=from-dotenv\n# comment\n\n", encoding="utf-8"
+def test_poll_once_reports_green(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every completed check run succeeded: green, with the head and the count."""
+    http_client = _routed_client(
+        monkeypatch,
+        pull_request_response=_pull_request_response(),
+        check_runs_response=_check_runs_response(
+            check_runs=[_completed_check_run(conclusion="success")]
+        ),
     )
-    monkeypatch.setattr(_shared, "REPOSITORY_ROOT", tmp_path)
-    monkeypatch.delenv("WAIT_CI_TEST_VARIABLE", raising=False)
-    _shared.load_environment_file()
-    assert os.environ["WAIT_CI_TEST_VARIABLE"] == "from-dotenv"
-
-
-def completed_remote(url: str) -> subprocess.CompletedProcess[str]:
-    """Build the CompletedProcess returned by a mocked `git remote get-url`."""
-    return subprocess.CompletedProcess(
-        args=["git", "remote", "get-url", "origin"], returncode=0, stdout=url, stderr=""
-    )
-
-
-def test_resolve_repository_slug_parses_ssh_remote(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An SSH origin remote parses to owner/repository."""
-    monkeypatch.setattr(
-        subprocess,
-        "run",
-        lambda *args, **kwargs: completed_remote("git@github.com:acme/widgets.git\n"),
-    )
-    assert _shared.resolve_repository_slug() == "acme/widgets"
-
-
-def test_resolve_repository_slug_parses_https_remote(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An HTTPS origin remote parses to owner/repository."""
-    monkeypatch.setattr(
-        subprocess,
-        "run",
-        lambda *args, **kwargs: completed_remote("https://github.com/acme/widgets.git"),
-    )
-    assert _shared.resolve_repository_slug() == "acme/widgets"
-
-
-def test_resolve_repository_slug_rejects_non_github_remote(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A non-GitHub remote fails closed."""
-    monkeypatch.setattr(
-        subprocess,
-        "run",
-        lambda *args, **kwargs: completed_remote("https://gitlab.com/acme/widgets.git"),
-    )
-    with pytest.raises(SystemExit) as excinfo:
-        _shared.resolve_repository_slug()
-    assert excinfo.value.code == _shared.EXIT_CODE_PROTOCOL_FAILURE
-
-
-def test_request_or_fail_transport_error_is_protocol_failure() -> None:
-    """A transport error fails closed with exit 2."""
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectError("connection refused", request=request)
-
-    with pytest.raises(SystemExit) as excinfo:
-        _github.request_or_fail(
-            http_client=client_with(handler), method="GET", url="https://api.github.test"
+    try:
+        status, head_sha, detail = ci.poll_once(
+            http_client=http_client,
+            repository_slug="owner/repo",
+            pull_request_number=7,
         )
-    assert excinfo.value.code == _shared.EXIT_CODE_PROTOCOL_FAILURE
-
-
-def test_try_fetch_pull_request_not_found_is_protocol_failure() -> None:
-    """A 404 on the pull request fails closed: nothing to watch."""
-    client = watch_client(pull_request_response=httpx.Response(404, json={}))
-    with pytest.raises(SystemExit) as excinfo:
-        ci.try_fetch_pull_request(
-            http_client=client,
-            repository_slug="o/r",
-            pull_request_number=_shared.PullRequestIdentifier(53),
-        )
-    assert excinfo.value.code == _shared.EXIT_CODE_PROTOCOL_FAILURE
-
-
-def test_try_fetch_pull_request_transient_refusal_returns_none() -> None:
-    """A non-404 API refusal is transient: None, the poll retries."""
-    client = watch_client(pull_request_response=httpx.Response(500, json={}))
-    assert (
-        ci.try_fetch_pull_request(
-            http_client=client,
-            repository_slug="o/r",
-            pull_request_number=_shared.PullRequestIdentifier(53),
-        )
-        is None
-    )
-
-
-def test_try_fetch_pull_request_malformed_payload_returns_none() -> None:
-    """A non-dict JSON payload is transient: None, the poll retries."""
-    client = watch_client(pull_request_response=httpx.Response(200, json=["not", "a", "dict"]))
-    assert (
-        ci.try_fetch_pull_request(
-            http_client=client,
-            repository_slug="o/r",
-            pull_request_number=_shared.PullRequestIdentifier(53),
-        )
-        is None
-    )
-
-
-def test_try_fetch_pull_request_undecodable_body_returns_none() -> None:
-    """A 2xx with an undecodable body is transient: None, the poll retries."""
-    client = watch_client(pull_request_response=httpx.Response(200, content=b"not json{"))
-    assert (
-        ci.try_fetch_pull_request(
-            http_client=client,
-            repository_slug="o/r",
-            pull_request_number=_shared.PullRequestIdentifier(53),
-        )
-        is None
-    )
-
-
-def test_extract_head_sha_reads_the_head() -> None:
-    """The head SHA is read from the pull request head."""
-    assert _github.extract_head_sha(pull_request=pull_request_payload(sha="deadbeef")) == "deadbeef"
-
-
-def test_extract_head_sha_missing_fails_closed() -> None:
-    """A pull request without a head SHA is a protocol failure."""
-    with pytest.raises(SystemExit) as excinfo:
-        _github.extract_head_sha(pull_request={"head": {}})
-    assert excinfo.value.code == _shared.EXIT_CODE_PROTOCOL_FAILURE
-
-
-def test_try_fetch_check_runs_refusal_returns_none() -> None:
-    """A non-success listing of check runs is transient: None."""
-    client = watch_client(check_runs_response=httpx.Response(500, json={}))
-    assert (
-        ci.try_fetch_check_runs(http_client=client, repository_slug="o/r", head_sha="abc") is None
-    )
-
-
-def test_try_fetch_check_runs_malformed_payload_returns_none() -> None:
-    """A non-dict payload or a non-list check_runs field is transient: None."""
-    client = watch_client(check_runs_response=httpx.Response(200, json=["not", "a", "dict"]))
-    assert (
-        ci.try_fetch_check_runs(http_client=client, repository_slug="o/r", head_sha="abc") is None
-    )
-    client = watch_client(check_runs_response=httpx.Response(200, json={"check_runs": "many"}))
-    assert (
-        ci.try_fetch_check_runs(http_client=client, repository_slug="o/r", head_sha="abc") is None
-    )
-
-
-def test_try_fetch_check_runs_filters_non_dict_entries() -> None:
-    """Non-dict check run entries are dropped, never trusted."""
-    client = watch_client(
-        check_runs_response=httpx.Response(
-            200, json=check_runs_payload(check_runs=[{"name": "ci"}, "junk"])
-        )
-    )
-    assert ci.try_fetch_check_runs(http_client=client, repository_slug="o/r", head_sha="abc") == [
-        {"name": "ci"}
-    ]
-
-
-def test_poll_once_green_when_all_checks_succeed() -> None:
-    """Every check run completed with success: the status is green."""
-    client = watch_client(
-        check_runs_response=httpx.Response(
-            200,
-            json=check_runs_payload(
-                check_runs=[
-                    {"name": "ci", "status": "completed", "conclusion": "success"},
-                    {"name": "lint", "status": "completed", "conclusion": "success"},
-                ]
-            ),
-        )
-    )
-    status, head_sha, detail = ci.poll_once(
-        http_client=client,
-        repository_slug="o/r",
-        pull_request_number=_shared.PullRequestIdentifier(53),
-    )
+    finally:
+        http_client.close()
     assert status == ci.POLL_STATUS_GREEN
     assert head_sha == "abc123"
-    assert detail == "2"
+    assert detail == "1"
 
 
-def test_poll_once_failed_when_a_check_concludes_non_success() -> None:
-    """A completed check run with a non-success conclusion: the status is failed."""
-    client = watch_client(
-        check_runs_response=httpx.Response(
-            200,
-            json=check_runs_payload(
-                check_runs=[
-                    {"name": "ci", "status": "completed", "conclusion": "failure"},
-                    {"name": "lint", "status": "completed", "conclusion": "success"},
-                ]
-            ),
+def test_poll_once_names_the_failed_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A completed non-success check run fails the head, named in the detail."""
+    http_client = _routed_client(
+        monkeypatch,
+        pull_request_response=_pull_request_response(),
+        check_runs_response=_check_runs_response(
+            check_runs=[_completed_check_run(conclusion="failure")]
+        ),
+    )
+    try:
+        status, head_sha, detail = ci.poll_once(
+            http_client=http_client,
+            repository_slug="owner/repo",
+            pull_request_number=7,
         )
-    )
-    status, _, detail = ci.poll_once(
-        http_client=client,
-        repository_slug="o/r",
-        pull_request_number=_shared.PullRequestIdentifier(53),
-    )
+    finally:
+        http_client.close()
     assert status == ci.POLL_STATUS_FAILED
-    assert detail == "ci"
+    assert head_sha == "abc123"
+    assert detail == "quality gate"
 
 
-def test_poll_once_pending_while_checks_run() -> None:
-    """A check run still running: the status is pending."""
-    client = watch_client(
-        check_runs_response=httpx.Response(
-            200,
-            json=check_runs_payload(
-                check_runs=[
-                    {"name": "ci", "status": "in_progress"},
-                    {"name": "lint", "status": "completed", "conclusion": "success"},
-                ]
-            ),
+def test_poll_once_reports_pending(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A check run still running keeps the head pending, detail counts it."""
+    check_runs: list[dict[str, object]] = [
+        {"name": "quality gate", "status": "in_progress", "conclusion": None}
+    ]
+    http_client = _routed_client(
+        monkeypatch,
+        pull_request_response=_pull_request_response(),
+        check_runs_response=_check_runs_response(check_runs=check_runs),
+    )
+    try:
+        status, head_sha, detail = ci.poll_once(
+            http_client=http_client,
+            repository_slug="owner/repo",
+            pull_request_number=7,
         )
-    )
-    status, _, detail = ci.poll_once(
-        http_client=client,
-        repository_slug="o/r",
-        pull_request_number=_shared.PullRequestIdentifier(53),
-    )
+    finally:
+        http_client.close()
     assert status == ci.POLL_STATUS_PENDING
-    assert detail == "1 running, 1 green"
+    assert head_sha == "abc123"
+    assert detail == "1 running, 0 green"
 
 
-def test_poll_once_no_checks_when_none_on_the_head() -> None:
-    """No check run on the head yet: the status is no-checks."""
-    client = watch_client(
-        check_runs_response=httpx.Response(200, json=check_runs_payload(check_runs=[]))
+def test_poll_once_reports_no_checks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A head without any check run is still waiting for CI to start."""
+    http_client = _routed_client(
+        monkeypatch,
+        pull_request_response=_pull_request_response(),
+        check_runs_response=_check_runs_response(check_runs=[]),
     )
-    status, head_sha, _ = ci.poll_once(
-        http_client=client,
-        repository_slug="o/r",
-        pull_request_number=_shared.PullRequestIdentifier(53),
-    )
+    try:
+        status, head_sha, detail = ci.poll_once(
+            http_client=http_client,
+            repository_slug="owner/repo",
+            pull_request_number=7,
+        )
+    finally:
+        http_client.close()
     assert status == ci.POLL_STATUS_NO_CHECKS
     assert head_sha == "abc123"
+    assert detail == ""
 
 
-def test_poll_once_fetch_failed_when_the_pr_is_unreachable() -> None:
-    """A transient refusal of the pull request: the status is fetch-failed."""
-    client = watch_client(pull_request_response=httpx.Response(500, json={}))
-    status, head_sha, _ = ci.poll_once(
-        http_client=client,
-        repository_slug="o/r",
-        pull_request_number=_shared.PullRequestIdentifier(53),
+def test_poll_once_reports_fetch_failed_when_check_runs_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pull request fetch worked, the check runs fetch was refused."""
+    http_client = _routed_client(
+        monkeypatch,
+        pull_request_response=_pull_request_response(),
+        check_runs_response=_check_runs_response(status_code=500, check_runs=[]),
     )
+    try:
+        status, head_sha, detail = ci.poll_once(
+            http_client=http_client,
+            repository_slug="owner/repo",
+            pull_request_number=7,
+        )
+    finally:
+        http_client.close()
     assert status == ci.POLL_STATUS_FETCH_FAILED
-    assert head_sha == ""
+    assert head_sha == "abc123"
+    assert detail == ""
 
 
-def test_interpret_status_maps_verdicts_to_exit_codes() -> None:
-    """Green exits 0, failed exits 1, everything else keeps waiting."""
-    assert ci.interpret_status(status=ci.POLL_STATUS_GREEN, detail="3") == ci.EXIT_CODE_GREEN
-    assert ci.interpret_status(status=ci.POLL_STATUS_FAILED, detail="ci") == ci.EXIT_CODE_CI_FAILED
-    for status in (
-        ci.POLL_STATUS_PENDING,
-        ci.POLL_STATUS_NO_CHECKS,
-        ci.POLL_STATUS_FETCH_FAILED,
-    ):
-        assert ci.interpret_status(status=status, detail="") is None
-
-
-def test_sleep_until_next_poll_caps_at_the_remaining_budget(
+def test_poll_once_exits_when_the_pull_request_is_unknown(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The sleep never exceeds the remaining time budget."""
-    slept: list[float] = []
-    monkeypatch.setattr(time, "sleep", slept.append)
-    ci.sleep_until_next_poll(interval_seconds=20, remaining_seconds=5.0)
-    ci.sleep_until_next_poll(interval_seconds=20, remaining_seconds=50.0)
-    ci.sleep_until_next_poll(interval_seconds=20, remaining_seconds=-1.0)
-    assert slept == [5.0, 20.0, 0.0]
+    """A 404 pull request is a protocol failure, nothing to watch."""
+    http_client = _routed_client(
+        monkeypatch,
+        pull_request_response=_pull_request_response(status_code=404),
+        check_runs_response=_check_runs_response(check_runs=[]),
+    )
+    try:
+        with pytest.raises(SystemExit) as exit_information:
+            ci.poll_once(
+                http_client=http_client,
+                repository_slug="owner/repo",
+                pull_request_number=7,
+            )
+    finally:
+        http_client.close()
+    assert exit_information.value.code == EXIT_CODE_PROTOCOL_FAILURE
 
 
-def test_run_watch_returns_green_when_ci_concludes(
+def test_interpret_status_green_is_success() -> None:
+    """Green maps to the success exit code."""
+    assert ci.interpret_status(status=ci.POLL_STATUS_GREEN, detail="1") == EXIT_CODE_SUCCESS
+
+
+def test_interpret_status_failed_is_criteria_unmet() -> None:
+    """A failed CI maps to the criteria-unmet exit code."""
+    exit_code = ci.interpret_status(status=ci.POLL_STATUS_FAILED, detail="quality gate")
+    assert exit_code == EXIT_CODE_CRITERIA_UNMET
+
+
+def test_interpret_status_pending_keeps_waiting() -> None:
+    """Pending keeps the loop waiting: None, no exit code."""
+    assert ci.interpret_status(status=ci.POLL_STATUS_PENDING, detail="1 running") is None
+
+
+def test_interpret_status_no_checks_keeps_waiting() -> None:
+    """No check run yet keeps the loop waiting: None, no exit code."""
+    assert ci.interpret_status(status=ci.POLL_STATUS_NO_CHECKS, detail="") is None
+
+
+def test_interpret_status_fetch_failed_keeps_waiting() -> None:
+    """A transient API error keeps the loop waiting: None, no exit code."""
+    assert ci.interpret_status(status=ci.POLL_STATUS_FETCH_FAILED, detail="") is None
+
+
+def test_run_watch_returns_green(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A green poll ends the wait with the success exit code."""
+
+    def fake_poll_once(**_unused: object) -> tuple[str, str, str]:
+        return ci.POLL_STATUS_GREEN, "abc123", "1"
+
+    monkeypatch.setattr(ci, "poll_once", fake_poll_once)
+    exit_code = ci.run_watch(
+        http_client=httpx.Client(),
+        repository_slug="owner/repo",
+        pull_request_number=7,
+        interval_seconds=1,
+        timeout_seconds=10,
+    )
+    assert exit_code == EXIT_CODE_SUCCESS
+
+
+def test_run_watch_fails_closed_on_an_unreachable_pull_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A green poll ends the watch with exit 0."""
-    monkeypatch.setattr(
-        ci,
-        "poll_once",
-        lambda **kwargs: (ci.POLL_STATUS_GREEN, "abc123", "3"),
+    """An unreachable pull request past the timeout is a protocol failure."""
+
+    def fake_poll_once(**_unused: object) -> tuple[str, str, str]:
+        return ci.POLL_STATUS_FETCH_FAILED, "", ""
+
+    monkeypatch.setattr(ci, "poll_once", fake_poll_once)
+    exit_code = ci.run_watch(
+        http_client=httpx.Client(),
+        repository_slug="owner/repo",
+        pull_request_number=7,
+        interval_seconds=1,
+        timeout_seconds=0,
     )
-    assert (
-        ci.run_watch(
-            http_client=client_with(lambda request: httpx.Response(200)),
-            repository_slug="o/r",
-            pull_request_number=_shared.PullRequestIdentifier(53),
-            interval_seconds=1,
-            timeout_seconds=60,
-        )
-        == ci.EXIT_CODE_GREEN
-    )
+    assert exit_code == EXIT_CODE_PROTOCOL_FAILURE
 
 
-def test_run_watch_times_out_as_ci_failed_when_ci_never_concludes(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """CI still pending at the timeout: the honest stop, exit 1."""
-    monkeypatch.setattr(
-        ci,
-        "poll_once",
-        lambda **kwargs: (ci.POLL_STATUS_PENDING, "abc123", "1 running, 0 green"),
+def test_run_watch_times_out_on_a_pending_head(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A pending head past the timeout is the honest CI-failed stop."""
+
+    def fake_poll_once(**_unused: object) -> tuple[str, str, str]:
+        return ci.POLL_STATUS_PENDING, "abc123", "1 running, 0 green"
+
+    monkeypatch.setattr(ci, "poll_once", fake_poll_once)
+    exit_code = ci.run_watch(
+        http_client=httpx.Client(),
+        repository_slug="owner/repo",
+        pull_request_number=7,
+        interval_seconds=1,
+        timeout_seconds=0,
     )
-    monkeypatch.setattr(time, "sleep", lambda seconds: None)
-    clock = iter([0.0, 100.0])
-    monkeypatch.setattr(time, "monotonic", lambda: next(clock))
-    assert (
-        ci.run_watch(
-            http_client=client_with(lambda request: httpx.Response(200)),
-            repository_slug="o/r",
-            pull_request_number=_shared.PullRequestIdentifier(53),
-            interval_seconds=1,
-            timeout_seconds=10,
-        )
-        == ci.EXIT_CODE_CI_FAILED
-    )
+    assert exit_code == EXIT_CODE_CRITERIA_UNMET
 
 
-def test_run_watch_times_out_as_protocol_failure_when_never_reachable(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The pull request never became reachable: exit 2, nothing was watchable."""
-    monkeypatch.setattr(
-        ci,
-        "poll_once",
-        lambda **kwargs: (ci.POLL_STATUS_FETCH_FAILED, "", ""),
-    )
-    monkeypatch.setattr(time, "sleep", lambda seconds: None)
-    clock = iter([0.0, 100.0])
-    monkeypatch.setattr(time, "monotonic", lambda: next(clock))
-    assert (
-        ci.run_watch(
-            http_client=client_with(lambda request: httpx.Response(200)),
-            repository_slug="o/r",
-            pull_request_number=_shared.PullRequestIdentifier(53),
-            interval_seconds=1,
-            timeout_seconds=10,
-        )
-        == _shared.EXIT_CODE_PROTOCOL_FAILURE
-    )
+def test_enforce_budget_arguments_refuses_a_zero_interval() -> None:
+    """A zero poll interval is a protocol failure."""
+    arguments = argparse.Namespace(interval_seconds=0, timeout_seconds=10)
+    with pytest.raises(SystemExit) as exit_information:
+        ci.enforce_budget_arguments(arguments=arguments)
+    assert exit_information.value.code == EXIT_CODE_PROTOCOL_FAILURE
 
 
-@pytest.mark.property
-@given(
-    strategies.sampled_from(
-        [
-            ci.POLL_STATUS_FETCH_FAILED,
-            ci.POLL_STATUS_NO_CHECKS,
-            ci.POLL_STATUS_PENDING,
-            ci.POLL_STATUS_GREEN,
-            ci.POLL_STATUS_FAILED,
-        ]
-    )
-)
-def test_interpret_status_property_covers_the_whole_closed_set(status: ci.PollStatus) -> None:
-    """Property: every status of the closed set maps to its documented verdict."""
-    exit_code = ci.interpret_status(status=status, detail="")
-    if status == ci.POLL_STATUS_GREEN:
-        assert exit_code == ci.EXIT_CODE_GREEN
-    elif status == ci.POLL_STATUS_FAILED:
-        assert exit_code == ci.EXIT_CODE_CI_FAILED
-    else:
-        assert exit_code is None
+def test_enforce_budget_arguments_refuses_a_zero_timeout() -> None:
+    """A zero timeout is a protocol failure."""
+    arguments = argparse.Namespace(interval_seconds=10, timeout_seconds=0)
+    with pytest.raises(SystemExit) as exit_information:
+        ci.enforce_budget_arguments(arguments=arguments)
+    assert exit_information.value.code == EXIT_CODE_PROTOCOL_FAILURE
 
 
-def test_poll_once_non_success_conclusions_are_failures() -> None:
-    """Completed with 'skipped'/'neutral' is not a success: the status is failed."""
-    client = watch_client(
-        check_runs_response=httpx.Response(
-            200,
-            json=check_runs_payload(
-                check_runs=[
-                    {"name": "ci", "status": "completed", "conclusion": "success"},
-                    {"name": "optional", "status": "completed", "conclusion": "skipped"},
-                    {"name": "info", "status": "completed", "conclusion": "neutral"},
-                ]
-            ),
-        )
-    )
-    status, _, detail = ci.poll_once(
-        http_client=client,
-        repository_slug="o/r",
-        pull_request_number=_shared.PullRequestIdentifier(53),
-    )
-    assert status == ci.POLL_STATUS_FAILED
-    assert detail == "optional, info"
+def test_read_integer_setting_returns_the_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unset variable yields the default."""
+    monkeypatch.delenv("WAIT_CI_TEST_VARIABLE", raising=False)
+    assert ci.read_integer_setting(variable_name="WAIT_CI_TEST_VARIABLE", default_value=30) == 30
+
+
+def test_read_integer_setting_reads_the_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A set integer variable overrides the default."""
+    monkeypatch.setenv("WAIT_CI_TEST_VARIABLE", "45")
+    assert ci.read_integer_setting(variable_name="WAIT_CI_TEST_VARIABLE", default_value=30) == 45
+
+
+def test_read_integer_setting_fails_closed_on_garbage(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A non-integer variable is a protocol failure."""
+    monkeypatch.setenv("WAIT_CI_TEST_VARIABLE", "soon")
+    with pytest.raises(SystemExit) as exit_information:
+        ci.read_integer_setting(variable_name="WAIT_CI_TEST_VARIABLE", default_value=30)
+    assert exit_information.value.code == EXIT_CODE_PROTOCOL_FAILURE

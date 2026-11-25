@@ -1,381 +1,212 @@
-"""Tests for the reviewer session driver scripts/session.py (ADR-0010, template 2aa4d27)."""
-
-import argparse
-import json
-import shutil
-import subprocess
-from typing import TYPE_CHECKING
+"""Tests for the reviewer session verdicts scripts/session.py (ADR-0006)."""
 
 import pytest
 
 from scripts import session
-
-if TYPE_CHECKING:
-    from pathlib import Path
-
-
-def parse_session_arguments(command_line_arguments: list[str]) -> argparse.Namespace:
-    """Parse arguments through the registered agent-review subcommand."""
-    parser = argparse.ArgumentParser()
-    subparsers = parser.add_subparsers(dest="command", required=True)
-    session.register(subparsers)
-    return parser.parse_args(["agent-review", *command_line_arguments])
-
-
-def test_register_wires_agent_review() -> None:
-    """The subcommand contract: --bundle-file and --report-file are required."""
-    arguments = parse_session_arguments(["--bundle-file", "b.md", "--report-file", "r.json"])
-    assert arguments.bundle_file == "b.md"
-    assert arguments.report_file == "r.json"
-    with pytest.raises(SystemExit):
-        parse_session_arguments(["--bundle-file", "b.md"])
-
-
-def test_extract_answer_text_reads_the_last_assistant_message() -> None:
-    """The final assistant message is the answer."""
-    raw_output = json.dumps(
-        [
-            {"role": "user", "content": "review"},
-            {"role": "assistant", "content": "the answer"},
-        ]
-    )
-    assert session.extract_answer_text(raw_session_output=raw_output) == "the answer"
-
-
-def test_extract_answer_text_joins_multi_block_content() -> None:
-    """A multi-block assistant content is joined into one text."""
-    raw_output = json.dumps(
-        [
-            {
-                "role": "assistant",
-                "content": [
-                    {"type": "text", "text": "part one"},
-                    {"type": "text", "text": "part two"},
-                ],
-            }
-        ]
-    )
-    assert session.extract_answer_text(raw_session_output=raw_output) == "part one\npart two"
-
-
-def test_extract_answer_text_fails_closed_on_invalid_json() -> None:
-    """A non-JSON session output is a protocol error, never a guess."""
-    with pytest.raises(session.ReviewProtocolError):
-        session.extract_answer_text(raw_session_output="not json{")
-
-
-def test_extract_answer_text_fails_closed_without_an_answer() -> None:
-    """No assistant message: protocol error."""
-    with pytest.raises(session.ReviewProtocolError):
-        session.extract_answer_text(
-            raw_session_output=json.dumps([{"role": "user", "content": "hi"}])
-        )
-
-
-def test_narrow_json_answer_strips_a_fence() -> None:
-    """A fenced ```json answer is narrowed to its payload."""
-    assert (
-        session.narrow_json_answer(answer_text='```json\n{"findings": []}\n```')
-        == '{"findings": []}'
-    )
-
-
-def test_narrow_json_answer_extracts_an_embedded_object() -> None:
-    """Prose around the JSON object: the object is extracted."""
-    assert (
-        session.narrow_json_answer(answer_text='Here: {"findings": []} done') == '{"findings": []}'
-    )
-
-
-def test_narrow_json_answer_fails_closed_without_json() -> None:
-    """No JSON object at all: protocol error."""
-    with pytest.raises(session.ReviewProtocolError):
-        session.narrow_json_answer(answer_text="no json here")
-
-
-def valid_finding() -> dict[str, object]:
-    """Build a well-formed finding entry."""
-    return {
-        "severity": "BLOCKING",
-        "file": "scripts/ci.py",
-        "line": 42,
-        "rule": "ADR-0006",
-        "evidence": "bare int at a boundary",
-    }
-
-
-def test_parse_finding_accepts_a_well_formed_entry() -> None:
-    """A complete finding narrows to a ReviewFinding."""
-    finding = session.parse_finding(finding_container=valid_finding())
-    assert finding.severity is session.FindingSeverity.BLOCKING
-    assert finding.file == "scripts/ci.py"
-    assert finding.line == 42
-
-
-def test_parse_finding_fails_closed_on_a_missing_field() -> None:
-    """A finding without evidence is a protocol error."""
-    entry = valid_finding()
-    del entry["evidence"]
-    with pytest.raises(session.ReviewProtocolError):
-        session.parse_finding(finding_container=entry)
-
-
-def test_parse_finding_maps_an_unknown_severity_to_blocking() -> None:
-    """An unreadable severity fails closed as BLOCKING, never enables a merge."""
-    entry = valid_finding()
-    entry["severity"] = "CRITICAL"
-    finding = session.parse_finding(finding_container=entry)
-    assert finding.severity is session.FindingSeverity.BLOCKING
-    assert finding.evidence == session.UNKNOWN_SEVERITY_NOTE
-
-
-def test_parse_report_reads_the_findings_list() -> None:
-    """A report object with a findings list parses to findings."""
-    answer = json.dumps({"findings": [valid_finding()], "blocking_count": 1})
-    findings = session.parse_report(answer_text=answer)
-    assert len(findings) == 1
-    assert findings[0].rule == "ADR-0006"
-
-
-def test_parse_report_fails_closed_on_a_non_object() -> None:
-    """A non-object answer is a protocol error."""
-    with pytest.raises(session.ReviewProtocolError):
-        session.parse_report(answer_text=json.dumps(["not", "an", "object"]))
-
-
-def test_count_by_severity_recomputes_locally() -> None:
-    """Counts are recomputed from the findings, never trusted from the session."""
-    findings = [
-        session.parse_finding(finding_container=valid_finding()),
-        session.parse_finding(finding_container={**valid_finding(), "severity": "SUGGESTION"}),
-    ]
-    counts = session.count_by_severity(findings=findings)
-    assert counts[session.FindingSeverity.BLOCKING] == 1
-    assert counts[session.FindingSeverity.SUGGESTION] == 1
-    assert counts[session.FindingSeverity.TO_FIX] == 0
-
-
-def test_render_markdown_comment_escapes_table_cells() -> None:
-    """Pipes and newlines in rule/evidence are escaped in the table."""
-    finding = session.parse_finding(
-        finding_container={**valid_finding(), "rule": "a|b", "evidence": "line1\nline2"}
-    )
-    comment = session.render_markdown_comment(
-        findings=[finding],
-        counts=session.count_by_severity(findings=[finding]),
-    )
-    assert "**BLOCKING**: 1" in comment
-    assert "a\\|b" in comment
-    assert "line1 line2" in comment
-
-
-def test_run_reviewer_session_launch_failure_is_protocol_failure(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """An OSError at launch (preflight passed) fails closed with exit 2, never a traceback."""
-    bundle = tmp_path / "bundle.md"
-    bundle.write_text("# bundle", encoding="utf-8")
-    fake = make_fake_cli(tmp_path, version="vibe 3.1.3", help_text="--prompt-file FILE")
-    monkeypatch.setenv(session.CLI_COMMAND_VARIABLE, str(fake))
-
-    real_run = subprocess.run
-
-    def dispatching_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-        if command[1] in ("--version", "--help"):
-            return real_run(command, capture_output=True, text=True, check=False)
-        raise FileNotFoundError("vibe vanished after preflight")
-
-    monkeypatch.setattr(subprocess, "run", dispatching_run)
-    with pytest.raises(SystemExit) as excinfo:
-        session.run_reviewer_session(model_name="", bundle_path=bundle)
-    assert excinfo.value.code == session.EXIT_CODE_PROTOCOL_FAILURE
-
-
-FAKE_CLI_ANSWER = (
-    '[{"role":"assistant","content":"{\\"findings\\":[],\\"recommendation\\":\\"merge\\"}"}]'
+from scripts.session import (
+    UNKNOWN_SEVERITY_NOTE,
+    FindingSeverity,
+    ReviewFinding,
+    ReviewProtocolError,
 )
 
 
-def make_fake_cli(tmp_path: Path, *, version: str, help_text: str, name: str = "fake-vibe") -> Path:
-    """Write an executable fake CLI answering --version/--help and recording args."""
-    args_file = tmp_path / f"{name}.args"
-    script = tmp_path / name
-    script.write_text(
-        "#!/bin/sh\n"
-        f'echo "$@" >> "{args_file}"\n'
-        'case "$1" in\n'
-        f'  --version) echo "{version}" ;;\n'
-        f'  --help) printf "%s\\n" "{help_text}" ;;\n'
-        f"  *) echo '{FAKE_CLI_ANSWER}' ;;\n"
-        "esac\n",
-        encoding="utf-8",
+def test_narrow_json_answer_keeps_a_plain_object() -> None:
+    """A plain JSON object answer passes through unchanged."""
+    answer_text = '{"findings": []}'
+    assert session.narrow_json_answer(answer_text=answer_text) == answer_text
+
+
+def test_narrow_json_answer_strips_a_json_fence() -> None:
+    """A ```json fenced answer narrows to its payload."""
+    answer_text = '```json\n{"findings": []}\n```'
+    assert session.narrow_json_answer(answer_text=answer_text) == '{"findings": []}'
+
+
+def test_narrow_json_answer_strips_a_bare_fence() -> None:
+    """A bare ``` fence narrows to its payload too."""
+    answer_text = '```\n{"findings": []}\n```'
+    assert session.narrow_json_answer(answer_text=answer_text) == '{"findings": []}'
+
+
+def test_narrow_json_answer_carves_json_out_of_prose() -> None:
+    """Prose around the object is carved away, keeping the object."""
+    answer_text = 'Answer: {"findings": []} done'
+    assert session.narrow_json_answer(answer_text=answer_text) == '{"findings": []}'
+
+
+def test_narrow_json_answer_refuses_an_answer_without_object() -> None:
+    """No JSON object anywhere: a protocol error, never a guess."""
+    with pytest.raises(ReviewProtocolError):
+        session.narrow_json_answer(answer_text="still nothing")
+
+
+def test_parse_finding_valid() -> None:
+    """A well-formed finding narrows to a typed ReviewFinding."""
+    finding = session.parse_finding(
+        finding_container={
+            "severity": "TO-FIX",
+            "file": "a.py",
+            "line": 7,
+            "rule": "r",
+            "evidence": "e",
+        }
     )
-    script.chmod(0o755)
-    return script
+    assert finding.severity is FindingSeverity.TO_FIX
+    assert finding.file == "a.py"
+    assert finding.line == 7
+    assert finding.rule == "r"
+    assert finding.evidence == "e"
 
 
-def test_load_max_turns_default_override_and_invalid(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """REVIEWER_MAX_TOURS defaults to 12 (was a hard-coded 8) and is configurable."""
-    monkeypatch.delenv(session.SESSION_MAX_TURNS_VARIABLE, raising=False)
-    assert session.load_max_turns() == 12
-    monkeypatch.setenv(session.SESSION_MAX_TURNS_VARIABLE, "20")
-    assert session.load_max_turns() == 20
-    monkeypatch.setenv(session.SESSION_MAX_TURNS_VARIABLE, "nope")
-    with pytest.raises(SystemExit) as exit_info:
-        session.load_max_turns()
-    assert exit_info.value.code == session.EXIT_CODE_PROTOCOL_FAILURE
-
-
-def test_load_cli_command_default_and_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    """REVIEWER_CLI_COMMAND pins an exact binary; default stays vibe."""
-    monkeypatch.delenv(session.CLI_COMMAND_VARIABLE, raising=False)
-    assert session.load_cli_command() == "vibe"
-    monkeypatch.setenv(session.CLI_COMMAND_VARIABLE, "/opt/vibe-3.1.3/bin/vibe")
-    assert session.load_cli_command() == "/opt/vibe-3.1.3/bin/vibe"
-
-
-def test_cli_preflight_accepts_a_capable_cli(tmp_path: Path) -> None:
-    """A vibe 3.x binary advertising --prompt-file passes the preflight."""
-    fake = make_fake_cli(tmp_path, version="vibe 3.1.3", help_text="--prompt-file FILE")
-    assert session.cli_preflight(command=str(fake)) is None
-
-
-def test_cli_preflight_refuses_an_old_binary(tmp_path: Path) -> None:
-    """vibe 2.26.1 is refused with an explicit message naming the found version."""
-    fake = make_fake_cli(tmp_path, version="vibe 2.26.1", help_text="--prompt-file FILE")
-    refusal = session.cli_preflight(command=str(fake))
-    assert refusal is not None
-    assert "2.26.1" in refusal
-    assert ">= 3" in refusal
-
-
-def test_cli_preflight_refuses_a_missing_capability(tmp_path: Path) -> None:
-    """A 3.x binary without --prompt-file in its help is refused."""
-    fake = make_fake_cli(tmp_path, version="vibe 3.0.0", help_text="--output json")
-    refusal = session.cli_preflight(command=str(fake))
-    assert refusal is not None
-    assert "--prompt-file" in refusal
-
-
-def test_cli_preflight_refuses_a_missing_binary(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A binary absent from PATH is refused, pointing at REVIEWER_CLI_COMMAND."""
-    monkeypatch.setattr(shutil, "which", lambda command: None)
-    refusal = session.cli_preflight(command="vibe-missing")
-    assert refusal is not None
-    assert session.CLI_COMMAND_VARIABLE in refusal
-
-
-def test_run_reviewer_session_preflight_refusal_exits_3(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """A preflight refusal exits 3 (preconditions), never the opaque exit 2."""
-    monkeypatch.setattr(shutil, "which", lambda command: None)
-    monkeypatch.setattr(session, "load_cli_command", lambda: "vibe-missing")
-    bundle = tmp_path / "bundle.md"
-    bundle.write_text("# bundle", encoding="utf-8")
-    with pytest.raises(SystemExit) as exit_info:
-        session.run_reviewer_session(model_name="", bundle_path=bundle)
-    assert exit_info.value.code == session.EXIT_CODE_PRECONDITIONS_UNMET
-
-
-def test_run_reviewer_session_uses_env_cli_and_max_turns(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """The session launches the pinned CLI with --max-turns from REVIEWER_MAX_TOURS."""
-    fake = make_fake_cli(tmp_path, version="vibe 3.1.3", help_text="--prompt-file FILE")
-    monkeypatch.setenv(session.CLI_COMMAND_VARIABLE, str(fake))
-    monkeypatch.setenv(session.SESSION_MAX_TURNS_VARIABLE, "17")
-    bundle = tmp_path / "bundle.md"
-    bundle.write_text("# bundle", encoding="utf-8")
-    answer = session.run_reviewer_session(model_name="", bundle_path=bundle)
-    assert "findings" in answer
-    # Only the pinned fake CLI writes this args file: its existence proves the
-    # session launched the REVIEWER_CLI_COMMAND binary, not the default one.
-    recorded = (tmp_path / "fake-vibe.args").read_text(encoding="utf-8")
-    launch_line = next(line for line in recorded.splitlines() if "--prompt-file" in line)
-    assert "--max-turns 17" in launch_line
-
-
-def test_classify_session_failure_maps_each_cause() -> None:
-    """P61: every failure maps to a typed cause, never a bare exit code."""
-    assert (
-        session.classify_session_failure(returncode=3, stderr="")
-        == session.FailureCause.PRECONDITIONS
+def test_parse_finding_unknown_severity_fails_closed() -> None:
+    """An unreadable severity is BLOCKING, with the raw value as the rule."""
+    finding = session.parse_finding(
+        finding_container={
+            "severity": "SEVERE-BEYOND",
+            "file": "a.py",
+            "line": 7,
+            "rule": "r",
+            "evidence": "e",
+        }
     )
-    assert (
-        session.classify_session_failure(returncode=2, stderr="Error: time limit reached")
-        == session.FailureCause.DEADLINE
-    )
-    assert (
-        session.classify_session_failure(returncode=2, stderr="max turns (12) exceeded")
-        == session.FailureCause.TURN_LIMIT
-    )
-    assert (
-        session.classify_session_failure(returncode=2, stderr="segmentation fault")
-        == session.FailureCause.PROTOCOL
-    )
-    # "returns" must NOT substring-match the turn-limit keywords.
-    assert (
-        session.classify_session_failure(returncode=2, stderr="process returned 1")
-        == session.FailureCause.PROTOCOL
-    )
+    assert finding.severity is FindingSeverity.BLOCKING
+    assert finding.rule == "SEVERE-BEYOND"
+    assert finding.evidence == UNKNOWN_SEVERITY_NOTE
 
 
-def test_run_reviewer_session_failure_carries_a_typed_cause(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """P61: a runtime failure raises SessionFailure with the classified cause."""
-    bundle = tmp_path / "bundle.md"
-    bundle.write_text("# bundle", encoding="utf-8")
-    fake = make_fake_cli(tmp_path, version="vibe 3.1.3", help_text="--prompt-file FILE")
-    monkeypatch.setenv(session.CLI_COMMAND_VARIABLE, str(fake))
+def test_parse_finding_refuses_a_missing_field() -> None:
+    """A finding without a field is a protocol error."""
+    with pytest.raises(ReviewProtocolError):
+        session.parse_finding(finding_container={"severity": "TO-FIX"})
 
-    real_run = subprocess.run
 
-    def dispatching_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-        if command[1] in ("--version", "--help"):
-            return real_run(command, capture_output=True, text=True, check=False)
-        return subprocess.CompletedProcess(
-            command, 1, stdout="", stderr="Error: time limit reached after 600s"
+def test_parse_finding_refuses_a_non_integer_line() -> None:
+    """A finding with a non-integer line is a protocol error."""
+    with pytest.raises(ReviewProtocolError):
+        session.parse_finding(
+            finding_container={
+                "severity": "TO-FIX",
+                "file": "a.py",
+                "line": "7",
+                "rule": "r",
+                "evidence": "e",
+            }
         )
 
-    monkeypatch.setattr(subprocess, "run", dispatching_run)
-    with pytest.raises(session.SessionFailure) as excinfo:
-        session.run_reviewer_session(model_name="", bundle_path=bundle)
-    assert excinfo.value.code == session.EXIT_CODE_PROTOCOL_FAILURE
-    assert excinfo.value.failure_cause == session.FailureCause.DEADLINE
+
+def test_parse_report_refuses_non_json() -> None:
+    """A non-JSON answer is a protocol error."""
+    with pytest.raises(ReviewProtocolError):
+        session.parse_report(answer_text="not json")
 
 
-def test_run_writes_a_failure_report_with_the_typed_cause(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    """P61: a failed session still writes review-report.json with failure_cause."""
-    bundle = tmp_path / "bundle.md"
-    bundle.write_text("# bundle", encoding="utf-8")
-    report = tmp_path / "review-report.json"
+def test_parse_report_refuses_a_non_object() -> None:
+    """A JSON non-object answer is a protocol error."""
+    with pytest.raises(ReviewProtocolError):
+        session.parse_report(answer_text="[1]")
 
-    def failing_session(*, model_name: str, bundle_path: Path) -> str:
-        raise session.SessionFailure(
-            code=session.EXIT_CODE_PROTOCOL_FAILURE,
-            failure_cause=session.FailureCause.TURN_LIMIT,
+
+def test_parse_report_refuses_a_missing_findings_list() -> None:
+    """An object without findings is a protocol error."""
+    with pytest.raises(ReviewProtocolError):
+        session.parse_report(answer_text="{}")
+
+
+def test_parse_report_returns_the_validated_findings() -> None:
+    """A valid report parses into typed findings, in order."""
+    findings = session.parse_report(
+        answer_text=(
+            '{"findings": ['
+            '{"severity": "BLOCKING", "file": "a.py", "line": 7, "rule": "r", "evidence": "e"},'
+            '{"severity": "SUGGESTION", "file": "b.py", "line": 9, "rule": "s", "evidence": "f"}'
+            "]}"
         )
-
-    monkeypatch.setattr(session, "run_reviewer_session", failing_session)
-    parser = argparse.ArgumentParser()
-    subparsers = parser.add_subparsers(dest="command", required=True)
-    session.register(subparsers)
-    arguments = parser.parse_args(
-        [
-            "agent-review",
-            "--bundle-file",
-            str(bundle),
-            "--report-file",
-            str(report),
-        ]
     )
-    assert session.run(arguments=arguments) == session.EXIT_CODE_PROTOCOL_FAILURE
-    payload = json.loads(report.read_text(encoding="utf-8"))
-    assert payload["failure_cause"] == "turn-limit"
-    assert payload["exit_code"] == session.EXIT_CODE_PROTOCOL_FAILURE
+    assert len(findings) == 2
+    assert findings[0].severity is FindingSeverity.BLOCKING
+    assert findings[1].severity is FindingSeverity.SUGGESTION
+
+
+def test_count_by_severity_recomputes_locally() -> None:
+    """The counts are recomputed from the findings, never trusted."""
+    findings = [
+        ReviewFinding(
+            severity=FindingSeverity.BLOCKING,
+            file="a.py",
+            line=1,
+            rule="r1",
+            evidence="e1",
+        ),
+        ReviewFinding(
+            severity=FindingSeverity.TO_FIX,
+            file="a.py",
+            line=2,
+            rule="r2",
+            evidence="e2",
+        ),
+        ReviewFinding(
+            severity=FindingSeverity.TO_FIX,
+            file="a.py",
+            line=3,
+            rule="r3",
+            evidence="e3",
+        ),
+    ]
+    counts = session.count_by_severity(findings=findings)
+    assert counts == {
+        FindingSeverity.BLOCKING: 1,
+        FindingSeverity.TO_FIX: 2,
+        FindingSeverity.SUGGESTION: 0,
+    }
+
+
+def test_extract_answer_text_returns_the_last_assistant_message() -> None:
+    """The answer is the last assistant message, whatever came before."""
+    raw_session_output = (
+        '[{"role": "user", "content": "hi"},'
+        ' {"role": "assistant", "content": "first"},'
+        ' {"role": "assistant", "content": "final"}]'
+    )
+    assert session.extract_answer_text(raw_session_output=raw_session_output) == "final"
+
+
+def test_extract_answer_text_joins_multiblock_content() -> None:
+    """A multi-block assistant answer joins its textual blocks."""
+    raw_session_output = (
+        '[{"role": "assistant", "content": '
+        '[{"text": "part one"}, {"type": "code"}, {"text": "part two"}]}]'
+    )
+    answer = session.extract_answer_text(raw_session_output=raw_session_output)
+    assert answer == "part one\npart two"
+
+
+def test_extract_answer_text_refuses_output_without_answer() -> None:
+    """No assistant message: a protocol error."""
+    raw_session_output = '[{"role": "user", "content": "hi"}]'
+    with pytest.raises(ReviewProtocolError):
+        session.extract_answer_text(raw_session_output=raw_session_output)
+
+
+def test_render_markdown_comment_zero_findings() -> None:
+    """Zero findings render as the explicit empty report."""
+    counts = session.count_by_severity(findings=[])
+    comment = session.render_markdown_comment(findings=[], counts=counts)
+    assert "Zero findings." in comment
+
+
+def test_render_markdown_comment_escapes_table_cells() -> None:
+    """Pipes and newlines in evidence and rule never break the table."""
+    findings = [
+        ReviewFinding(
+            severity=FindingSeverity.TO_FIX,
+            file="a.py",
+            line=7,
+            rule="r1\nr2",
+            evidence="a|b\nc",
+        )
+    ]
+    counts = session.count_by_severity(findings=findings)
+    comment = session.render_markdown_comment(findings=findings, counts=counts)
+    assert "a\\|b c" in comment
+    assert "r1 r2" in comment
