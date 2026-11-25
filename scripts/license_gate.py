@@ -33,9 +33,14 @@ if TYPE_CHECKING:
 # distributions still carry instead of an expression. Configuration
 # lives here on purpose: a new license joins the set through a pull
 # request, not through this gate's verdict (N2).
+# Instance adaptation (petrichor): "mit-0" joins the set - MIT minus
+# the attribution requirement, strictly more permissive than "mit",
+# carried here by cffi 2.1.1 (a transitive dependency of
+# cryptography).
 ALLOWED_LICENSES = frozenset(
     {
         "mit",
+        "mit-0",
         "apache-2.0",
         "bsd-2-clause",
         "bsd-3-clause",
